@@ -1,10 +1,10 @@
-// Package version exposes the Proteus build version.
+// Package version exposes the fova build version.
 package version
 
-// version is the Proteus build version. Override it at link time:
+// version is the fova build version. Override it at link time:
 //
-//	go build -ldflags="-X github.com/alvarogonjim/proteus/internal/version.version=v1.2.3"
-var version = "0.4.0-dev"
+//	go build -ldflags="-X github.com/alvarogonjim/fova/internal/version.version=v1.2.3"
+var version = "0.5.0"
 
-// String returns the current Proteus version.
+// String returns the current fova version.
 func String() string { return version }

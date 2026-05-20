@@ -1,4 +1,4 @@
-// Package domain holds the core data types shared across Proteus.
+// Package domain holds the core data types shared across fova.
 package domain
 
 import (
@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/alvarogonjim/proteus/internal/version"
+	"github.com/alvarogonjim/fova/internal/version"
 	"github.com/google/uuid"
 )
 
@@ -176,24 +176,37 @@ type DesignScore struct {
 // --- Plan ---
 
 type DesignPlan struct {
-	ID             PlanID       `json:"id"`
-	ProjectID      ProjectID    `json:"project_id"`
-	Created        time.Time    `json:"created"`
-	Target         PDBReference `json:"target"`
-	Application    Application  `json:"application"`
-	Method         string       `json:"method"`
-	FallbackMethod string       `json:"fallback_method,omitempty"`
-	Filters        FilterConfig `json:"filters"`
-	ShortlistSize  int          `json:"shortlist_size"`
-	ComputeBackend string       `json:"compute_backend"`
-	EstimatedCost  float64      `json:"estimated_cost_usd"`
-	EstimatedTime  string       `json:"estimated_time"`
-	Rationale      string       `json:"rationale"`
-	EvidencePapers []PaperRef   `json:"evidence_papers,omitempty"`
-	Approved       bool         `json:"approved"`
-	ApprovedAt     *time.Time   `json:"approved_at,omitempty"`
+	ID             PlanID          `json:"id"`
+	ProjectID      ProjectID       `json:"project_id"`
+	Created        time.Time       `json:"created"`
+	Target         PDBReference    `json:"target"`
+	Application    Application     `json:"application"`
+	Method         string          `json:"method"`
+	FallbackMethod string          `json:"fallback_method,omitempty"`
+	Filters        FilterConfig    `json:"filters"`
+	ShortlistSize  int             `json:"shortlist_size"`
+	ComputeBackend string          `json:"compute_backend"`
+	EstimatedCost  float64         `json:"estimated_cost_usd"`
+	EstimatedTime  string          `json:"estimated_time"`
+	Rationale      string          `json:"rationale"`
+	Evidence       []EvidenceEntry `json:"evidence,omitempty"`
+	Approved       bool            `json:"approved"`
+	ApprovedAt     *time.Time      `json:"approved_at,omitempty"`
 }
 
+// EvidenceEntry is one literature reference attached to a DesignPlan. Every
+// entry must reference a paper that already lives in the active project's
+// corpus (via CorpusPaperID). Citation is formatted by plan.create from the
+// stored corpus metadata — never supplied by the caller.
+type EvidenceEntry struct {
+	CorpusPaperID string `json:"corpus_paper_id"`    // REQUIRED: id of a paper in the active corpus
+	Excerpt       string `json:"excerpt,omitempty"`  // optional user-facing quote from the paper
+	Citation      string `json:"citation,omitempty"` // computed by plan.create; ignored on input
+}
+
+// PaperRef is the legacy search-result paper shape used by knowledge.* tools.
+// It is no longer attached to DesignPlan; evidence on a plan uses
+// EvidenceEntry instead.
 type PaperRef struct {
 	DOI   string `json:"doi,omitempty"`
 	PMCID string `json:"pmcid,omitempty"`

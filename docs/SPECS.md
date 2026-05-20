@@ -1,4 +1,4 @@
-# Proteus — Protein Design Agent TUI
+# fova — Protein Design Agent TUI
 
 **Spec version:** 0.3
 **Status:** Implementation-ready
@@ -8,7 +8,7 @@
 
 ## Changelog
 
-- **v0.3** — ipSAE added as the primary interface ranking metric; local backend redesigned around uv with a Proteus-managed installer (`proteus install <tool>`); replaced conda assumptions throughout.
+- **v0.3** — ipSAE added as the primary interface ranking metric; local backend redesigned around uv with a fova-managed installer (`fova install <tool>`); replaced conda assumptions throughout.
 - **v0.2** — Free-by-default knowledge stack (Europe PMC, OpenAlex, S2, bioRxiv, Crossref); per-project corpus; Paperclip moved to optional. Implementation-ready structure.
 - **v0.1** — Initial draft.
 
@@ -16,7 +16,7 @@
 
 ## How to read this spec
 
-This document is the **authoritative source of truth** for building Proteus. It is written to be implementable by Claude Code without further design decisions. Where a choice has been made, the spec says so and doesn't relitigate it. Where a choice is deferred, it is in §22 (Open Questions) and the v1 path picks a default.
+This document is the **authoritative source of truth** for building fova. It is written to be implementable by Claude Code without further design decisions. Where a choice has been made, the spec says so and doesn't relitigate it. Where a choice is deferred, it is in §22 (Open Questions) and the v1 path picks a default.
 
 **For Claude Code specifically:**
 - Every file path is given relative to the repo root.
@@ -30,7 +30,7 @@ This document is the **authoritative source of truth** for building Proteus. It 
 
 ## 1. Project Summary
 
-Proteus is a terminal user interface (TUI) agent for de novo protein design. It orchestrates LLM-driven planning, GPU-bound design and prediction tools, free literature retrieval, and wet-lab validation via Adaptyv Bio's Foundry API.
+fova is a terminal user interface (TUI) agent for de novo protein design. It orchestrates LLM-driven planning, GPU-bound design and prediction tools, free literature retrieval, and wet-lab validation via Adaptyv Bio's Foundry API.
 
 ### 1.1 Goals
 
@@ -45,7 +45,7 @@ Proteus is a terminal user interface (TUI) agent for de novo protein design. It 
 
 - No web UI. TUI only.
 - No multi-user / team mode.
-- No retraining of ML models. Proteus consumes them.
+- No retraining of ML models. fova consumes them.
 - No proprietary cloud backend. Modal is BYO; users run their own.
 
 ### 1.3 Target users
@@ -108,14 +108,14 @@ require (
 ### 3.3 Repository layout
 
 ```
-proteus/
+fova/
 ├── go.mod
 ├── go.sum
 ├── README.md
-├── LICENSE                       # Apache-2.0
+├── LICENSE                       # AGPL-3.0-or-later
 ├── Makefile
 ├── cmd/
-│   └── proteus/
+│   └── fova/
 │       └── main.go               # entrypoint; cobra root command
 ├── internal/
 │   ├── tui/                      # Bubble Tea
@@ -203,7 +203,7 @@ proteus/
 │   │   │   └── uv.go             # ensure uv is installed
 │   │   ├── modal/
 │   │   │   ├── client.go
-│   │   │   └── functions.py      # deployed by user via `proteus modal deploy`
+│   │   │   └── functions.py      # deployed by user via `fova modal deploy`
 │   │   └── hosted/
 │   │       ├── esm_atlas.go
 │   │       └── bionemo.go
@@ -267,10 +267,10 @@ proteus/
 .PHONY: build test run install lint
 
 build:
-	go build -ldflags='-s -w' -o bin/proteus ./cmd/proteus
+	go build -ldflags='-s -w' -o bin/fova ./cmd/fova
 
 run: build
-	./bin/proteus
+	./bin/fova
 
 test:
 	go test ./...
@@ -279,7 +279,7 @@ lint:
 	golangci-lint run
 
 install: build
-	install -m 0755 bin/proteus /usr/local/bin/proteus
+	install -m 0755 bin/fova /usr/local/bin/fova
 ```
 
 ---
@@ -1006,11 +1006,11 @@ RCSB entry:           GET https://data.rcsb.org/rest/v1/core/entry/{pdb_id}
 InterPro entry:       GET https://www.ebi.ac.uk/interpro/api/entry/InterPro/protein/uniprot/{accession}
 ```
 
-**Set User-Agent on every request:** `Proteus/0.1 (https://github.com/<user>/proteus; <email>)`.
+**Set User-Agent on every request:** `fova/0.1 (https://github.com/<user>/fova; <email>)`.
 
 #### 7.2.6 The per-project corpus pattern
 
-This is the key replacement for Paperclip. Implement carefully — it's what gives Proteus stateful planning.
+This is the key replacement for Paperclip. Implement carefully — it's what gives fova stateful planning.
 
 `knowledge.corpus` exposes these sub-commands:
 
@@ -1086,10 +1086,10 @@ Images embedded inline via Kitty/Sixel; fallback to a file path the user can ope
 1. Agent calls `lab.cost_estimate({target_id, assay_type, sequences})`.
 2. Agent shows the user a confirmation modal with: target name, assay type, sequence count + first 3 sequence previews, cost, expected turnaround (~21 days), webhook URL.
 3. User confirms (`y`).
-4. Agent calls `lab.submit_experiment` which POSTs to Adaptyv with the webhook URL set to `http://<proteus-host>:9876/webhooks/adaptyv` (or user-provided public URL).
+4. Agent calls `lab.submit_experiment` which POSTs to Adaptyv with the webhook URL set to `http://<fova-host>:9876/webhooks/adaptyv` (or user-provided public URL).
 5. Returns `experiment_id`; persisted in `experiments` table.
 
-**Webhook receiver** (always running while Proteus is active):
+**Webhook receiver** (always running while fova is active):
 
 ```go
 // internal/tools/lab/webhook.go
@@ -1122,7 +1122,7 @@ Skills are embedded markdown files. The agent reads a skill before performing a 
 
 1. On every user turn, the system prompt reminds the agent: "*Before any design, scoring, or wet-lab task, list available skills with `skills.list` and read the relevant SKILL.md with `skills.read` before writing any code or running any design tool.*"
 2. Built-in skills are embedded via `go:embed` from `internal/skills/builtin/`.
-3. User skills are loaded from `~/.config/proteus/skills/`.
+3. User skills are loaded from `~/.config/fova/skills/`.
 
 Implement `skills.list` and `skills.read` as tools (not as anything fancier).
 
@@ -1385,7 +1385,7 @@ may proceed but logs every action.
 `internal/agent/prompts/system.md` — embedded via `go:embed`. This is the literal text the agent uses.
 
 ```markdown
-You are Proteus, a TUI agent specialized in de novo protein design. You operate
+You are fova, a TUI agent specialized in de novo protein design. You operate
 in a terminal interface and have access to tools for structure prediction,
 de novo design, scoring, literature retrieval, visualization, and wet-lab
 submission via Adaptyv Bio.
@@ -1482,7 +1482,7 @@ type Model struct {
 
 The canonical layout is a two-column dashboard — a conversational chat column on
 the left, status panels (jobs, designs, wet-lab) stacked on the right. Unlike a
-coding agent, Proteus runs GPU jobs that take minutes and wet-lab experiments
+coding agent, fova runs GPU jobs that take minutes and wet-lab experiments
 that span weeks, so a persistent dashboard earns its place.
 
 The visual language follows modern agent CLIs (Claude Code, OpenAI Codex CLI,
@@ -1491,7 +1491,7 @@ dim rule under a lowercase label, exactly one bordered element (the message
 input), a dim status footer, and a single accent colour.
 
 ```
- proteus · <project>
+ fova · <project>
 
   ● design a 60-residue binder against PD-L1       jobs ───────────────────────
                                                     ⟳ rfdiffusion  c_8f2a  1m20s
@@ -1672,7 +1672,7 @@ work parallelises cleanly; `internal/tui/app.go` only wires them together.
 
 #### 10.7.6 Status footer & context meter — `internal/tui/statusbar.go`
 
-- The top bar is reduced to ` proteus · <project> ` in `Accent`.
+- The top bar is reduced to ` fova · <project> ` in `Accent`.
 - A new **footer** renders below the input in `FgMuted`:
   `<slash hints>   <model> · $<cost> · <NN>% context`.
 - The context meter is the running token estimate as a percentage of the active
@@ -1686,7 +1686,7 @@ work parallelises cleanly; `internal/tui/app.go` only wires them together.
   large ASCII banner:
 
   ```
-  proteus v0.4 · de novo protein design
+  fova v0.4 · de novo protein design
   cwd: <dir>   model: <model>
   Type a message, or / for commands.  ? for help.
   ```
@@ -1842,17 +1842,17 @@ Before `lab.submit_experiment` executes, the registry checks `RequiresConfirmati
 
 ### 12.3 Webhook receiver
 
-Always running on a goroutine while Proteus is active. Default port `9876`. If the user has a public URL (ngrok / Tailscale Funnel / cloudflared) configured in `config.toml`, the public URL is registered with Adaptyv; otherwise the local URL is used (works if the user runs Proteus during the full 21-day window; otherwise the agent polls via `lab.experiment_status` on startup to backfill).
+Always running on a goroutine while fova is active. Default port `9876`. If the user has a public URL (ngrok / Tailscale Funnel / cloudflared) configured in `config.toml`, the public URL is registered with Adaptyv; otherwise the local URL is used (works if the user runs fova during the full 21-day window; otherwise the agent polls via `lab.experiment_status` on startup to backfill).
 
 ---
 
 ## 13. Compute Backends
 
-### 13.1 Local backend (uv-based, Proteus-managed installs)
+### 13.1 Local backend (uv-based, fova-managed installs)
 
-Proteus manages Python tool installations itself using **uv** (Astral). The user is
+fova manages Python tool installations itself using **uv** (Astral). The user is
 not expected to know how to install BindCraft, RFdiffusion, ProteinMPNN, etc.
-`proteus install <tool>` does it for them.
+`fova install <tool>` does it for them.
 
 **Why uv (not conda):**
 - 10–100× faster than pip/conda for cold installs.
@@ -1876,8 +1876,8 @@ version      = "1.5.0"
 python       = "3.10"
 repo         = "https://github.com/martinpacesa/BindCraft"
 git_ref      = "main"
-install_dir  = "${PROTEUS_HOME}/tools/bindcraft"
-venv_dir     = "${PROTEUS_HOME}/tools/bindcraft/.venv"
+install_dir  = "${FOVA_HOME}/tools/bindcraft"
+venv_dir     = "${FOVA_HOME}/tools/bindcraft/.venv"
 requires_gpu = true
 disk_gb      = 8.5
 extra_data   = ["alphafold_params"]   # see [data] section
@@ -1894,7 +1894,7 @@ install_steps = [
   "{{ venv_dir }}/bin/python -c 'import pyrosetta_installer; pyrosetta_installer.install_pyrosetta(serialization=True)'",
 ]
 
-# How to invoke. Proteus substitutes {{ input_json }} with the path to a
+# How to invoke. fova substitutes {{ input_json }} with the path to a
 # generated JSON file containing the tool's request payload.
 run_command = "{{ venv_dir }}/bin/python {{ install_dir }}/bindcraft.py --settings {{ input_json }}"
 
@@ -1904,8 +1904,8 @@ version      = "1.1.0"
 python       = "3.10"
 repo         = "https://github.com/RosettaCommons/RFdiffusion"
 git_ref      = "main"
-install_dir  = "${PROTEUS_HOME}/tools/rfdiffusion"
-venv_dir     = "${PROTEUS_HOME}/tools/rfdiffusion/.venv"
+install_dir  = "${FOVA_HOME}/tools/rfdiffusion"
+venv_dir     = "${FOVA_HOME}/tools/rfdiffusion/.venv"
 requires_gpu = true
 disk_gb      = 5.2
 extra_data   = ["rfdiffusion_weights"]
@@ -1926,8 +1926,8 @@ version      = "1.0.1"
 python       = "3.10"
 repo         = "https://github.com/dauparas/ProteinMPNN"
 git_ref      = "main"
-install_dir  = "${PROTEUS_HOME}/tools/proteinmpnn"
-venv_dir     = "${PROTEUS_HOME}/tools/proteinmpnn/.venv"
+install_dir  = "${FOVA_HOME}/tools/proteinmpnn"
+venv_dir     = "${FOVA_HOME}/tools/proteinmpnn/.venv"
 requires_gpu = true   # GPU recommended; CPU works but slow
 disk_gb      = 0.5
 
@@ -1944,7 +1944,7 @@ run_command = "{{ venv_dir }}/bin/python {{ install_dir }}/protein_mpnn_run.py @
 display_name = "LigandMPNN"
 python       = "3.10"
 repo         = "https://github.com/dauparas/LigandMPNN"
-venv_dir     = "${PROTEUS_HOME}/tools/ligandmpnn/.venv"
+venv_dir     = "${FOVA_HOME}/tools/ligandmpnn/.venv"
 requires_gpu = true
 disk_gb      = 1.2
 install_steps = [
@@ -1959,7 +1959,7 @@ run_command = "{{ venv_dir }}/bin/python {{ install_dir }}/run.py @{{ args_file 
 display_name = "RFantibody"
 python       = "3.10"
 repo         = "https://github.com/RosettaCommons/RFantibody"
-venv_dir     = "${PROTEUS_HOME}/tools/rfantibody/.venv"
+venv_dir     = "${FOVA_HOME}/tools/rfantibody/.venv"
 requires_gpu = true
 disk_gb      = 6.0
 install_steps = [
@@ -1974,7 +1974,7 @@ run_command = "{{ venv_dir }}/bin/python {{ install_dir }}/scripts/rfantibody.py
 display_name = "RFdiffusion2"
 python       = "3.10"
 repo         = "https://github.com/RosettaCommons/RFdiffusion2"  # update if upstream URL differs
-venv_dir     = "${PROTEUS_HOME}/tools/rfdiffusion2/.venv"
+venv_dir     = "${FOVA_HOME}/tools/rfdiffusion2/.venv"
 requires_gpu = true
 disk_gb      = 6.5
 install_steps = [
@@ -1988,7 +1988,7 @@ run_command = "{{ venv_dir }}/bin/python {{ install_dir }}/scripts/run.py @{{ ar
 [boltz2]
 display_name = "Boltz-2"
 python       = "3.11"
-venv_dir     = "${PROTEUS_HOME}/tools/boltz2/.venv"
+venv_dir     = "${FOVA_HOME}/tools/boltz2/.venv"
 requires_gpu = true
 disk_gb      = 12.0
 install_steps = [
@@ -2000,7 +2000,7 @@ run_command = "{{ venv_dir }}/bin/boltz predict {{ input_yaml }} --out_dir {{ ou
 [chai1]
 display_name = "Chai-1"
 python       = "3.11"
-venv_dir     = "${PROTEUS_HOME}/tools/chai1/.venv"
+venv_dir     = "${FOVA_HOME}/tools/chai1/.venv"
 requires_gpu = true
 disk_gb      = 8.0
 install_steps = [
@@ -2013,7 +2013,7 @@ run_command = "{{ venv_dir }}/bin/python -m chai_lab.main fold {{ input_fasta }}
 display_name = "ipSAE"
 python       = "3.11"
 repo         = "https://github.com/DunbrackLab/IPSAE"  # adjust if upstream differs
-venv_dir     = "${PROTEUS_HOME}/tools/ipsae/.venv"
+venv_dir     = "${FOVA_HOME}/tools/ipsae/.venv"
 requires_gpu = false
 disk_gb      = 0.1
 install_steps = [
@@ -2029,7 +2029,7 @@ run_command = "{{ venv_dir }}/bin/python {{ install_dir }}/ipsae.py {{ scores_js
 display_name = "AlphaFold2 weights"
 url          = "https://storage.googleapis.com/alphafold/alphafold_params_2022-12-06.tar"
 sha256       = "<filled-in-at-spec-time>"
-extract_to   = "${PROTEUS_HOME}/data/alphafold_params"
+extract_to   = "${FOVA_HOME}/data/alphafold_params"
 size_gb      = 5.3
 
 [data.rfdiffusion_weights]
@@ -2039,7 +2039,7 @@ urls         = [
   "http://files.ipd.uw.edu/pub/RFdiffusion/e29311f6f1bf1af907f9ef9f44b8328b/Complex_base_ckpt.pt",
   # ... full list per RFdiffusion README
 ]
-target_dir   = "${PROTEUS_HOME}/data/rfdiffusion_weights"
+target_dir   = "${FOVA_HOME}/data/rfdiffusion_weights"
 size_gb      = 4.0
 ```
 
@@ -2049,7 +2049,7 @@ size_gb      = 4.0
 
 ```go
 type Installer struct {
-    home      string                 // PROTEUS_HOME
+    home      string                 // FOVA_HOME
     registry  ToolRegistry           // parsed tools.toml
     bus       chan<- tea.Msg         // for TUI progress events
 }
@@ -2065,23 +2065,23 @@ func (i *Installer) EnsureUV(ctx context.Context) error  // installs uv itself i
 
 1. Check prerequisites: GPU (if `requires_gpu`), free disk space (> `disk_gb` × 1.5).
 2. Ensure `uv` is installed (`EnsureUV` runs the Astral installer script on first use).
-3. Create `install_dir` (default `${PROTEUS_HOME}/tools/<name>`).
+3. Create `install_dir` (default `${FOVA_HOME}/tools/<name>`).
 4. Execute `install_steps` sequentially, streaming stdout/stderr to the TUI.
 5. Download `extra_data` assets (with resume support via Range headers).
 6. Verify by running `tool --version` or a trivial smoke test (e.g., `proteinmpnn --help`).
-7. Write `${install_dir}/.proteus.lock` with the resolved version, install timestamp,
-   uv lockfile hash, and GPU/CUDA at install time. Used by `proteus doctor`.
+7. Write `${install_dir}/.fova.lock` with the resolved version, install timestamp,
+   uv lockfile hash, and GPU/CUDA at install time. Used by `fova doctor`.
 
 Errors are wrapped with the step name so failures are diagnosable. A failed install
-leaves the partial directory; `proteus install <name> --force` wipes and retries.
+leaves the partial directory; `fova install <name> --force` wipes and retries.
 
 #### 13.1.3 Doctor
 
-`proteus doctor` runs a full diagnostic without performing any installs:
+`fova doctor` runs a full diagnostic without performing any installs:
 
 ```
-$ proteus doctor
-Proteus 0.5.0
+$ fova doctor
+fova 0.5.0
 
 System
   ✓ Operating system:   Linux 6.5 (x86_64)
@@ -2089,7 +2089,7 @@ System
   ✓ Python (uv-managed): 3.10.14, 3.11.10
   ✓ NVIDIA driver:      550.90.07 (CUDA 12.4)
   ✓ GPU:                RTX 4090 (24 GB free)
-  ✓ Disk free at $PROTEUS_HOME: 412 GB
+  ✓ Disk free at $FOVA_HOME: 412 GB
 
 LLM providers
   ✓ Anthropic API:      reachable (token in keychain)
@@ -2106,8 +2106,8 @@ Local protein tools
   ✓ ipsae               v1.2 (84 MB)
   ✓ proteinmpnn         v1.0.1 (462 MB)
   ✓ rfdiffusion         v1.1.0 (5.4 GB) — last verified 2 days ago
-  ✗ bindcraft           not installed   (run: proteus install bindcraft)
-  ✗ rfantibody          not installed   (run: proteus install rfantibody)
+  ✗ bindcraft           not installed   (run: fova install bindcraft)
+  ✗ rfantibody          not installed   (run: fova install rfantibody)
   - boltz2              not installed (optional)
   - chai1               not installed (optional)
 
@@ -2134,7 +2134,7 @@ It surfaces a modal:
 │  Time:         ~10–15 minutes (depends on bandwidth)     │
 │                                                          │
 │  Source:       github.com/martinpacesa/BindCraft         │
-│  Install path: ~/proteus/tools/bindcraft/                │
+│  Install path: ~/fova/tools/bindcraft/                │
 │                                                          │
 │  [Install]   [Cancel]   [Use Modal instead]              │
 └──────────────────────────────────────────────────────────┘
@@ -2156,13 +2156,13 @@ policy = "ask"        # ask | auto | never
 auto_for_small = true # auto-install tools < 1 GB without prompting (ipsae, proteinmpnn)
 ```
 
-`never` forces the user to install manually via `proteus install <name>` before
+`never` forces the user to install manually via `fova install <name>` before
 the agent can use the tool.
 
 ### 13.2 Modal backend
 
 `internal/backends/modal/functions.py` — Python file the user deploys via
-`proteus modal deploy`. Contains `@modal.function` definitions for each protein tool.
+`fova modal deploy`. Contains `@modal.function` definitions for each protein tool.
 Modal images use the same install recipes from `tools.toml`, translated to Modal
 image builders (also `uv`-based for parity).
 
@@ -2171,7 +2171,7 @@ Example:
 ```python
 import modal
 
-app = modal.App("proteus-tools")
+app = modal.App("fova-tools")
 
 rfdiff_image = (
     modal.Image.debian_slim(python_version="3.10")
@@ -2210,13 +2210,13 @@ and the user hasn't deployed to Modal.
 ### 14.1 Files
 
 ```
-~/.config/proteus/
+~/.config/fova/
 ├── config.toml
 ├── models.toml
 └── skills/                   # user skills
 
-~/proteus/projects/<name>/
-├── proteus.toml              # project config
+~/fova/projects/<name>/
+├── fova.toml              # project config
 ├── plan.json                 # latest plan
 ├── workspace.db              # SQLite
 ├── corpus.bleve/             # full-text index
@@ -2263,8 +2263,8 @@ corpus_default_max_papers = 30
 | `MODAL_TOKEN_ID` / `MODAL_TOKEN_SECRET` | Modal |
 | `S2_API_KEY` | Optional, for higher Semantic Scholar rate limit |
 | `BRAVE_API_KEY` or `TAVILY_API_KEY` | Optional, for web search |
-| `PROTEUS_HOME` | Override `~/proteus` |
-| `PROTEUS_CONFIG_DIR` | Override `~/.config/proteus` |
+| `FOVA_HOME` | Override `~/fova` |
+| `PROTEUS_CONFIG_DIR` | Override `~/.config/fova` |
 
 All secrets read from env first, then OS keychain (`99designs/keyring`), never written to disk in plaintext.
 
@@ -2272,35 +2272,35 @@ All secrets read from env first, then OS keychain (`99designs/keyring`), never w
 
 ## 15. CLI Subcommands
 
-`proteus` is both the TUI and a CLI. Cobra commands:
+`fova` is both the TUI and a CLI. Cobra commands:
 
 ```
-proteus                              # launches TUI (default)
-proteus tui                          # explicit
-proteus doctor                       # diagnostic check
-proteus auth <provider>              # store API key in keychain
-proteus project new <name>           # create project
-proteus project list
-proteus project switch <name>
-proteus install <tool>               # install a local protein tool via uv
-proteus install --all                # install all GPU-eligible tools
-proteus install <tool> --force       # wipe and reinstall
-proteus uninstall <tool>             # remove a local tool
-proteus list tools                   # list installable tools + status
-proteus design submit <ids>...       # submit designs to Adaptyv (CLI flow)
-proteus experiment status <id>
-proteus modal deploy                 # deploy Modal functions
-proteus replay <session.json>        # replay a session
-proteus export <project> --format <fmt>
-proteus version
+fova                              # launches TUI (default)
+fova tui                          # explicit
+fova doctor                       # diagnostic check
+fova auth <provider>              # store API key in keychain
+fova project new <name>           # create project
+fova project list
+fova project switch <name>
+fova install <tool>               # install a local protein tool via uv
+fova install --all                # install all GPU-eligible tools
+fova install <tool> --force       # wipe and reinstall
+fova uninstall <tool>             # remove a local tool
+fova list tools                   # list installable tools + status
+fova design submit <ids>...       # submit designs to Adaptyv (CLI flow)
+fova experiment status <id>
+fova modal deploy                 # deploy Modal functions
+fova replay <session.json>        # replay a session
+fova export <project> --format <fmt>
+fova version
 ```
 
 ### 15.1 Install behaviors
 
-- `proteus install bindcraft` — same recipe as the TUI install modal, but headless with stdout progress.
-- `proteus install --all` — installs ipsae, proteinmpnn, rfdiffusion, bindcraft, rfantibody, rfdiffusion2, ligandmpnn (skips boltz2/chai1 unless `--include-folders` is passed).
-- `proteus install --dry-run <tool>` — prints the commands that would run without executing.
-- `PROTEUS_INSTALL_POLICY=never` — agent will not auto-install during a session; surfaces an error pointing the user at `proteus install`.
+- `fova install bindcraft` — same recipe as the TUI install modal, but headless with stdout progress.
+- `fova install --all` — installs ipsae, proteinmpnn, rfdiffusion, bindcraft, rfantibody, rfdiffusion2, ligandmpnn (skips boltz2/chai1 unless `--include-folders` is passed).
+- `fova install --dry-run <tool>` — prints the commands that would run without executing.
+- `PROTEUS_INSTALL_POLICY=never` — agent will not auto-install during a session; surfaces an error pointing the user at `fova install`.
 
 ---
 
@@ -2335,10 +2335,10 @@ proteus version
 
 ## 17. Observability
 
-- Structured logs (zerolog JSON) at `~/.local/share/proteus/logs/proteus.log`. Rotation: 100 MB, keep 5.
+- Structured logs (zerolog JSON) at `~/.local/share/fova/logs/fova.log`. Rotation: 100 MB, keep 5.
 - Per-session replay: `sessions/<id>/session.json` captures all messages, tool calls, and outputs (with input hashes).
 - Optional OpenTelemetry traces (opt-in via `OTEL_EXPORTER_OTLP_ENDPOINT`).
-- `proteus replay <session.json>` re-runs deterministically against cached tool outputs.
+- `fova replay <session.json>` re-runs deterministically against cached tool outputs.
 
 ---
 
@@ -2368,13 +2368,13 @@ func TestSmoke_FoldAndScore(t *testing.T) {
 
 ### 18.3 Eval (later milestone)
 
-`eval/biodesignbench/` — implements a subset of BioDesignBench tasks. Run via `proteus eval bench --subset small`.
+`eval/biodesignbench/` — implements a subset of BioDesignBench tasks. Run via `fova eval bench --subset small`.
 
 ---
 
 ## 19. Distribution
 
-- `go build -ldflags='-s -w' -o bin/proteus`
+- `go build -ldflags='-s -w' -o bin/fova`
 - Cross-compile in `scripts/release.sh` for: darwin/arm64, darwin/amd64, linux/amd64, linux/arm64, windows/amd64.
 - GitHub Releases with checksums.
 - Install script:
@@ -2386,10 +2386,10 @@ set -euo pipefail
 OS=$(uname -s | tr '[:upper:]' '[:lower:]')
 ARCH=$(uname -m); [[ "$ARCH" == "x86_64" ]] && ARCH=amd64
 [[ "$ARCH" == "aarch64" ]] && ARCH=arm64
-URL="https://github.com/<user>/proteus/releases/latest/download/proteus_${OS}_${ARCH}"
-curl -fsSL "$URL" -o /usr/local/bin/proteus
-chmod +x /usr/local/bin/proteus
-echo "Installed proteus. Run 'proteus' to start."
+URL="https://github.com/<user>/fova/releases/latest/download/fova_${OS}_${ARCH}"
+curl -fsSL "$URL" -o /usr/local/bin/fova
+chmod +x /usr/local/bin/fova
+echo "Installed fova. Run 'fova' to start."
 ```
 
 Homebrew tap to follow.
@@ -2405,7 +2405,7 @@ Each milestone is a tagged release. Acceptance criteria are explicit and testabl
 **Scope:** TUI shell, agent loop, one provider, one tool, no persistence.
 
 **Implements:**
-- `cmd/proteus/main.go`
+- `cmd/fova/main.go`
 - `internal/tui/` chat-only layout
 - `internal/agent/loop.go`
 - `internal/llm/provider.go` + `anthropic.go` + `openai.go` (OpenAI-compatible covers Ollama)
@@ -2414,7 +2414,7 @@ Each milestone is a tagged release. Acceptance criteria are explicit and testabl
 - `internal/agent/prompts/system.md`
 
 **Acceptance criteria:**
-1. `proteus` launches a TUI with chat pane.
+1. `fova` launches a TUI with chat pane.
 2. User can type "fold MAQVQLVESGGGLVQAGGSLRLSCAASGFTFSSYAMSWVRQAPGKGLEW" and the agent calls `fold.esmfold`, returns a PDB file path and pLDDT.
 3. Switching to a local Ollama model via `/model` works.
 4. `Ctrl+C` cancels mid-tool-call cleanly.
@@ -2433,14 +2433,14 @@ Each milestone is a tagged release. Acceptance criteria are explicit and testabl
 - `internal/tools/score/metrics.go`, `ipsae.go`, `filter.go`
 - `internal/tools/jobs/*`
 - Jobs panel and designs panel in TUI (designs panel shows ipSAE column)
-- CLI: `proteus install <tool>`, `proteus list tools`, `proteus doctor`
+- CLI: `fova install <tool>`, `fova list tools`, `fova doctor`
 
 **Acceptance criteria:**
-1. `proteus doctor` runs cleanly on a fresh machine (no installed tools yet) and lists everything as "not installed."
-2. `proteus install ipsae` succeeds in under 60 seconds on a typical broadband connection.
-3. `proteus install proteinmpnn` succeeds and `proteus doctor` shows it as installed.
-4. `proteus install bindcraft` succeeds end-to-end including PyRosetta and AlphaFold weights download. On failure, the error message identifies the failing install step.
-5. `proteus modal deploy` deploys Modal functions successfully (alternative path; tested separately).
+1. `fova doctor` runs cleanly on a fresh machine (no installed tools yet) and lists everything as "not installed."
+2. `fova install ipsae` succeeds in under 60 seconds on a typical broadband connection.
+3. `fova install proteinmpnn` succeeds and `fova doctor` shows it as installed.
+4. `fova install bindcraft` succeeds end-to-end including PyRosetta and AlphaFold weights download. On failure, the error message identifies the failing install step.
+5. `fova modal deploy` deploys Modal functions successfully (alternative path; tested separately).
 6. User can run "design 100 binders against PDB 1ZWG" with `compute_backend = "local"` and the agent: (a) detects BindCraft is needed, (b) checks it's installed (or prompts to install), (c) runs it, (d) scores designs with `score.ipsae`, (e) returns ≥10 designs filtered by `MinIPSAE > 0.5` and `MinPLDDT > 80`.
 7. Designs are persisted; surviving a restart shows them in the designs panel with ipSAE values.
 8. Jobs panel shows running/queued/completed status with ETAs.
@@ -2484,11 +2484,11 @@ recipes), and the modern TUI visual redesign (§10.7).
   with a context meter, startup welcome, and panel polish.
 
 **Acceptance criteria:**
-1. `proteus auth adaptyv` stores token in keychain.
+1. `fova auth adaptyv` stores token in keychain.
 2. Agent calls `lab.targets_search` and lists Adaptyv targets.
 3. Submission flow runs end-to-end against Adaptyv staging environment; confirmation modal appears; experiment ID persists.
 4. Webhook receiver accepts a test POST and the wet-lab panel updates.
-5. `proteus install rfantibody` and `proteus install ligandmpnn` succeed.
+5. `fova install rfantibody` and `fova install ligandmpnn` succeed.
 6. Antibody track: user can design VHHs against PDB 6M0J using `design.rfantibody`; designs scored with `score.ipsae` even though AlphaFold2 is not the filter (ipSAE works on the RF2-AB output).
 7. Enzyme track: user can design enzymes around a theozyme using `design.rfdiffusion2` + `design.ligandmpnn` with `fold.chai1` as the validator.
 8. The TUI renders the §10.7 modern design: no full-screen frame, a single
@@ -2510,13 +2510,13 @@ recipes), and the modern TUI visual redesign (§10.7).
 - `internal/tools/viz/` (pymol_render, contact_map, metric_plot)
 - `internal/tools/knowledge/blast.go`, `local_pdfs.go`, `paperclip.go` (optional)
 - `internal/safety/restricted_targets.go`
-- `proteus replay` subcommand
+- `fova replay` subcommand
 - Themes, full keybinding set
 - Install scripts, Homebrew tap, GitHub release automation
 
 **Acceptance criteria:**
 1. Folding a sequence shows the structure inline in Kitty or iTerm2.
-2. `proteus replay <session.json>` reproduces a recorded session deterministically.
+2. `fova replay <session.json>` reproduces a recorded session deterministically.
 3. Biosecurity refusal triggers correctly on a test restricted target.
 4. Light and dark themes render correctly on macOS Terminal, iTerm2, Ghostty, WezTerm, Alacritty, and Linux gnome-terminal.
 5. Single-binary releases work on all five target platforms.
@@ -2547,11 +2547,11 @@ recipes), and the modern TUI visual redesign (§10.7).
 ## 22. Open Questions (defer with documented v1 defaults)
 
 1. **Antibody framework default.** v1 default: humanized hu4D5 (trastuzumab scaffold). Configurable per project.
-2. **Modal vs BYO.** v1: BYO. Hosted "Proteus Cloud" out of scope.
+2. **Modal vs BYO.** v1: BYO. Hosted "fova Cloud" out of scope.
 3. **Multi-user mode.** Out of scope for v1; schema is forward-compatible.
 4. **Reasoning model integration.** v1: surface reasoning tokens in a collapsible block in the chat pane.
 5. **Paperclip fallback strategy if user has account.** v1: `knowledge.paperclip` is registered if `PAPERCLIP_TOKEN` is set; the agent prefers it over individual free APIs when available.
-6. **License.** v1: Apache-2.0.
+6. **License.** GNU AGPL-3.0-or-later — network-copyleft so derived agents stay open source.
 
 ---
 
@@ -2567,7 +2567,7 @@ recipes), and the modern TUI visual redesign (§10.7).
 - **scFv** — single-chain variable fragment (linked heavy + light).
 - **Kd** — dissociation constant; lower = tighter binding.
 - **MSA** — multiple sequence alignment; used by AlphaFold2.
-- **uv** — Python package manager from Astral; used by Proteus to install all protein design tools in isolated environments.
+- **uv** — Python package manager from Astral; used by fova to install all protein design tools in isolated environments.
 
 ---
 

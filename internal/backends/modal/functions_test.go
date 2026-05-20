@@ -9,7 +9,7 @@ import (
 )
 
 func TestFunctionsPyEmbedded(t *testing.T) {
-	if !strings.Contains(FunctionsPy, "modal.App(\"proteus-tools\")") {
+	if !strings.Contains(FunctionsPy, "modal.App(\"fova-tools\")") {
 		t.Fatal("functions.py does not look like the Modal app")
 	}
 	for _, marker := range []string{"run_rfdiffusion", "run_bindcraft", "run_ipsae", "fastapi_endpoint"} {

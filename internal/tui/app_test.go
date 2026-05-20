@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,19 +11,40 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/alvarogonjim/proteus/internal/agent"
-	"github.com/alvarogonjim/proteus/internal/domain"
-	"github.com/alvarogonjim/proteus/internal/llm"
-	"github.com/alvarogonjim/proteus/internal/store"
-	"github.com/alvarogonjim/proteus/internal/tools"
+	"github.com/alvarogonjim/fova/internal/agent"
+	"github.com/alvarogonjim/fova/internal/config"
+	"github.com/alvarogonjim/fova/internal/domain"
+	"github.com/alvarogonjim/fova/internal/llm"
+	"github.com/alvarogonjim/fova/internal/store"
+	"github.com/alvarogonjim/fova/internal/tools"
 )
 
 func newTestApp() *Model {
 	return New(Deps{
 		Registry:     tools.NewRegistry(),
-		Models:       llm.NewModelRegistry(),
+		Models:       llm.NewModelRegistry(config.DefaultCatalog()),
 		SystemPrompt: agent.SystemPrompt,
 	})
+}
+
+func TestAppHeaderShowsWorkspacePath(t *testing.T) {
+	// Bug 5 / rebrand spec §3.1: the header must display the active
+	// project's workspace ($FOVA_HOME/projects/default), not the launch cwd.
+	// Post-rebrand the title role moved from statusBarModel.headerView() to
+	// Model.renderHeader() (which calls RenderHeader); the contract is the
+	// same — the workspace path appears in the rendered header.
+	home := t.TempDir()
+	m := New(Deps{
+		Registry:     tools.NewRegistry(),
+		Models:       llm.NewModelRegistry(config.DefaultCatalog()),
+		SystemPrompt: agent.SystemPrompt,
+		FovaHome:     home,
+	})
+	want := filepath.Join(home, "projects", "default")
+	got := m.renderHeader()
+	if !strings.Contains(got, want) {
+		t.Fatalf("header = %q, want it to contain workspace %q", got, want)
+	}
 }
 
 func TestAppPersistsSessionAndMessages(t *testing.T) {
@@ -34,7 +56,7 @@ func TestAppPersistsSessionAndMessages(t *testing.T) {
 
 	m := New(Deps{
 		Registry:     tools.NewRegistry(),
-		Models:       llm.NewModelRegistry(),
+		Models:       llm.NewModelRegistry(config.DefaultCatalog()),
 		SystemPrompt: agent.SystemPrompt,
 		Store:        st,
 	})
@@ -49,6 +71,17 @@ func TestAppPersistsSessionAndMessages(t *testing.T) {
 	msgs, err := st.ListMessages(m.sessionID)
 	if err != nil || len(msgs) != 1 || msgs[0].Content != "fold MAQ" {
 		t.Fatalf("message not persisted: %+v err=%v", msgs, err)
+	}
+}
+
+func TestAppEscCancelsRunningTurn(t *testing.T) {
+	m := newTestApp()
+	cancelled := false
+	m.running = true
+	m.turnCancel = func() { cancelled = true }
+	m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if !cancelled {
+		t.Error("Esc during a running turn must cancel it")
 	}
 }
 
@@ -137,7 +170,7 @@ func TestAppRefreshLoadsPanelsFromStore(t *testing.T) {
 
 	m := New(Deps{
 		Registry:     tools.NewRegistry(),
-		Models:       llm.NewModelRegistry(),
+		Models:       llm.NewModelRegistry(config.DefaultCatalog()),
 		SystemPrompt: agent.SystemPrompt,
 		Store:        st,
 	})
@@ -193,7 +226,7 @@ func TestAppPlanCommandShowsPersistedPlan(t *testing.T) {
 
 	m := New(Deps{
 		Registry:     tools.NewRegistry(),
-		Models:       llm.NewModelRegistry(),
+		Models:       llm.NewModelRegistry(config.DefaultCatalog()),
 		SystemPrompt: agent.SystemPrompt,
 		Store:        st,
 	})
@@ -201,6 +234,48 @@ func TestAppPlanCommandShowsPersistedPlan(t *testing.T) {
 	out := m.chat.renderEntries()
 	if !contains(out, "p_view") || !contains(out, "design.bindcraft") {
 		t.Fatalf("/plan should post the persisted plan block:\n%s", out)
+	}
+}
+
+// TestAppPlanCommandPreservesNewlines guards spec Bug 6: the /plan view must
+// render as a labelled multi-line block, not a single squashed paragraph.
+func TestAppPlanCommandPreservesNewlines(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "workspace.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	if err := st.InsertPlan(domain.DesignPlan{
+		ID: "p_multi", ProjectID: store.DefaultProjectID,
+		Application: domain.AppBinder, Method: "BindCraft",
+		Target:        domain.PDBReference{PDBID: "1LYZ", Chain: "A"},
+		ShortlistSize: 50, EstimatedCost: 15.0, EstimatedTime: "45 minutes",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	m := New(Deps{
+		Registry:     tools.NewRegistry(),
+		Models:       llm.NewModelRegistry(config.DefaultCatalog()),
+		SystemPrompt: agent.SystemPrompt,
+		Store:        st,
+	})
+	m.runSlashCommand("plan", "")
+	out := m.chat.renderEntries()
+
+	// Each label appears on its own line — check the rendered output keeps the
+	// labels in distinct lines, the way the table format intends.
+	idxTarget := strings.Index(out, "Target:")
+	idxMethod := strings.Index(out, "Method:")
+	idxShortlist := strings.Index(out, "Shortlist:")
+	if idxTarget == -1 || idxMethod == -1 || idxShortlist == -1 {
+		t.Fatalf("expected Target:/Method:/Shortlist: in rendered plan:\n%s", out)
+	}
+	if !strings.Contains(out[idxTarget:idxMethod], "\n") {
+		t.Errorf("expected a newline between Target: and Method:\n%s", out)
+	}
+	if !strings.Contains(out[idxMethod:idxShortlist], "\n") {
+		t.Errorf("expected a newline between Method: and Shortlist:\n%s", out)
 	}
 }
 
@@ -219,7 +294,7 @@ func TestAppPlanApprove(t *testing.T) {
 
 	m := New(Deps{
 		Registry:     tools.NewRegistry(),
-		Models:       llm.NewModelRegistry(),
+		Models:       llm.NewModelRegistry(config.DefaultCatalog()),
 		SystemPrompt: agent.SystemPrompt,
 		Store:        st,
 	})
@@ -256,7 +331,7 @@ func TestAppOtherSlashStubsRemain(t *testing.T) {
 	m := newTestApp()
 	m.runSlashCommand("jobs", "")
 	out := m.chat.renderEntries()
-	if !contains(out, "later Proteus milestone") {
+	if !contains(out, "later fova milestone") {
 		t.Fatalf("/jobs should still be a stub:\n%s", out)
 	}
 }
@@ -273,7 +348,7 @@ func TestRunSlashCommandRoutesSetupCommands(t *testing.T) {
 			continue
 		}
 		last := m.chat.entries[len(m.chat.entries)-1].text
-		if strings.Contains(last, "later Proteus milestone") ||
+		if strings.Contains(last, "later fova milestone") ||
 			strings.Contains(last, "unknown command") {
 			t.Errorf("/%s hit the stub/unknown path: %q", cmd, last)
 		}
@@ -338,6 +413,129 @@ func TestAppTabFocusesRunningJob(t *testing.T) {
 	}
 }
 
+func TestAddTurnCostAccumulatesAndWarns(t *testing.T) {
+	cat := config.Catalog{
+		Providers: []config.Provider{{Name: "p", Kind: "anthropic"}},
+		Models:    []config.Model{{ID: "m", Provider: "p", InputPricePer1M: 100, OutputPricePer1M: 100}},
+	}
+	m := &Model{
+		chat:        newChatModel(NewTheme(), 80, 20),
+		status:      newStatusBarModel(NewTheme()),
+		models:      llm.NewModelRegistry(cat),
+		budgetLimit: 5.0,
+	}
+
+	// 10k in + 10k out at $100 / 1M = $1.00 + $1.00 = $2.00 — under the limit.
+	m.addTurnCost(llm.Usage{InputTokens: 10_000, OutputTokens: 10_000})
+	if m.sessionCost < 1.99 || m.sessionCost > 2.01 {
+		t.Fatalf("sessionCost = %v, want ~2.00", m.sessionCost)
+	}
+	if m.budgetWarned {
+		t.Fatal("budget warned before the limit was crossed")
+	}
+
+	// A large turn pushes the session well past the $5 limit.
+	m.addTurnCost(llm.Usage{InputTokens: 10_000_000, OutputTokens: 0})
+	if !m.budgetWarned {
+		t.Fatal("expected a budget warning after crossing the limit")
+	}
+	if m.status.cost != m.sessionCost {
+		t.Errorf("status cost %v not synced with sessionCost %v", m.status.cost, m.sessionCost)
+	}
+}
+
+func TestRunSlashCommandTheme(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("FOVA_CONFIG_DIR", dir)
+	// Materialise the embedded default so /theme has a config to mutate.
+	if _, err := config.LoadConfig(); err != nil {
+		t.Fatalf("seed LoadConfig: %v", err)
+	}
+
+	m := newTestApp()
+	m.configDir = dir
+
+	m.runSlashCommand("theme", "dark")
+	got, err := config.LoadConfig()
+	if err != nil {
+		t.Fatalf("LoadConfig after /theme: %v", err)
+	}
+	if got.UI.Theme != "dark" {
+		t.Errorf("UI.Theme not persisted: %q", got.UI.Theme)
+	}
+
+	// A bad argument must not touch the file.
+	m.runSlashCommand("theme", "neon")
+	got2, err := config.LoadConfig()
+	if err != nil {
+		t.Fatalf("LoadConfig after bad /theme: %v", err)
+	}
+	if got2.UI.Theme != "dark" {
+		t.Errorf("invalid /theme overwrote the file: %q", got2.UI.Theme)
+	}
+	out := m.chat.renderEntries()
+	if !contains(out, "usage:") && !contains(out, "must be") {
+		t.Errorf("/theme neon expected a usage/error line; got:\n%s", out)
+	}
+}
+
+func TestRunSlashCommandThemePreservesOtherFields(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("FOVA_CONFIG_DIR", dir)
+	if _, err := config.LoadConfig(); err != nil {
+		t.Fatalf("seed LoadConfig: %v", err)
+	}
+	pre, err := config.LoadConfig()
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+
+	m := newTestApp()
+	m.configDir = dir
+	m.runSlashCommand("theme", "light")
+
+	got, err := config.LoadConfig()
+	if err != nil {
+		t.Fatalf("LoadConfig after /theme: %v", err)
+	}
+	if got.UI.Theme != "light" {
+		t.Errorf("UI.Theme: %q want light", got.UI.Theme)
+	}
+	// Every other section must round-trip unchanged.
+	if got.Defaults != pre.Defaults || got.Knowledge != pre.Knowledge ||
+		got.Webhook != pre.Webhook || got.Budget != pre.Budget ||
+		got.UI.InlineGraphics != pre.UI.InlineGraphics {
+		t.Errorf("/theme writeback dropped fields:\nbefore=%+v\nafter =%+v", pre, got)
+	}
+}
+
+func TestRunSlashCommandReload(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("FOVA_CONFIG_DIR", dir)
+	if _, err := config.LoadConfig(); err != nil {
+		t.Fatalf("seed LoadConfig: %v", err)
+	}
+
+	m := newTestApp()
+	m.configDir = dir
+	m.runSlashCommand("reload", "")
+
+	out := m.chat.renderEntries()
+	if !contains(out, "reloaded") {
+		t.Errorf("/reload should confirm; got:\n%s", out)
+	}
+}
+
+func TestRunSlashCommandKeysStubbedForNow(t *testing.T) {
+	// In Task 3 /keys just posts a placeholder; Task 4 wires the overlay.
+	m := newTestApp()
+	before := len(m.chat.entries)
+	m.runSlashCommand("keys", "")
+	if len(m.chat.entries) <= before && m.overlay == overlayNone {
+		t.Errorf("/keys produced no chat output and opened no overlay")
+	}
+}
+
 func contains(s, sub string) bool {
 	return len(s) >= len(sub) && (s == sub || indexOf(s, sub) >= 0)
 }
@@ -349,4 +547,86 @@ func indexOf(s, sub string) int {
 		}
 	}
 	return -1
+}
+
+func TestRenderStructureKittyAppendsEscape(t *testing.T) {
+	dir := t.TempDir()
+	pdb := filepath.Join(dir, "x.pdb")
+	if err := os.WriteFile(pdb, []byte("HEADER fake pdb\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	png := filepath.Join(dir, "x.png")
+	if err := os.WriteFile(png, []byte("imaginary PNG bytes"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	m := &Model{
+		chat:     newChatModel(NewTheme(), 80, 20),
+		graphics: Kitty,
+		pymolRender: func(p string) (string, error) {
+			if p != pdb {
+				t.Errorf("pymolRender called with %q, want %q", p, pdb)
+			}
+			return png, nil
+		},
+	}
+	m.RenderStructure(pdb)
+
+	view := m.chat.renderEntries()
+	if !strings.Contains(view, "\x1b_Ga=T,f=100;") {
+		t.Error("chat does not contain the Kitty escape after RenderStructure")
+	}
+}
+
+func TestRenderStructureNoRendererIsNoop(t *testing.T) {
+	m := &Model{
+		chat:        newChatModel(NewTheme(), 80, 20),
+		graphics:    Kitty,
+		pymolRender: nil, // SP-C has not wired the renderer yet
+	}
+	before := m.chat.renderEntries()
+	m.RenderStructure("/whatever.pdb")
+	if m.chat.renderEntries() != before {
+		t.Error("RenderStructure with nil pymolRender must be a noop")
+	}
+}
+
+func TestRenderStructureOffProtocolFallsBackToText(t *testing.T) {
+	dir := t.TempDir()
+	pdb := filepath.Join(dir, "x.pdb")
+	if err := os.WriteFile(pdb, []byte("HEADER"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	png := filepath.Join(dir, "x.png")
+	if err := os.WriteFile(png, []byte("PNG"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	m := &Model{
+		chat:        newChatModel(NewTheme(), 80, 20),
+		graphics:    Off,
+		pymolRender: func(string) (string, error) { return png, nil },
+	}
+	m.RenderStructure(pdb)
+	view := m.chat.renderEntries()
+	if strings.Contains(view, "\x1b_G") || strings.Contains(view, "\x1b]1337") {
+		t.Error("chat must not contain a graphics escape when graphics are off")
+	}
+	if !strings.Contains(view, png) {
+		t.Errorf("chat fallback should mention the PNG path; view = %q", view)
+	}
+}
+
+func TestRenderStructureRendererErrorAppendsError(t *testing.T) {
+	m := &Model{
+		chat:     newChatModel(NewTheme(), 80, 20),
+		graphics: Kitty,
+		pymolRender: func(string) (string, error) {
+			return "", errors.New("pymol exploded")
+		},
+	}
+	m.RenderStructure("/tmp/x.pdb")
+	if !strings.Contains(m.chat.renderEntries(), "pymol exploded") {
+		t.Errorf("chat does not surface the renderer error; view = %q", m.chat.renderEntries())
+	}
 }

@@ -7,8 +7,8 @@ import (
 	"net/url"
 	"time"
 
-	"github.com/alvarogonjim/proteus/internal/domain"
-	"github.com/alvarogonjim/proteus/internal/tools"
+	"github.com/alvarogonjim/fova/internal/domain"
+	"github.com/alvarogonjim/fova/internal/tools"
 )
 
 // pdbBaseURL is the public RCSB PDB core-entry endpoint (SPECS §7.2.5).

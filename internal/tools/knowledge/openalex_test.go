@@ -25,7 +25,7 @@ func TestOpenAlexExecute(t *testing.T) {
 	defer srv.Close()
 
 	res := NewResults()
-	tool := NewOpenAlex(res)
+	tool := NewOpenAlex(res, "")
 	tool.BaseURL = srv.URL
 
 	out, err := tool.Execute(context.Background(), json.RawMessage(`{"query":"protein","limit":5}`))
@@ -62,7 +62,7 @@ func TestOpenAlexExecute(t *testing.T) {
 }
 
 func TestOpenAlexEmptyQuery(t *testing.T) {
-	tool := NewOpenAlex(NewResults())
+	tool := NewOpenAlex(NewResults(), "")
 	if _, err := tool.Execute(context.Background(), json.RawMessage(`{"query":""}`)); err == nil {
 		t.Fatal("expected error for empty query")
 	}

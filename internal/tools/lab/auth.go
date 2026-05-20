@@ -1,4 +1,4 @@
-// Package lab integrates Proteus with Adaptyv Bio's Foundry wet-lab API:
+// Package lab integrates fova with Adaptyv Bio's Foundry wet-lab API:
 // the HTTP client, the agent-facing lab.* tools, and the result webhook.
 package lab
 
@@ -9,8 +9,8 @@ import (
 	"github.com/99designs/keyring"
 )
 
-// keychainService is the OS-keychain service name Proteus stores secrets under.
-const keychainService = "proteus"
+// keychainService is the OS-keychain service name fova stores secrets under.
+const keychainService = "fova"
 
 // adaptyvTokenKey is the keychain key holding the Adaptyv API token.
 const adaptyvTokenKey = "adaptyv"
@@ -41,7 +41,7 @@ func StoreToken(token string) error {
 	return ring.Set(keyring.Item{Key: adaptyvTokenKey, Data: []byte(token)})
 }
 
-// openKeyring opens the Proteus keychain.
+// openKeyring opens the fova keychain.
 func openKeyring() (keyring.Keyring, error) {
 	return keyring.Open(keyring.Config{ServiceName: keychainService})
 }

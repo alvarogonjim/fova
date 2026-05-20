@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/alvarogonjim/proteus/internal/domain"
-	"github.com/alvarogonjim/proteus/internal/llm"
+	"github.com/alvarogonjim/fova/internal/domain"
+	"github.com/alvarogonjim/fova/internal/llm"
 )
 
 // Tool is one capability the agent can invoke.

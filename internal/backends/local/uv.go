@@ -3,6 +3,7 @@ package local
 import (
 	"context"
 	"fmt"
+	"io"
 	"os/exec"
 )
 
@@ -24,7 +25,7 @@ func ensureUV(ctx context.Context, run CmdRunner) error {
 	if _, ok := UVPath(); ok {
 		return nil
 	}
-	if _, err := run(ctx, "", uvInstallScript); err != nil {
+	if _, err := run(ctx, "", uvInstallScript, io.Discard); err != nil {
 		return fmt.Errorf("install uv: %w", err)
 	}
 	if _, ok := UVPath(); !ok {

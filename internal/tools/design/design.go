@@ -12,11 +12,11 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/alvarogonjim/proteus/internal/backends"
-	"github.com/alvarogonjim/proteus/internal/domain"
-	"github.com/alvarogonjim/proteus/internal/jobs"
-	"github.com/alvarogonjim/proteus/internal/store"
-	"github.com/alvarogonjim/proteus/internal/tools"
+	"github.com/alvarogonjim/fova/internal/backends"
+	"github.com/alvarogonjim/fova/internal/domain"
+	"github.com/alvarogonjim/fova/internal/jobs"
+	"github.com/alvarogonjim/fova/internal/store"
+	"github.com/alvarogonjim/fova/internal/tools"
 )
 
 // backendOutput is the conventional JSON a backend returns for a design tool.
@@ -31,14 +31,24 @@ type backendOutput struct {
 
 // designTool is the shared implementation of every design.* tool.
 type designTool struct {
-	name        string
-	description string
-	origin      domain.DesignOrigin
-	application domain.Application
-	mgr         *jobs.Manager
-	backend     backends.Backend
-	store       *store.Store
+	name          string
+	description   string
+	origin        domain.DesignOrigin
+	application   domain.Application
+	mgr           *jobs.Manager
+	backend       backends.Backend
+	store         *store.Store
+	workspaceRoot string
 }
+
+// pathInputFields is the allowlist of JSON keys that the design tool schema
+// declares as workspace-relative paths. Execute resolves each present field
+// against workspaceRoot before handing the request to the backend so adapters
+// always see an absolute, escape-checked path.
+//
+// Judgment call: kept deliberately small. Adding new path-typed fields to a
+// design schema means adding the key here too.
+var pathInputFields = []string{"target", "starting_pdb", "contigs_pdb", "theozyme"}
 
 func (t *designTool) Name() string        { return t.name }
 func (t *designTool) Description() string { return t.description }
@@ -67,17 +77,21 @@ func (t *designTool) Execute(_ context.Context, input json.RawMessage) (tools.Re
 	if err := json.Unmarshal(input, &probe); err != nil {
 		return tools.Result{}, fmt.Errorf("invalid %s request: %w", t.name, err)
 	}
+	resolved, err := t.resolvePathFields(probe)
+	if err != nil {
+		return tools.Result{}, fmt.Errorf("%s: %w", t.name, err)
+	}
 	jobID, err := t.mgr.Submit(jobs.Spec{
 		Kind:    domain.JobCompute,
 		Tool:    t.name,
 		Backend: t.backend.Name(),
-		Input:   input,
+		Input:   resolved,
 		Run: func(ctx context.Context, progress func(float64), log io.Writer) ([]byte, error) {
-			out, err := t.backend.Run(ctx, t.name, input, log)
+			out, err := t.backend.Run(ctx, t.name, resolved, log, progress)
 			if err != nil {
 				return nil, err
 			}
-			progress(0.9)
+			progress(0.95)
 			n, perr := t.persist(out)
 			if perr != nil {
 				return out, perr
@@ -95,6 +109,49 @@ func (t *designTool) Execute(_ context.Context, input json.RawMessage) (tools.Re
 			t.name, jobID),
 		Provenance: domain.NewToolCallRef(t.name, input),
 	}, nil
+}
+
+// resolvePathFields walks the parsed JSON request, resolves every present
+// path-typed field against the workspace root, and returns the re-marshalled
+// JSON. Non-string or empty values are left alone. An empty workspaceRoot
+// short-circuits to the original input (covers tests that don't set one).
+//
+// design.bindcraft nests its `starting_pdb` inside the `settings` object — so
+// we also resolve allowlisted keys one level deep into a `settings` map.
+func (t *designTool) resolvePathFields(probe map[string]any) (json.RawMessage, error) {
+	if t.workspaceRoot == "" {
+		return json.Marshal(probe)
+	}
+	if err := t.resolveAllowlistedKeys(probe); err != nil {
+		return nil, err
+	}
+	if settings, ok := probe["settings"].(map[string]any); ok {
+		if err := t.resolveAllowlistedKeys(settings); err != nil {
+			return nil, err
+		}
+	}
+	return json.Marshal(probe)
+}
+
+// resolveAllowlistedKeys mutates m in place, rewriting every allowlisted path
+// field to its absolute workspace-rooted form.
+func (t *designTool) resolveAllowlistedKeys(m map[string]any) error {
+	for _, key := range pathInputFields {
+		raw, ok := m[key]
+		if !ok {
+			continue
+		}
+		s, ok := raw.(string)
+		if !ok || s == "" {
+			continue
+		}
+		abs, err := tools.ResolveWorkspacePath(t.workspaceRoot, s)
+		if err != nil {
+			return fmt.Errorf("%s: %w", key, err)
+		}
+		m[key] = abs
+	}
+	return nil
 }
 
 // persist parses a backend's design-list output and writes each design to the

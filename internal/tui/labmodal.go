@@ -52,8 +52,10 @@ func sequencePreview(seq string) string {
 	return fmt.Sprintf("%s (%d aa)", head, len(r))
 }
 
-// view renders the submit-confirmation box, styled with Theme.ModalBox like
-// modalModel.view.
+// view renders the submit-confirmation box. The box itself inherits the
+// saffron-bordered Theme.ModalBox (rebrand spec §3.7); the action row at the
+// bottom delegates to RenderKeyRow so the bracketed keys take Accent and the
+// labels take Fg, keeping a single source of truth for modal key rows.
 func (m submitModal) view(th Theme, width int) string {
 	var b strings.Builder
 	b.WriteString(th.StatusBar.Render("Submit to Adaptyv Bio"))
@@ -71,6 +73,12 @@ func (m submitModal) view(th Theme, width int) string {
 	fmt.Fprintf(&b, "Estimated cost: $%s USD\n", commaUSD(m.CostUSD))
 	b.WriteString("Turnaround:     ~21 days\n")
 	fmt.Fprintf(&b, "Webhook URL:    %s\n", m.WebhookURL)
-	b.WriteString("\n[ y ] submit   [ n / esc ] cancel")
+	b.WriteString("\nSubmit? ")
+	b.WriteString(RenderKeyRow(th,
+		KeyRowEntry{Key: "y", Label: "submit"},
+		KeyRowEntry{Key: "n", Label: "cancel"},
+		KeyRowEntry{Key: "r", Label: "review"},
+		KeyRowEntry{Key: "s", Label: "save for later"},
+	))
 	return th.ModalBox.Width(min(width-4, 70)).Render(b.String())
 }

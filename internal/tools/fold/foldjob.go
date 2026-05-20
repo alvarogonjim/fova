@@ -7,10 +7,10 @@ import (
 	"io"
 	"time"
 
-	"github.com/alvarogonjim/proteus/internal/backends"
-	"github.com/alvarogonjim/proteus/internal/domain"
-	"github.com/alvarogonjim/proteus/internal/jobs"
-	"github.com/alvarogonjim/proteus/internal/tools"
+	"github.com/alvarogonjim/fova/internal/backends"
+	"github.com/alvarogonjim/fova/internal/domain"
+	"github.com/alvarogonjim/fova/internal/jobs"
+	"github.com/alvarogonjim/fova/internal/tools"
 )
 
 // foldJobTool is the shared implementation of every Modal-backed structure
@@ -76,7 +76,7 @@ func (t *foldJobTool) Execute(_ context.Context, input json.RawMessage) (tools.R
 		Backend: t.backend.Name(),
 		Input:   input,
 		Run: func(ctx context.Context, progress func(float64), log io.Writer) ([]byte, error) {
-			out, err := t.backend.Run(ctx, t.name, input, log)
+			out, err := t.backend.Run(ctx, t.name, input, log, progress)
 			if err != nil {
 				return nil, err
 			}

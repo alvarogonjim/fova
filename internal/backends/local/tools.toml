@@ -1,156 +1,419 @@
 # Install recipes for the local (uv-managed) protein-design tools.
-# Placeholders: ${PROTEUS_HOME} is the Proteus home dir; {{ field }} refers to
+# Placeholders: ${FOVA_HOME} is the fova home dir; {{ field }} refers to
 # this recipe's own fields (repo, git_ref, python, venv_dir, install_dir).
-# install_dir defaults to ${PROTEUS_HOME}/tools/<name> when omitted; git_ref
+# install_dir defaults to ${FOVA_HOME}/tools/<name> when omitted; git_ref
 # defaults to "main".
 
 [tools.ipsae]
-display_name = "ipSAE"
-version      = "1.0.0"
-python       = "3.11"
-repo         = "https://github.com/DunbrackLab/IPSAE"
-venv_dir     = "${PROTEUS_HOME}/tools/ipsae/.venv"
-requires_gpu = false
-disk_gb      = 0.1
-install_steps = [
-  "git clone {{ repo }} .",
-  "uv venv --python {{ python }} {{ venv_dir }}",
-  "uv pip install --python {{ venv_dir }}/bin/python numpy biopython",
-]
-run_command = "{{ venv_dir }}/bin/python {{ install_dir }}/ipsae.py {{ scores_json }} {{ structure_file }} {{ pae_cutoff }} {{ plddt_cutoff }}"
+display_name    = "ipSAE"
+version         = "1.0.0"
+repo            = "https://github.com/DunbrackLab/IPSAE"
+requires_gpu    = false
+disk_gb         = 0.5
+image_tag       = "fova/ipsae:v1.0.0"
+containerfile   = "ipsae.Containerfile"
+entrypoint      = "python /opt/ipsae/ipsae.py {{ pae_file }} {{ structure_file }} {{ pae_cutoff }} {{ dist_cutoff }}"
+gpu             = false
+weights_paths   = []
+timeout_seconds = 300
+smoke_test      = "python /opt/ipsae/ipsae.py --help"
 
 [tools.proteinmpnn]
-display_name = "ProteinMPNN"
-version      = "1.0.1"
-python       = "3.10"
-repo         = "https://github.com/dauparas/ProteinMPNN"
-venv_dir     = "${PROTEUS_HOME}/tools/proteinmpnn/.venv"
-requires_gpu = true
-disk_gb      = 0.5
-install_steps = [
-  "git clone {{ repo }} .",
-  "uv venv --python {{ python }} {{ venv_dir }}",
-  "uv pip install --python {{ venv_dir }}/bin/python --torch-backend=auto torch==2.8.0",
-  "uv pip install --python {{ venv_dir }}/bin/python numpy",
-]
-run_command = "{{ venv_dir }}/bin/python {{ install_dir }}/protein_mpnn_run.py @{{ args_file }}"
+# Container-mode recipe (v0.7, Bug 15). Replaces the v0.6 uv-venv install.
+# Weights ship inside the upstream repo (vanilla_model_weights/,
+# soluble_model_weights/, ca_model_weights/), so weights_paths is empty — the
+# image is self-contained.
+display_name    = "ProteinMPNN"
+version         = "1.0.1"
+repo            = "https://github.com/dauparas/ProteinMPNN"
+git_ref         = "main"
+requires_gpu    = true
+disk_gb         = 0.5
+image_tag       = "fova/proteinmpnn:v1.0.1"
+containerfile   = "proteinmpnn.Containerfile"
+entrypoint      = "python /opt/proteinmpnn/protein_mpnn_run.py"
+gpu             = true
+weights_paths   = []
+timeout_seconds = 1800
+smoke_test      = "python /opt/_base/verify_gpu.py && python /opt/proteinmpnn/protein_mpnn_run.py --help"
 
 [tools.rfdiffusion]
-display_name = "RFdiffusion"
-version      = "1.1.0"
-python       = "3.10"
-repo         = "https://github.com/RosettaCommons/RFdiffusion"
-venv_dir     = "${PROTEUS_HOME}/tools/rfdiffusion/.venv"
-requires_gpu = true
-disk_gb      = 5.2
-extra_data   = ["rfdiffusion_weights"]
-install_steps = [
-  "git clone {{ repo }} .",
-  "uv venv --python {{ python }} {{ venv_dir }}",
-  "uv pip install --python {{ venv_dir }}/bin/python --torch-backend=auto torch==2.8.0",
-  "uv pip install --python {{ venv_dir }}/bin/python -e .",
-  "uv pip install --python {{ venv_dir }}/bin/python -e env/SE3Transformer",
-]
-run_command = "{{ venv_dir }}/bin/python {{ install_dir }}/scripts/run_inference.py @{{ args_file }}"
+display_name    = "RFdiffusion"
+version         = "1.1.0"
+repo            = "https://github.com/RosettaCommons/RFdiffusion"
+requires_gpu    = true
+disk_gb         = 5.2
+image_tag       = "fova/rfdiffusion:v1.1.0"
+containerfile   = "rfdiffusion.Containerfile"
+entrypoint      = "python /opt/rfdiffusion/scripts/run_inference.py"
+gpu             = true
+weights_paths   = ["/models"]
+timeout_seconds = 3600
+# Smoke test: confirms torch sees CUDA inside the container (the shared
+# _base/verify_gpu.py fragment) then runs a 5-residue unconditional design
+# against the cached weights to prove rfdiffusion imports and the model
+# checkpoint loads. The smoke command runs inside the tool image with
+# ~/.fova/models/rfdiffusion mounted at /models.
+smoke_test = "python -c 'import torch; assert torch.cuda.is_available(), \"no cuda\"; print(f\"torch {torch.__version__} cuda {torch.version.cuda} ok\")' && python /opt/rfdiffusion/scripts/run_inference.py 'contigmap.contigs=[5-5]' inference.output_prefix=/tmp/smoke inference.num_designs=1 inference.model_directory_path=/models"
+
+# Model weights. Downloaded once into ~/.fova/models/rfdiffusion/ by the
+# post-build hook in Installer.installContainer (via models_cache.EnsureWeights)
+# and bind-mounted into /models at run time. URLs are taken from the upstream
+# RFdiffusion README (Baker lab CDN at files.ipd.uw.edu). SHA256 sums are not
+# published upstream; with empty SHA256, EnsureWeights skips checksum
+# verification and only ensures each file exists. See open-question in
+# docs/tools/rfdiffusion.md for the maintainer follow-up.
+[[tools.rfdiffusion.weights]]
+url    = "http://files.ipd.uw.edu/pub/RFdiffusion/6f5902ac237024bdd0c176cb93063dc4/Base_ckpt.pt"
+path   = "Base_ckpt.pt"
+sha256 = ""
+
+[[tools.rfdiffusion.weights]]
+url    = "http://files.ipd.uw.edu/pub/RFdiffusion/e29311f6f1bf1af907f9ef9f44b8328b/Complex_base_ckpt.pt"
+path   = "Complex_base_ckpt.pt"
+sha256 = ""
+
+[[tools.rfdiffusion.weights]]
+url    = "http://files.ipd.uw.edu/pub/RFdiffusion/60f09a193fb5e5ccdc4980417708dbab/Complex_Fold_base_ckpt.pt"
+path   = "Complex_Fold_base_ckpt.pt"
+sha256 = ""
+
+[[tools.rfdiffusion.weights]]
+url    = "http://files.ipd.uw.edu/pub/RFdiffusion/74f51cfb8b440f50d70878e05361d8f0/InpaintSeq_ckpt.pt"
+path   = "InpaintSeq_ckpt.pt"
+sha256 = ""
+
+[[tools.rfdiffusion.weights]]
+url    = "http://files.ipd.uw.edu/pub/RFdiffusion/76d00716416567174cdb7ca96e208296/InpaintSeq_Fold_ckpt.pt"
+path   = "InpaintSeq_Fold_ckpt.pt"
+sha256 = ""
+
+[[tools.rfdiffusion.weights]]
+url    = "http://files.ipd.uw.edu/pub/RFdiffusion/5532d2e1f3a4738decd58b19d633b3c3/ActiveSite_ckpt.pt"
+path   = "ActiveSite_ckpt.pt"
+sha256 = ""
+
+[[tools.rfdiffusion.weights]]
+url    = "http://files.ipd.uw.edu/pub/RFdiffusion/12fc204edeae5b57713c5ad7dcb97d39/Base_epoch8_ckpt.pt"
+path   = "Base_epoch8_ckpt.pt"
+sha256 = ""
+
+[[tools.rfdiffusion.weights]]
+url    = "http://files.ipd.uw.edu/pub/RFdiffusion/f572d396fae9206628714fb2ce00f72e/Complex_beta_ckpt.pt"
+path   = "Complex_beta_ckpt.pt"
+sha256 = ""
 
 [tools.bindcraft]
-display_name = "BindCraft"
-version      = "1.5.0"
-python       = "3.10"
-repo         = "https://github.com/martinpacesa/BindCraft"
-venv_dir     = "${PROTEUS_HOME}/tools/bindcraft/.venv"
-requires_gpu = true
-disk_gb      = 8.5
-extra_data   = ["alphafold_params"]
-install_steps = [
-  "git clone {{ repo }} .",
-  "uv venv --python {{ python }} {{ venv_dir }}",
-  "uv pip install --python {{ venv_dir }}/bin/python --torch-backend=auto torch==2.8.0",
-  "uv pip install --python {{ venv_dir }}/bin/python -r requirements.txt",
-  "uv pip install --python {{ venv_dir }}/bin/python git+https://github.com/sokrypton/ColabDesign.git",
-  "uv pip install --python {{ venv_dir }}/bin/python pyrosetta-installer",
-  "{{ venv_dir }}/bin/python -c 'import pyrosetta_installer; pyrosetta_installer.install_pyrosetta(serialization=True)'",
-]
-run_command = "{{ venv_dir }}/bin/python {{ install_dir }}/bindcraft.py --settings {{ input_json }}"
+# Container-mode recipe — Bug 14 (supersedes Bug 8's failed requirements.txt
+# install). PyRosetta is baked into the image at build time via
+# pyrosetta-installer; no per-host PyRosetta install is needed. AlphaFold2
+# weights are NOT baked in (they're ~5 GB) — they're downloaded once and
+# bind-mounted at run time. The pip list inside bindcraft.Containerfile is
+# locked against the live install_bindcraft.sh (verified 2026-05-20).
+display_name    = "BindCraft"
+version         = "1.5.0"
+repo            = "https://github.com/martinpacesa/BindCraft"
+disk_gb         = 10.0
+extra_data      = ["alphafold_params"]
+image_tag       = "fova/bindcraft:v1.5.0"
+containerfile   = "bindcraft.Containerfile"
+entrypoint      = "python /opt/bindcraft/bindcraft.py --settings {{ input_json }}"
+gpu             = true
+weights_paths   = []
+timeout_seconds = 0
+smoke_test      = "python /opt/_base/verify_gpu.py && python /opt/bindcraft/bindcraft.py --help"
 
 [tools.ligandmpnn]
-display_name = "LigandMPNN"
-version      = "1.0.0"
-python       = "3.10"
-repo         = "https://github.com/dauparas/LigandMPNN"
-venv_dir     = "${PROTEUS_HOME}/tools/ligandmpnn/.venv"
-requires_gpu = true
-disk_gb      = 1.2
-install_steps = [
-  "git clone {{ repo }} .",
-  "uv venv --python {{ python }} {{ venv_dir }}",
-  "uv pip install --python {{ venv_dir }}/bin/python --torch-backend=auto torch==2.8.0",
-  "uv pip install --python {{ venv_dir }}/bin/python -r requirements.txt",
-]
-run_command = "{{ venv_dir }}/bin/python {{ install_dir }}/run.py @{{ args_file }}"
+display_name    = "LigandMPNN"
+version         = "1.0.0"
+repo            = "https://github.com/dauparas/LigandMPNN"
+requires_gpu    = true
+disk_gb         = 1.5
+image_tag       = "fova/ligandmpnn:v1.0.0"
+containerfile   = "ligandmpnn.Containerfile"
+entrypoint      = "python /opt/ligandmpnn/run.py"
+gpu             = true
+weights_paths   = ["/models"]
+timeout_seconds = 1800
+# Smoke test: confirms torch sees CUDA inside the container (the shared
+# _base/verify_gpu.py fragment is baked into the image during build) then
+# runs the upstream default invocation against the cached weights — proves
+# ligandmpnn imports, the checkpoint loads from /models, and a single
+# sequence can be sampled on the bundled 1BC8.pdb fixture.
+smoke_test = "python -c 'import torch; assert torch.cuda.is_available(), \"no cuda\"; print(f\"torch {torch.__version__} cuda {torch.version.cuda} ok\")' && python /opt/ligandmpnn/run.py --seed 111 --pdb_path /opt/ligandmpnn/inputs/1BC8.pdb --out_folder /tmp/smoke --checkpoint_protein_mpnn /models/proteinmpnn_v_48_020.pt --batch_size 1 --number_of_batches 1"
+
+# Model checkpoints. Downloaded once into ~/.fova/models/ligandmpnn/ by
+# the post-build hook in Installer.installContainer (via
+# models_cache.EnsureWeights) and bind-mounted into /models at run time.
+# Variants mirror the active list in upstream's get_model_params.sh:
+# 4 ProteinMPNN (num_edges=48) + 4 LigandMPNN (num_edges=32, atom_context=25)
+# + 4 SolubleMPNN + 2 membrane MPNN + 1 side-chain packing model. SHA256
+# sums are not published upstream (files.ipd.uw.edu serves the .pt files
+# without digests); with empty SHA256, EnsureWeights treats the file's
+# presence as a sufficient cache key. See open-question in
+# docs/tools/ligandmpnn.md for the maintainer follow-up.
+[[tools.ligandmpnn.weights]]
+url    = "https://files.ipd.uw.edu/pub/ligandmpnn/proteinmpnn_v_48_002.pt"
+path   = "proteinmpnn_v_48_002.pt"
+sha256 = ""
+
+[[tools.ligandmpnn.weights]]
+url    = "https://files.ipd.uw.edu/pub/ligandmpnn/proteinmpnn_v_48_010.pt"
+path   = "proteinmpnn_v_48_010.pt"
+sha256 = ""
+
+[[tools.ligandmpnn.weights]]
+url    = "https://files.ipd.uw.edu/pub/ligandmpnn/proteinmpnn_v_48_020.pt"
+path   = "proteinmpnn_v_48_020.pt"
+sha256 = ""
+
+[[tools.ligandmpnn.weights]]
+url    = "https://files.ipd.uw.edu/pub/ligandmpnn/proteinmpnn_v_48_030.pt"
+path   = "proteinmpnn_v_48_030.pt"
+sha256 = ""
+
+[[tools.ligandmpnn.weights]]
+url    = "https://files.ipd.uw.edu/pub/ligandmpnn/ligandmpnn_v_32_005_25.pt"
+path   = "ligandmpnn_v_32_005_25.pt"
+sha256 = ""
+
+[[tools.ligandmpnn.weights]]
+url    = "https://files.ipd.uw.edu/pub/ligandmpnn/ligandmpnn_v_32_010_25.pt"
+path   = "ligandmpnn_v_32_010_25.pt"
+sha256 = ""
+
+[[tools.ligandmpnn.weights]]
+url    = "https://files.ipd.uw.edu/pub/ligandmpnn/ligandmpnn_v_32_020_25.pt"
+path   = "ligandmpnn_v_32_020_25.pt"
+sha256 = ""
+
+[[tools.ligandmpnn.weights]]
+url    = "https://files.ipd.uw.edu/pub/ligandmpnn/ligandmpnn_v_32_030_25.pt"
+path   = "ligandmpnn_v_32_030_25.pt"
+sha256 = ""
+
+[[tools.ligandmpnn.weights]]
+url    = "https://files.ipd.uw.edu/pub/ligandmpnn/per_residue_label_membrane_mpnn_v_48_020.pt"
+path   = "per_residue_label_membrane_mpnn_v_48_020.pt"
+sha256 = ""
+
+[[tools.ligandmpnn.weights]]
+url    = "https://files.ipd.uw.edu/pub/ligandmpnn/global_label_membrane_mpnn_v_48_020.pt"
+path   = "global_label_membrane_mpnn_v_48_020.pt"
+sha256 = ""
+
+[[tools.ligandmpnn.weights]]
+url    = "https://files.ipd.uw.edu/pub/ligandmpnn/solublempnn_v_48_002.pt"
+path   = "solublempnn_v_48_002.pt"
+sha256 = ""
+
+[[tools.ligandmpnn.weights]]
+url    = "https://files.ipd.uw.edu/pub/ligandmpnn/solublempnn_v_48_010.pt"
+path   = "solublempnn_v_48_010.pt"
+sha256 = ""
+
+[[tools.ligandmpnn.weights]]
+url    = "https://files.ipd.uw.edu/pub/ligandmpnn/solublempnn_v_48_020.pt"
+path   = "solublempnn_v_48_020.pt"
+sha256 = ""
+
+[[tools.ligandmpnn.weights]]
+url    = "https://files.ipd.uw.edu/pub/ligandmpnn/solublempnn_v_48_030.pt"
+path   = "solublempnn_v_48_030.pt"
+sha256 = ""
+
+[[tools.ligandmpnn.weights]]
+url    = "https://files.ipd.uw.edu/pub/ligandmpnn/ligandmpnn_sc_v_32_002_16.pt"
+path   = "ligandmpnn_sc_v_32_002_16.pt"
+sha256 = ""
 
 [tools.rfantibody]
-display_name = "RFantibody"
-version      = "1.0.0"
-python       = "3.10"
-repo         = "https://github.com/RosettaCommons/RFantibody"
-venv_dir     = "${PROTEUS_HOME}/tools/rfantibody/.venv"
-requires_gpu = true
-disk_gb      = 6.0
-install_steps = [
-  "git clone {{ repo }} .",
-  "uv venv --python {{ python }} {{ venv_dir }}",
-  "uv pip install --python {{ venv_dir }}/bin/python --torch-backend=auto torch==2.8.0",
-  "uv pip install --python {{ venv_dir }}/bin/python -r requirements.txt",
-]
-run_command = "{{ venv_dir }}/bin/python {{ install_dir }}/scripts/rfantibody.py @{{ args_file }}"
+display_name    = "RFantibody"
+version         = "1.0.0"
+repo            = "https://github.com/RosettaCommons/RFantibody"
+# Pinned RFantibody main HEAD (2026-03-05). Also fixes the vendored
+# SE(3)-transformer subtree at include/SE3Transformer/ (see Containerfile
+# comment for why a separate SE(3) git+ pin is not applicable upstream).
+git_ref         = "8fe311415754e0276d1a39c87c57e69c88927a2d"
+requires_gpu    = true
+disk_gb         = 18.0
+image_tag       = "fova/rfantibody:1.0.0"
+containerfile   = "rfantibody.Containerfile"
+entrypoint      = "rfdiffusion --target {{ target_pdb }} --framework {{ framework_pdb }} --output {{ out_dir }} --num-designs {{ num_designs }}"
+gpu             = true
+weights_paths   = ["/models"]
+timeout_seconds = 7200
+# Smoke test exercises the shared GPU verify (sm_121 wheel sanity) and then
+# pokes the rfdiffusion CLI's --help so we know the .venv import graph
+# (torch + DGL + vendored SE(3)-transformer + rfantibody) loads cleanly.
+smoke_test      = "python /opt/_base/verify_gpu.py && uv run --project /opt/rfantibody rfdiffusion --help > /dev/null"
 
 [tools.rfdiffusion2]
-display_name = "RFdiffusion2"
-version      = "1.0.0"
-python       = "3.10"
-repo         = "https://github.com/RosettaCommons/RFdiffusion2"
-venv_dir     = "${PROTEUS_HOME}/tools/rfdiffusion2/.venv"
-requires_gpu = true
-disk_gb      = 6.5
-install_steps = [
-  "git clone {{ repo }} .",
-  "uv venv --python {{ python }} {{ venv_dir }}",
-  "uv pip install --python {{ venv_dir }}/bin/python --torch-backend=auto torch==2.8.0",
-  "uv pip install --python {{ venv_dir }}/bin/python -e .",
-]
-run_command = "{{ venv_dir }}/bin/python {{ install_dir }}/scripts/run.py @{{ args_file }}"
+display_name    = "RFdiffusion2"
+version         = "0.1.0"
+repo            = "https://github.com/RosettaCommons/RFdiffusion2"
+requires_gpu    = true
+disk_gb         = 9.0
+image_tag       = "fova/rfdiffusion2:0.1.0"
+containerfile   = "rfdiffusion2.Containerfile"
+entrypoint      = "python /opt/rfdiffusion2/rf_diffusion/benchmark/pipeline.py @{{ args_file }}"
+gpu             = true
+weights_paths   = ["/models/rfdiffusion2"]
+timeout_seconds = 7200
+smoke_test      = "python -c 'import torch; assert torch.cuda.is_available(); print(torch.__version__)'"
 
 [tools.boltz2]
-display_name = "Boltz-2"
-version      = "1.0.0"
-python       = "3.11"
-venv_dir     = "${PROTEUS_HOME}/tools/boltz2/.venv"
-requires_gpu = true
-disk_gb      = 12.0
-install_steps = [
-  "uv venv --python {{ python }} {{ venv_dir }}",
-  "uv pip install --python {{ venv_dir }}/bin/python --torch-backend=auto boltz",
-]
-run_command = "{{ venv_dir }}/bin/boltz predict {{ input_yaml }} --out_dir {{ out_dir }}"
+display_name    = "Boltz-2"
+version         = "2.2.1"
+repo            = "https://github.com/jwohlwend/boltz"
+requires_gpu    = true
+disk_gb         = 15.0
+image_tag       = "fova/boltz2:v2.2.1"
+containerfile   = "boltz2.Containerfile"
+entrypoint      = "boltz predict"
+gpu             = true
+weights_paths   = ["/models"]
+timeout_seconds = 3600
+# Smoke test (Bug 20): a 30-aa monomer fold against the cached weights.
+# First half exercises the shared _base/verify_gpu.py contract; second half
+# writes a tiny YAML on the container's tmpfs, runs `boltz predict` with
+# --override (don't reuse stale tmp), --use_msa_server disabled by passing
+# `msa: empty` to skip the network MSA dance, then asserts the produced PDB
+# (or CIF) has > 0 ATOM records. The smoke runs inside the tool image with
+# ~/.fova/models/boltz2 mounted at /models/boltz2 — `boltz predict --cache
+# /models/boltz2` points the in-process downloader at the host cache so it
+# never refetches.
+smoke_test = """
+python -c 'import torch; assert torch.cuda.is_available(), "no cuda"; print(f"torch {torch.__version__} cuda {torch.version.cuda} ok")' \
+ && mkdir -p /tmp/boltz_smoke \
+ && printf 'sequences:\\n  - protein:\\n      id: A\\n      sequence: MKQHKAMIVALIVICITAVVAALVTRKDLC\\n      msa: empty\\n' > /tmp/boltz_smoke/in.yaml \
+ && boltz predict /tmp/boltz_smoke/in.yaml --out_dir /tmp/boltz_smoke/out --cache /models/boltz2 --override --output_format pdb --no_kernels \
+ && test "$(find /tmp/boltz_smoke/out -name '*.pdb' -exec grep -c '^ATOM' {} \\; | head -1)" -gt 0
+"""
+
+# Model weights for Boltz-2. Downloaded once into ~/.fova/models/boltz2/
+# by the post-build hook in Installer.installContainer (via
+# models_cache.EnsureWeights) and bind-mounted at /models/boltz2 at run time.
+#
+# URLs are taken directly from upstream's bundled downloader in
+# src/boltz/main.py (CCD_URL / MOL_URL / the two _conf.ckpt + _aff.ckpt URL
+# lists). We pin the HuggingFace mirrors (not the model-gateway.boltz.bio
+# convenience host) so a Cloudflare cache miss never silently hits a
+# different bucket. Total: ~6.13 GB.
+#
+# SHA256: not published upstream. Upstream uses urllib.request.urlretrieve
+# without any checksum verification, and HuggingFace does not expose a
+# canonical .sha256 sidecar for these files. With empty `sha256`,
+# EnsureWeights treats existence as sufficient (matches rfdiffusion's
+# baseline). Filling these in is the maintainer's Phase 3 follow-up once
+# the GB10 has fetched a known-good copy and a baseline digest can be cut.
+[[tools.boltz2.weights]]
+url    = "https://huggingface.co/boltz-community/boltz-1/resolve/main/ccd.pkl"
+path   = "ccd.pkl"
+sha256 = ""
+
+[[tools.boltz2.weights]]
+url    = "https://huggingface.co/boltz-community/boltz-2/resolve/main/mols.tar"
+path   = "mols.tar"
+sha256 = ""
+
+[[tools.boltz2.weights]]
+url    = "https://huggingface.co/boltz-community/boltz-2/resolve/main/boltz2_conf.ckpt"
+path   = "boltz2_conf.ckpt"
+sha256 = ""
+
+[[tools.boltz2.weights]]
+url    = "https://huggingface.co/boltz-community/boltz-2/resolve/main/boltz2_aff.ckpt"
+path   = "boltz2_aff.ckpt"
+sha256 = ""
 
 [tools.chai1]
-display_name = "Chai-1"
-version      = "1.0.0"
-python       = "3.11"
-venv_dir     = "${PROTEUS_HOME}/tools/chai1/.venv"
-requires_gpu = true
-disk_gb      = 8.0
-install_steps = [
-  "uv venv --python {{ python }} {{ venv_dir }}",
-  "uv pip install --python {{ venv_dir }}/bin/python --torch-backend=auto chai_lab",
-]
-run_command = "{{ venv_dir }}/bin/python -m chai_lab.main fold {{ input_fasta }} {{ out_dir }}"
+# Chai-1 — multi-modal foundation model for biomolecular structure prediction.
+# Phase 2 (Bug 21): container-mode recipe. Upstream chai_lab==0.6.1 from PyPI.
+# Weights (~1.3 GB) live on the host at ~/.fova/models/chai1/ and bind-mount
+# to /models inside the container; chai_lab reads CHAI_DOWNLOADS_DIR=/models.
+# Auth: NONE required for the default v1 weights (chaiassets.com is public).
+# Set HF_TOKEN on the host BEFORE `/install chai1` only if you want to pull
+# alternate Chai checkpoints from HuggingFace (most users do not).
+display_name    = "Chai-1"
+version         = "0.6.1"
+requires_gpu    = true
+disk_gb         = 6.5
+image_tag       = "fova/chai1:0.6.1"
+containerfile   = "chai1.Containerfile"
+entrypoint      = "chai-lab fold {{ input_fasta }} {{ out_dir }}"
+gpu             = true
+weights_paths   = ["/models"]
+timeout_seconds = 1800
+# Smoke test: GPU probe via the shared verify_gpu.py fragment baked at
+# /opt/_base/verify_gpu.py, then a 30-aa monomer fold against the fixture
+# mounted at /work/chai1_smoke.fasta. The post-install runner is expected
+# to mount internal/backends/local/testdata/ as the workspace.
+smoke_test      = "python /opt/_base/verify_gpu.py && chai-lab fold /work/chai1_smoke.fasta /work/out"
+
+# Model weights — fetched into ~/.fova/models/chai1/ by the post-build
+# hook (models_cache.EnsureWeights) and bind-mounted at /models inside the
+# container. Paths mirror the directory layout chai_lab expects under
+# CHAI_DOWNLOADS_DIR (see chai_lab.utils.paths.chai1_component).
+[[tools.chai1.weights]]
+url    = "https://chaiassets.com/chai1-inference-depencencies/conformers_v1.apkl"
+path   = "conformers_v1.apkl"
+sha256 = "f2161256b565bbd84198da8b3e3d3978ae2f179f778d0995cd135c4c0c57c41f"
+
+[[tools.chai1.weights]]
+url    = "https://chaiassets.com/chai1-inference-depencencies/models_v2/trunk.pt"
+path   = "models_v2/trunk.pt"
+sha256 = "b7a08e104455f76491088a5eeaea9bb95a08168c48969b0b892971346e51ccbc"
+
+[[tools.chai1.weights]]
+url    = "https://chaiassets.com/chai1-inference-depencencies/models_v2/diffusion_module.pt"
+path   = "models_v2/diffusion_module.pt"
+sha256 = "bd77cf4095ad6b8a4eae7e390d01d24be1ebd819922ca3f28e8744f9945c9cad"
+
+[[tools.chai1.weights]]
+url    = "https://chaiassets.com/chai1-inference-depencencies/models_v2/confidence_head.pt"
+path   = "models_v2/confidence_head.pt"
+sha256 = "82a4ac9f934fdd0e73870150f508cecbe010c1383234bdadcaa70d57323deb6b"
+
+[[tools.chai1.weights]]
+url    = "https://chaiassets.com/chai1-inference-depencencies/models_v2/feature_embedding.pt"
+path   = "models_v2/feature_embedding.pt"
+sha256 = "58600fb282827ee105b4bf33845c2eb2dce2a7d2ba7582951f76c9290c66c019"
+
+[[tools.chai1.weights]]
+url    = "https://chaiassets.com/chai1-inference-depencencies/models_v2/bond_loss_input_proj.pt"
+path   = "models_v2/bond_loss_input_proj.pt"
+sha256 = "98f3b2e415d11e460a684cdbfc213ca80447308022b1953cc5326ad468948851"
+
+[[tools.chai1.weights]]
+url    = "https://chaiassets.com/chai1-inference-depencencies/models_v2/token_embedder.pt"
+path   = "models_v2/token_embedder.pt"
+sha256 = "60cada19fd9c77d8298131a00368d162b6bc7d3c836dd36c715db04d21f7bbde"
+
+# BoltzGen — Stark et al., "BoltzGen: Toward Universal Binder Design" (2026).
+# Added in v0.7 as the SPECS-blessed alternative binder method on aarch64
+# (Grace CPU / GB10), where BindCraft is blocked by the upstream PyRosetta
+# wheel gap. BoltzGen has no PyRosetta dependency and runs on both x86_64
+# and aarch64. Weights (~6 GB, includes Boltz-2 refolding) download from
+# HuggingFace at first run via HF_HOME=/models — not pre-fetched via the
+# Weights array because HuggingFace uses LFS pointers/chunked transfers
+# that EnsureWeights doesn't yet model.
+[tools.boltzgen]
+display_name    = "BoltzGen"
+version         = "0.3.2"
+repo            = "https://github.com/HannesStark/boltzgen"
+image_tag       = "fova/boltzgen:v0.3.2"
+containerfile   = "boltzgen.Containerfile"
+entrypoint      = "boltzgen"
+gpu             = true
+weights_paths   = ["/models"]
+timeout_seconds = 3600
+smoke_test      = "python /opt/_base/verify_gpu.py && boltzgen --help"
 
 [data.alphafold_params]
 display_name = "AlphaFold2 weights"
 url          = "https://storage.googleapis.com/alphafold/alphafold_params_2022-12-06.tar"
-extract_to   = "${PROTEUS_HOME}/data/alphafold_params"
+extract_to   = "${FOVA_HOME}/data/alphafold_params"
 size_gb      = 5.3
 
 [data.rfdiffusion_weights]
@@ -159,5 +422,38 @@ urls         = [
   "http://files.ipd.uw.edu/pub/RFdiffusion/6f5902ac237024bdd0c176cb93063dc4/Base_ckpt.pt",
   "http://files.ipd.uw.edu/pub/RFdiffusion/e29311f6f1bf1af907f9ef9f44b8328b/Complex_base_ckpt.pt",
 ]
-target_dir   = "${PROTEUS_HOME}/data/rfdiffusion_weights"
+target_dir   = "${FOVA_HOME}/data/rfdiffusion_weights"
 size_gb      = 4.0
+
+# RFdiffusion2 weights — sourced from upstream's setup.py (BASE_URL = https://files.ipd.uw.edu/pub/rfdiffusion2/).
+# Mounted into the rfdiffusion2 container at /models/rfdiffusion2/ via the
+# `weights_paths` declaration on [tools.rfdiffusion2]. Two diffusion checkpoints
+# plus LigandMPNN's tied weights (the pipeline does sequence fitting inline
+# after backbone generation, per the upstream README).
+[data.rfdiffusion2_weights]
+display_name = "RFdiffusion2 weights"
+urls         = [
+  "https://files.ipd.uw.edu/pub/rfdiffusion2/model_weights/RFD_173.pt",
+  "https://files.ipd.uw.edu/pub/rfdiffusion2/model_weights/RFD_140.pt",
+  "https://files.ipd.uw.edu/pub/rfdiffusion2/third_party_model_weights/ligand_mpnn/s25_r010_t300_p.pt",
+  "https://files.ipd.uw.edu/pub/rfdiffusion2/third_party_model_weights/ligand_mpnn/s_300756.pt",
+]
+target_dir   = "${FOVA_HOME}/.fova/models/rfdiffusion2"
+size_gb      = 5.0
+
+# Test-only legacy fixture — kept so the registry's legacy-recipe parsing,
+# placeholder expansion, and venv-mode installer paths stay exercised after
+# every real tool has migrated to container mode. Not a real installable tool;
+# the doctor reports it as "not installed" and it has no Containerfile.
+[tools.legacy_fixture]
+display_name = "Legacy fixture (test-only)"
+version      = "0.0.0"
+python       = "3.11"
+repo         = "https://example.com/legacy-fixture"
+venv_dir     = "${FOVA_HOME}/tools/legacy_fixture/.venv"
+install_steps = [
+  "git clone {{ repo }} .",
+  "uv venv --python {{ python }} {{ venv_dir }}",
+  "uv pip install --python {{ venv_dir }}/bin/python --torch-backend=auto torch==2.8.0",
+]
+run_command = "{{ venv_dir }}/bin/python /opt/legacy_fixture/run.py {{ args_file }}"

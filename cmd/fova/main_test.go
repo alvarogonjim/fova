@@ -5,10 +5,25 @@ import (
 	"path/filepath"
 	"testing"
 
-	jobmgr "github.com/alvarogonjim/proteus/internal/jobs"
-	"github.com/alvarogonjim/proteus/internal/llm"
-	"github.com/alvarogonjim/proteus/internal/store"
+	"github.com/alvarogonjim/fova/internal/backends/local"
+	"github.com/alvarogonjim/fova/internal/config"
+	jobmgr "github.com/alvarogonjim/fova/internal/jobs"
+	"github.com/alvarogonjim/fova/internal/llm"
+	"github.com/alvarogonjim/fova/internal/store"
 )
+
+// newTestInstaller builds a real local.Installer rooted at a temp dir so
+// buildRegistry can wire plan.create with its installed-tool checker. The
+// registry tests don't exercise plan.create's install path; the cross-check
+// is verified in internal/tools/plan/plan_test.go.
+func newTestInstaller(t *testing.T) *local.Installer {
+	t.Helper()
+	reg, err := local.LoadRegistry(t.TempDir())
+	if err != nil {
+		t.Fatalf("LoadRegistry: %v", err)
+	}
+	return local.NewInstaller(reg)
+}
 
 func TestRootCommandHasSubcommands(t *testing.T) {
 	root := newRootCmd()
@@ -39,7 +54,7 @@ func TestRunTUIWiresJobTools(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer st.Close()
-	reg := buildRegistry(t.TempDir(), st, jobmgr.NewManager(st, nil), llm.NewModelRegistry())
+	reg := buildRegistry(t.TempDir(), st, jobmgr.NewManager(st, nil), llm.NewModelRegistry(config.DefaultCatalog()), config.DefaultConfig(), newTestInstaller(t))
 	for _, name := range []string{"jobs.list", "jobs.status", "jobs.cancel", "jobs.result"} {
 		if _, ok := reg.Get(name); !ok {
 			t.Errorf("registry missing %s", name)
@@ -58,7 +73,7 @@ func TestRunTUIWiresDesignAndScoreTools(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer st.Close()
-	reg := buildRegistry(t.TempDir(), st, jobmgr.NewManager(st, nil), llm.NewModelRegistry())
+	reg := buildRegistry(t.TempDir(), st, jobmgr.NewManager(st, nil), llm.NewModelRegistry(config.DefaultCatalog()), config.DefaultConfig(), newTestInstaller(t))
 	for _, name := range []string{
 		"design.bindcraft", "design.rfdiffusion", "design.proteinmpnn",
 		"design.rfantibody", "design.chai2", "design.rfdiffusion2", "design.ligandmpnn",
@@ -79,16 +94,28 @@ func TestRunTUIWiresKnowledgeAndPlanTools(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer st.Close()
-	reg := buildRegistry(t.TempDir(), st, jobmgr.NewManager(st, nil), llm.NewModelRegistry())
+	reg := buildRegistry(t.TempDir(), st, jobmgr.NewManager(st, nil), llm.NewModelRegistry(config.DefaultCatalog()), config.DefaultConfig(), newTestInstaller(t))
 	for _, name := range []string{
 		"knowledge.europepmc", "knowledge.openalex", "knowledge.s2",
 		"knowledge.biorxiv", "knowledge.crossref", "knowledge.uniprot",
 		"knowledge.pdb", "knowledge.interpro", "knowledge.web_fetch",
-		"knowledge.web_search", "knowledge.corpus", "plan.create",
+		"knowledge.web_search", "plan.create",
+		// v0.7 Bug 3 — knowledge.corpus is now eight flat tools instead of
+		// one umbrella with an action field. The agent calls each by name.
+		"knowledge.corpus_add", "knowledge.corpus_add_from_search",
+		"knowledge.corpus_search", "knowledge.corpus_grep",
+		"knowledge.corpus_map", "knowledge.corpus_reduce",
+		"knowledge.corpus_read", "knowledge.corpus_remove",
 	} {
 		if _, ok := reg.Get(name); !ok {
 			t.Errorf("registry missing %s", name)
 		}
+	}
+	// The umbrella tool is fully removed — its absence guards against drift
+	// reintroducing it. If a future commit re-registers it, this test fails
+	// loudly.
+	if _, ok := reg.Get("knowledge.corpus"); ok {
+		t.Error("umbrella knowledge.corpus should not be registered post-v0.7 Bug 3")
 	}
 }
 
@@ -100,7 +127,7 @@ func TestRunTUIWiresLabTools(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer st.Close()
-	reg := buildRegistry(t.TempDir(), st, jobmgr.NewManager(st, nil), llm.NewModelRegistry())
+	reg := buildRegistry(t.TempDir(), st, jobmgr.NewManager(st, nil), llm.NewModelRegistry(config.DefaultCatalog()), config.DefaultConfig(), newTestInstaller(t))
 	for _, name := range []string{
 		"lab.targets_search", "lab.cost_estimate", "lab.submit_experiment",
 		"lab.experiment_status", "lab.results",

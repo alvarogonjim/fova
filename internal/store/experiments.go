@@ -3,7 +3,7 @@ package store
 import (
 	"encoding/json"
 
-	"github.com/alvarogonjim/proteus/internal/domain"
+	"github.com/alvarogonjim/fova/internal/domain"
 )
 
 // InsertExperiment persists a wet-lab experiment.

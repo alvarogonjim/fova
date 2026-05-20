@@ -7,8 +7,8 @@ import (
 	"net/url"
 	"time"
 
-	"github.com/alvarogonjim/proteus/internal/domain"
-	"github.com/alvarogonjim/proteus/internal/tools"
+	"github.com/alvarogonjim/fova/internal/domain"
+	"github.com/alvarogonjim/fova/internal/tools"
 )
 
 // interproBaseURL is the public InterPro protein-entry endpoint (SPECS §7.2.5).

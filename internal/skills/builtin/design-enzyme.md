@@ -14,8 +14,9 @@ enzyme active sites.
 ## Theozyme requirement
 A theozyme (idealized arrangement of catalytic functional groups around the
 reaction transition state) is required input. Ask the user for it; if not
-provided, search the literature with `knowledge.corpus` for related transition
-states before proceeding.
+provided, search the literature with `knowledge.corpus_search` (or run a
+`knowledge.europepmc` query and feed the hits to `knowledge.corpus_add_from_search`)
+for related transition states before proceeding.
 
 ## Required inputs
 - Theozyme (catalytic functional-group geometry around the transition state)

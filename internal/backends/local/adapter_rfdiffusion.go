@@ -66,54 +66,123 @@ func (rfdiffusionAdapter) Invoke(ctx context.Context, env AdapterEnv, request []
 			return nil, fmt.Errorf("design.rfdiffusion: target %q must be a .pdb file", target)
 		}
 		if info, err := os.Stat(target); err != nil || info.IsDir() {
-			return nil, fmt.Errorf("design.rfdiffusion: target %q does not exist", target)
+			return nil, fmt.Errorf(
+				"design.rfdiffusion: target %q not found (workspace root). "+
+					"Use fs.read_structure or fs.bash to confirm the file exists, "+
+					"or pass an absolute path.",
+				target)
 		}
-	}
-	if info, err := os.Stat(env.Recipe.InstallDir); err != nil || !info.IsDir() {
-		return nil, fmt.Errorf("design.rfdiffusion: rfdiffusion is not installed (run /install rfdiffusion)")
-	}
-	if info, err := os.Stat(env.Recipe.VenvDir); err != nil || !info.IsDir() {
-		return nil, fmt.Errorf("design.rfdiffusion: rfdiffusion is not installed (run /install rfdiffusion)")
 	}
 	if env.Registry == nil {
 		return nil, fmt.Errorf("design.rfdiffusion: adapter registry unavailable")
-	}
-	asset, ok := env.Registry.DataAsset("rfdiffusion_weights")
-	if !ok {
-		return nil, fmt.Errorf("design.rfdiffusion: the rfdiffusion_weights data asset is not registered")
-	}
-	if info, err := os.Stat(asset.TargetDir); err != nil || !info.IsDir() {
-		return nil, fmt.Errorf("design.rfdiffusion: RFdiffusion weights missing — install the rfdiffusion_weights data asset")
-	}
-	ckpt := filepath.Join(asset.TargetDir, "Base_ckpt.pt")
-	if target != "" {
-		ckpt = filepath.Join(asset.TargetDir, "Complex_base_ckpt.pt")
 	}
 	numDesigns := req.NumDesigns
 	if numDesigns < 1 {
 		numDesigns = 1
 	}
-
 	outDir := filepath.Join(env.Registry.Home(), "designs",
 		fmt.Sprintf("rfdiffusion-%d", time.Now().UnixNano()))
 	if err := os.MkdirAll(outDir, 0o755); err != nil {
 		return nil, err
 	}
+	env.Tick(0.05) // output dir staged
 
-	cmd := fmt.Sprintf(
-		"%s %s inference.output_prefix=%s inference.num_designs=%d inference.ckpt_override_path=%s 'contigmap.contigs=[%s]'",
-		filepath.Join(env.Recipe.VenvDir, "bin", "python"),
-		filepath.Join(env.Recipe.InstallDir, "scripts", "run_inference.py"),
-		filepath.Join(outDir, "out"), numDesigns, ckpt, contigs)
-	if target != "" {
-		cmd += " inference.input_pdb=" + target
+	if env.Recipe.ImageTag != "" {
+		// Container-mode: weights are bind-mounted from
+		// ~/.fova/models/rfdiffusion/ at /models inside the container;
+		// the target PDB and outDir are bind-mounted via env.WorkDir at /work.
+		rt := Detect()
+		if !rt.Available() {
+			return nil, fmt.Errorf("design.rfdiffusion: no container runtime — install podman or docker")
+		}
+		if ok, _ := rt.ImageExists(env.Recipe.ImageTag); !ok {
+			return nil, fmt.Errorf(
+				"design.rfdiffusion: image %s is missing — run /install rfdiffusion",
+				env.Recipe.ImageTag)
+		}
+		// Stage the target (if any) into the workdir so the container sees it
+		// at a fixed /work-relative path.
+		args := []string{
+			"inference.output_prefix=/work/out",
+			fmt.Sprintf("inference.num_designs=%d", numDesigns),
+			fmt.Sprintf("'contigmap.contigs=[%s]'", contigs),
+		}
+		// Container weights live at /models (bind-mounted via WeightsPaths
+		// in tools.toml). Pick the binder-vs-unconditional ckpt name; this
+		// mirrors the legacy logic.
+		ckpt := "/models/Base_ckpt.pt"
+		if target != "" {
+			ckpt = "/models/Complex_base_ckpt.pt"
+			containerTarget := filepath.Join(env.WorkDir, filepath.Base(target))
+			if err := copyFile(target, containerTarget); err != nil {
+				return nil, fmt.Errorf("design.rfdiffusion: stage target: %w", err)
+			}
+			args = append(args, "inference.input_pdb=/work/"+filepath.Base(target))
+		}
+		args = append(args, "inference.ckpt_override_path="+ckpt)
+		if h := strings.TrimSpace(req.Hotspots); h != "" {
+			args = append(args, fmt.Sprintf("'ppi.hotspot_res=[%s]'", h))
+		}
+		mounts := []Mount{{HostPath: env.WorkDir, ContainerPath: "/work"}}
+		modelsCache := ModelsRoot(env.Registry.Home(), "rfdiffusion")
+		if info, err := os.Stat(modelsCache); err == nil && info.IsDir() {
+			mounts = append(mounts, Mount{HostPath: modelsCache, ContainerPath: "/models"})
+		} else {
+			return nil, fmt.Errorf(
+				"design.rfdiffusion: weights cache %s missing — run /install rfdiffusion",
+				modelsCache)
+		}
+		// The Containerfile's ENTRYPOINT is `python /opt/rfdiffusion/scripts/run_inference.py`.
+		if _, err := rt.RunContainer(ctx, ContainerRunArgs{
+			Image:   env.Recipe.ImageTag,
+			Cmd:     args,
+			GPU:     env.Recipe.GPU,
+			Mounts:  mounts,
+			Workdir: "/work",
+			Log:     env.LogWriter(),
+		}); err != nil {
+			return nil, fmt.Errorf("design.rfdiffusion: container run failed: %w", err)
+		}
+		// Collect outputs from /work/out_*.pdb on the host (since /work was
+		// bind-mounted from env.WorkDir).
+		if _, err := os.Stat(filepath.Join(env.WorkDir, "out_0.pdb")); err == nil {
+			outDir = env.WorkDir
+		}
+	} else {
+		// Legacy venv-mode (pre-v0.7 install).
+		if info, err := os.Stat(env.Recipe.InstallDir); err != nil || !info.IsDir() {
+			return nil, fmt.Errorf("design.rfdiffusion: rfdiffusion is not installed (run /install rfdiffusion)")
+		}
+		if info, err := os.Stat(env.Recipe.VenvDir); err != nil || !info.IsDir() {
+			return nil, fmt.Errorf("design.rfdiffusion: rfdiffusion is not installed (run /install rfdiffusion)")
+		}
+		asset, ok := env.Registry.DataAsset("rfdiffusion_weights")
+		if !ok {
+			return nil, fmt.Errorf("design.rfdiffusion: the rfdiffusion_weights data asset is not registered")
+		}
+		if info, err := os.Stat(asset.TargetDir); err != nil || !info.IsDir() {
+			return nil, fmt.Errorf("design.rfdiffusion: RFdiffusion weights missing — install the rfdiffusion_weights data asset")
+		}
+		ckpt := filepath.Join(asset.TargetDir, "Base_ckpt.pt")
+		if target != "" {
+			ckpt = filepath.Join(asset.TargetDir, "Complex_base_ckpt.pt")
+		}
+		cmd := fmt.Sprintf(
+			"%s %s inference.output_prefix=%s inference.num_designs=%d inference.ckpt_override_path=%s 'contigmap.contigs=[%s]'",
+			filepath.Join(env.Recipe.VenvDir, "bin", "python"),
+			filepath.Join(env.Recipe.InstallDir, "scripts", "run_inference.py"),
+			filepath.Join(outDir, "out"), numDesigns, ckpt, contigs)
+		if target != "" {
+			cmd += " inference.input_pdb=" + target
+		}
+		if h := strings.TrimSpace(req.Hotspots); h != "" {
+			cmd += fmt.Sprintf(" 'ppi.hotspot_res=[%s]'", h)
+		}
+		if out, err := env.Run(ctx, env.Recipe.InstallDir, cmd, env.LogWriter()); err != nil {
+			return nil, fmt.Errorf("design.rfdiffusion: run failed: %w\n%s", err, out)
+		}
 	}
-	if h := strings.TrimSpace(req.Hotspots); h != "" {
-		cmd += fmt.Sprintf(" 'ppi.hotspot_res=[%s]'", h)
-	}
-	if out, err := env.Run(ctx, env.Recipe.InstallDir, cmd); err != nil {
-		return nil, fmt.Errorf("design.rfdiffusion: run failed: %w\n%s", err, out)
-	}
+	env.Tick(0.95) // run_inference.py done
 
 	designs, err := parseRFdiffusionOutput(outDir)
 	if err != nil {

@@ -6,6 +6,7 @@ import (
 
 	"github.com/openai/openai-go"
 	"github.com/openai/openai-go/option"
+	"github.com/openai/openai-go/packages/respjson"
 	"github.com/openai/openai-go/shared"
 )
 
@@ -97,6 +98,7 @@ func (p *openAIProvider) Chat(ctx context.Context, req ChatRequest) (*ChatRespon
 	if len(completion.Choices) > 0 {
 		choice := completion.Choices[0]
 		resp.Text = choice.Message.Content
+		resp.Reasoning = extractReasoning(choice.Message.JSON.ExtraFields)
 		resp.StopReason = string(choice.FinishReason)
 		for _, tc := range choice.Message.ToolCalls {
 			var input map[string]any
@@ -111,6 +113,34 @@ func (p *openAIProvider) Chat(ctx context.Context, req ChatRequest) (*ChatRespon
 	return resp, nil
 }
 
+// extractReasoning pulls vLLM's (and any other OpenAI-compatible) reasoning
+// payload out of the message's ExtraFields. vLLM started with
+// `--enable-reasoning --reasoning-parser <name>` returns a `reasoning_content`
+// string on the message; older or alternative implementations may use
+// `reasoning` instead. Both shapes are accepted. An empty / missing field
+// yields "" and is harmless.
+//
+// NB: respjson.Field.Valid() returns false for ExtraFields because they have
+// no matching typed struct field to validate against — we therefore only
+// look at Raw() and unmarshal it directly.
+func extractReasoning(extras map[string]respjson.Field) string {
+	for _, key := range []string{"reasoning_content", "reasoning"} {
+		f, ok := extras[key]
+		if !ok {
+			continue
+		}
+		raw := f.Raw()
+		if raw == "" || raw == "null" {
+			continue
+		}
+		var s string
+		if err := json.Unmarshal([]byte(raw), &s); err == nil && s != "" {
+			return s
+		}
+	}
+	return ""
+}
+
 // StreamChat wraps Chat: it performs a blocking call and emits the whole
 // response as one text_delta plus a done event (streaming-deferred design).
 func (p *openAIProvider) StreamChat(ctx context.Context, req ChatRequest) (<-chan ChatEvent, error) {
@@ -121,6 +151,9 @@ func (p *openAIProvider) StreamChat(ctx context.Context, req ChatRequest) (<-cha
 		if err != nil {
 			ch <- ChatEvent{Kind: "error", Err: err}
 			return
+		}
+		if resp.Reasoning != "" {
+			ch <- ChatEvent{Kind: "reasoning_delta", Delta: resp.Reasoning}
 		}
 		if resp.Text != "" {
 			ch <- ChatEvent{Kind: "text_delta", Delta: resp.Text}

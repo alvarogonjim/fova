@@ -3,7 +3,7 @@ package store
 import (
 	"database/sql"
 
-	"github.com/alvarogonjim/proteus/internal/domain"
+	"github.com/alvarogonjim/fova/internal/domain"
 )
 
 // InsertCorpusPaper persists a corpus paper. It uses INSERT OR REPLACE so that

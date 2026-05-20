@@ -4,11 +4,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/alvarogonjim/proteus/internal/llm"
+	"github.com/alvarogonjim/fova/internal/llm"
 )
 
 func TestSystemPromptEmbedded(t *testing.T) {
-	if !strings.Contains(SystemPrompt, "You are Proteus") {
+	if !strings.Contains(SystemPrompt, "You are fova") {
 		t.Fatal("system prompt not embedded")
 	}
 }

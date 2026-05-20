@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/alvarogonjim/proteus/internal/domain"
+	"github.com/alvarogonjim/fova/internal/domain"
 )
 
 // TestLabPanelRendersExperiments checks the panel shows the wet-lab header and

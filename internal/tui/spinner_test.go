@@ -75,6 +75,31 @@ func TestThinkingStopClears(t *testing.T) {
 	}
 }
 
+// TestThinkingSpinnerGlyphInPrimary asserts the braille frame is rendered
+// through the MarkerRunning style (moss / Primary) per rebrand spec §3.4.
+// We compare the rendered output to MarkerRunning.Render(frame) — both go
+// through the same style, so the rendered ANSI must be identical for the
+// glyph substring.
+func TestThinkingSpinnerGlyphInPrimary(t *testing.T) {
+	th := NewTheme()
+	t0 := time.Date(2026, 5, 18, 12, 0, 0, 0, time.UTC)
+	var m thinkingModel
+	m.start("Designing", t0)
+
+	out := m.view(th, t0)
+	frame := string(spinnerFrames[0])
+	want := th.MarkerRunning.Render(frame)
+
+	if !strings.HasPrefix(out, want) {
+		t.Errorf("view prefix = %q, want spinner glyph rendered as %q", out, want)
+	}
+
+	// The MarkerRunning style must resolve to the Primary palette colour.
+	if got := th.MarkerRunning.GetForeground(); got != th.Palette.Primary {
+		t.Errorf("MarkerRunning fg = %v, want Primary %v", got, th.Palette.Primary)
+	}
+}
+
 func TestThinkingVerbForTool(t *testing.T) {
 	cases := []struct {
 		tool string

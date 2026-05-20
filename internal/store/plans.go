@@ -6,7 +6,7 @@ import (
 	"errors"
 	"time"
 
-	"github.com/alvarogonjim/proteus/internal/domain"
+	"github.com/alvarogonjim/fova/internal/domain"
 )
 
 // InsertPlan persists a design plan.

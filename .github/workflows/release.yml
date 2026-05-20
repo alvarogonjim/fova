@@ -1,0 +1,45 @@
+# .github/workflows/release.yml — v0.5 SPECS §20 #5.
+#
+# Tag-triggered release. On any tag matching v[0-9]+.[0-9]+.[0-9]+* (final
+# releases and -rc/-beta prereleases), check out the repo at the tag, install
+# Go and goreleaser, then run `goreleaser release --clean` which:
+#   * cross-builds the five-platform matrix,
+#   * uploads archives + checksums to a new GitHub Release,
+#   * opens a formula-bump PR in alvarogonjim/homebrew-tap.
+#
+# See docs/RELEASING.md for the tag-and-push runbook and the secret checklist.
+
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+*'
+
+permissions:
+  contents: write
+
+jobs:
+  goreleaser:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # goreleaser uses the full history for changelogs.
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: 'go.mod'
+          cache: true
+
+      - name: Run GoReleaser
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          distribution: goreleaser
+          version: '~> v2'
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}

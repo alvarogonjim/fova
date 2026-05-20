@@ -79,11 +79,11 @@ func TestFSBashDenylist(t *testing.T) {
 func TestFSBashRuns(t *testing.T) {
 	ts := NewFSTools(t.TempDir())
 	b := fsToolByName(ts, "fs.bash")
-	res, err := b.Execute(context.Background(), json.RawMessage(`{"command":"echo proteus"}`))
+	res, err := b.Execute(context.Background(), json.RawMessage(`{"command":"echo fova"}`))
 	if err != nil {
 		t.Fatalf("bash failed: %v", err)
 	}
-	if !strings.Contains(res.Display, "proteus") {
+	if !strings.Contains(res.Display, "fova") {
 		t.Fatalf("bash output missing: %q", res.Display)
 	}
 }

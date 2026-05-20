@@ -12,20 +12,23 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/alvarogonjim/proteus/internal/backends/local"
-	"github.com/alvarogonjim/proteus/internal/backends/modal"
-	"github.com/alvarogonjim/proteus/internal/domain"
-	jobmgr "github.com/alvarogonjim/proteus/internal/jobs"
+	"github.com/alvarogonjim/fova/internal/backends/local"
+	"github.com/alvarogonjim/fova/internal/backends/modal"
+	"github.com/alvarogonjim/fova/internal/domain"
+	jobmgr "github.com/alvarogonjim/fova/internal/jobs"
+	"github.com/alvarogonjim/fova/internal/tools/plan"
 )
 
-// cmdDoctor renders the local-environment diagnostic inline in chat.
+// cmdDoctor renders the local-environment diagnostic inline in chat. Output
+// is posted as a slash-output entry so its newlines survive the chat renderer
+// (the markdown path collapses single newlines into spaces — spec Bug 7).
 func (m *Model) cmdDoctor() (tea.Model, tea.Cmd) {
 	if m.localReg == nil {
 		m.chat.appendError("tool registry unavailable")
 		return m, nil
 	}
 	rep := local.Diagnose(m.localReg, local.NewInstaller(m.localReg))
-	m.chat.appendAgentDeltaBlock(rep.String())
+	m.chat.appendSlashOutput(plan.RenderDoctor(rep))
 	return m, nil
 }
 
@@ -49,7 +52,7 @@ func (m *Model) cmdTools() (tea.Model, tea.Cmd) {
 		}
 		fmt.Fprintf(&b, "  %s  %-14s %.1f GB%s\n", mark, rec.Name, rec.DiskGB, gpu)
 	}
-	m.chat.appendAgentDeltaBlock(strings.TrimRight(b.String(), "\n"))
+	m.chat.appendSlashOutput(strings.TrimRight(b.String(), "\n"))
 	return m, nil
 }
 
@@ -120,7 +123,7 @@ func (m *Model) cmdInstall(arg string) (tea.Model, tea.Cmd) {
 				fmt.Fprintf(&b, "  %d. %s\n", i+1, s)
 			}
 		}
-		m.chat.appendAgentDeltaBlock(strings.TrimRight(b.String(), "\n"))
+		m.chat.appendSlashOutput(strings.TrimRight(b.String(), "\n"))
 		return m, nil
 	}
 
@@ -206,7 +209,7 @@ func (m *Model) cmdModalDeploy(arg string) (tea.Model, tea.Cmd) {
 			"and `modal token new`, then retry /modal deploy.")
 		return m, nil
 	}
-	home := m.proteusHome
+	home := m.fovaHome
 	id, err := m.jobMgr.Submit(jobmgr.Spec{
 		Kind: domain.JobSetup,
 		Tool: "modal:deploy",

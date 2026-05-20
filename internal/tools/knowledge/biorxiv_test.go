@@ -30,7 +30,7 @@ func TestBioRxivExecute(t *testing.T) {
 	defer srv.Close()
 
 	res := NewResults()
-	tool := NewBioRxiv(res)
+	tool := NewBioRxiv(res, 0)
 	tool.BaseURL = srv.URL
 
 	out, err := tool.Execute(context.Background(),
@@ -82,7 +82,7 @@ func TestBioRxivDefaultsDateRange(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	tool := NewBioRxiv(NewResults())
+	tool := NewBioRxiv(NewResults(), 0)
 	tool.BaseURL = srv.URL
 
 	// Empty input should default both from and to without error.

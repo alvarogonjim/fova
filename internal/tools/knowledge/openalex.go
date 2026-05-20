@@ -8,8 +8,8 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/alvarogonjim/proteus/internal/domain"
-	"github.com/alvarogonjim/proteus/internal/tools"
+	"github.com/alvarogonjim/fova/internal/domain"
+	"github.com/alvarogonjim/fova/internal/tools"
 )
 
 const openAlexEndpoint = "https://api.openalex.org/works"
@@ -17,12 +17,14 @@ const openAlexEndpoint = "https://api.openalex.org/works"
 // OpenAlex implements knowledge.openalex: free scholarly-works search.
 type OpenAlex struct {
 	BaseURL string
+	Mailto  string
 	results *Results
 }
 
-// NewOpenAlex builds the knowledge.openalex tool.
-func NewOpenAlex(r *Results) *OpenAlex {
-	return &OpenAlex{BaseURL: openAlexEndpoint, results: r}
+// NewOpenAlex builds the knowledge.openalex tool. mailto, when non-empty, is
+// sent to the OpenAlex polite pool.
+func NewOpenAlex(r *Results, mailto string) *OpenAlex {
+	return &OpenAlex{BaseURL: openAlexEndpoint, Mailto: mailto, results: r}
 }
 
 func (*OpenAlex) Name() string { return "knowledge.openalex" }
@@ -58,7 +60,9 @@ func (t *OpenAlex) Execute(ctx context.Context, input json.RawMessage) (tools.Re
 	q := url.Values{}
 	q.Set("search", in.Query)
 	q.Set("per-page", strconv.Itoa(limit))
-	q.Set("mailto", "proteus@example.com")
+	if t.Mailto != "" {
+		q.Set("mailto", t.Mailto)
+	}
 
 	var raw struct {
 		Results []struct {

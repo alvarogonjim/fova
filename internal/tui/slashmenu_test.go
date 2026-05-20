@@ -11,8 +11,8 @@ func TestSlashMenuSetFilterNarrows(t *testing.T) {
 	if len(m.entries) != 1 {
 		t.Fatalf("setFilter(\"mode\"): got %d entries, want 1", len(m.entries))
 	}
-	if m.entries[0].Name != "model" {
-		t.Fatalf("setFilter(\"mode\"): got %q, want \"model\"", m.entries[0].Name)
+	if m.entries[0].Label != "/model" {
+		t.Fatalf("setFilter(\"mode\"): got %q, want \"/model\"", m.entries[0].Label)
 	}
 }
 
@@ -83,8 +83,8 @@ func TestSlashMenuVisibleWhenMatches(t *testing.T) {
 	if !ok {
 		t.Fatalf("setFilter(\"mo\"): selected() ok=false, want true")
 	}
-	if got.Name != "model" {
-		t.Fatalf("setFilter(\"mo\"): selected()=%q, want \"model\"", got.Name)
+	if got.Label != "/model" {
+		t.Fatalf("setFilter(\"mo\"): selected()=%q, want \"/model\"", got.Label)
 	}
 }
 

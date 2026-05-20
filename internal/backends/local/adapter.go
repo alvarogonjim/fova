@@ -3,6 +3,7 @@ package local
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 )
 
@@ -18,10 +19,28 @@ type ToolAdapter interface {
 // AdapterEnv is everything an adapter needs to run. It is injected so adapters
 // are unit-testable with a stub Run and a temporary WorkDir.
 type AdapterEnv struct {
-	Recipe   ToolRecipe // resolved recipe — InstallDir and VenvDir are expanded
-	Run      CmdRunner  // command runner (production: bashRunner; tests: a stub)
-	WorkDir  string     // a fresh temp directory the adapter may write into
-	Registry *Registry  // for DataAsset lookups and Home()
+	Recipe   ToolRecipe    // resolved recipe — InstallDir and VenvDir are expanded
+	Run      CmdRunner     // command runner (production: bashRunner; tests: a stub)
+	WorkDir  string        // a fresh temp directory the adapter may write into
+	Registry *Registry     // for DataAsset lookups and Home()
+	Log      io.Writer     // job-log writer (nil → io.Discard); adapters may tee notes here
+	Progress func(float64) // 0..1 stage progress callback (nil → no-op)
+}
+
+// LogWriter returns env.Log or io.Discard if it is nil.
+func (e AdapterEnv) LogWriter() io.Writer {
+	if e.Log == nil {
+		return io.Discard
+	}
+	return e.Log
+}
+
+// Tick reports fractional progress (0..1) to env.Progress. A nil callback is
+// a no-op so adapters never need to nil-check.
+func (e AdapterEnv) Tick(fraction float64) {
+	if e.Progress != nil {
+		e.Progress(fraction)
+	}
 }
 
 // designOut is one design in the {"designs":[...]} envelope adapters return;
@@ -46,8 +65,10 @@ func registerAdapter(a ToolAdapter) { adapterRegistry[a.AgentTool()] = a }
 
 // RunDesign runs the local adapter for a design tool. It looks up the adapter,
 // resolves its recipe, creates a temp WorkDir (removed on return), and invokes
-// it. A design tool with no registered adapter yields a clear error.
-func RunDesign(ctx context.Context, reg *Registry, agentTool string, request []byte) ([]byte, error) {
+// it. log receives the live stdout+stderr of every shell command the adapter
+// runs (nil → io.Discard); progress receives stage-boundary 0..1 ticks (nil
+// → no-op). A design tool with no registered adapter yields a clear error.
+func RunDesign(ctx context.Context, reg *Registry, agentTool string, request []byte, log io.Writer, progress func(float64)) ([]byte, error) {
 	adapter, ok := adapterRegistry[agentTool]
 	if !ok {
 		return nil, fmt.Errorf("%s: no local adapter on this backend yet", agentTool)
@@ -56,10 +77,20 @@ func RunDesign(ctx context.Context, reg *Registry, agentTool string, request []b
 	if !ok {
 		return nil, fmt.Errorf("%s: recipe %q is not in the tool registry", agentTool, adapter.Recipe())
 	}
-	workDir, err := os.MkdirTemp("", "proteus-design-*")
+	workDir, err := os.MkdirTemp("", "fova-design-*")
 	if err != nil {
 		return nil, err
 	}
 	defer os.RemoveAll(workDir)
-	return adapter.Invoke(ctx, AdapterEnv{Recipe: rec, Run: bashRunner, WorkDir: workDir, Registry: reg}, request)
+	if log == nil {
+		log = io.Discard
+	}
+	return adapter.Invoke(ctx, AdapterEnv{
+		Recipe:   rec,
+		Run:      bashRunner,
+		WorkDir:  workDir,
+		Registry: reg,
+		Log:      log,
+		Progress: progress,
+	}, request)
 }

@@ -8,9 +8,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/alvarogonjim/proteus/internal/domain"
-	jobmgr "github.com/alvarogonjim/proteus/internal/jobs"
-	"github.com/alvarogonjim/proteus/internal/tools"
+	"github.com/alvarogonjim/fova/internal/domain"
+	jobmgr "github.com/alvarogonjim/fova/internal/jobs"
+	"github.com/alvarogonjim/fova/internal/tools"
 )
 
 // emptyObjectSchema is the JSON Schema for a tool taking no arguments.

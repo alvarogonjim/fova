@@ -9,9 +9,9 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/alvarogonjim/proteus/internal/llm"
-	"github.com/alvarogonjim/proteus/internal/tools"
-	"github.com/alvarogonjim/proteus/internal/tools/fold"
+	"github.com/alvarogonjim/fova/internal/llm"
+	"github.com/alvarogonjim/fova/internal/tools"
+	"github.com/alvarogonjim/fova/internal/tools/fold"
 )
 
 // samplePDB has three CA atoms with B-factors 90/80/70 → mean 80, min 70.

@@ -3,6 +3,8 @@ package tui
 import (
 	"strings"
 	"testing"
+
+	"github.com/charmbracelet/lipgloss"
 )
 
 // TestSubmitModalRendersDetails checks the box shows the target, assay,
@@ -35,8 +37,38 @@ func TestSubmitModalRendersDetails(t *testing.T) {
 	if !strings.Contains(out, "webhooks/adaptyv") {
 		t.Errorf("modal missing the webhook URL: %q", out)
 	}
-	if !strings.Contains(out, "[ y ] submit") || !strings.Contains(out, "cancel") {
-		t.Errorf("modal missing the action prompts: %q", out)
+	// Rebrand §3.7: key row renders as `[y] submit  [n] cancel  [r] review
+	// [s] save for later`. The bracketed keys take saffron Accent.
+	for _, want := range []string{"[y]", "submit", "[n]", "cancel", "[r]", "review", "[s]", "save for later"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("modal missing key-row token %q: %q", want, out)
+		}
+	}
+	if !strings.Contains(out, "Submit?") {
+		t.Errorf("modal missing the `Submit?` lead-in: %q", out)
+	}
+}
+
+// TestSubmitModalKeyRowColours locks in the saffron-on-key, sand-on-label
+// styling from rebrand spec §3.7.
+func TestSubmitModalKeyRowColours(t *testing.T) {
+	withTrueColor(t)
+	m := submitModal{
+		TargetName: "PD-L1", AssayType: "binding",
+		Sequences: []string{"MAQVQLVESG"}, CostUSD: 600,
+		WebhookURL: "http://localhost/x",
+	}
+	th := NewTheme()
+	out := m.view(th, 80)
+	// The `[y]` bracket-key must render with Accent (saffron) foreground.
+	wantKey := lipgloss.NewStyle().Foreground(th.Palette.Accent).Render("[y]")
+	if !strings.Contains(out, wantKey) {
+		t.Errorf("modal `[y]` should carry Accent (saffron) foreground; not found in:\n%s", out)
+	}
+	// The `submit` label must render with Fg (sand) foreground.
+	wantLabel := lipgloss.NewStyle().Foreground(th.Palette.Fg).Render("submit")
+	if !strings.Contains(out, wantLabel) {
+		t.Errorf("modal `submit` label should carry Fg (sand) foreground; not found in:\n%s", out)
 	}
 }
 

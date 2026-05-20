@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/alvarogonjim/proteus/internal/domain"
+	"github.com/alvarogonjim/fova/internal/domain"
 )
 
 func TestDataSurvivesReopen(t *testing.T) {

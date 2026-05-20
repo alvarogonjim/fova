@@ -5,9 +5,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/charmbracelet/lipgloss"
-
-	"github.com/alvarogonjim/proteus/internal/domain"
+	"github.com/alvarogonjim/fova/internal/domain"
 )
 
 // jobsModel renders the JOBS panel (SPECS §10.2).
@@ -24,10 +22,6 @@ func (m *jobsModel) setJobs(jobs []domain.Job) { m.jobs = jobs }
 
 // setWidth sets the panel's render width.
 func (m *jobsModel) setWidth(w int) { m.width = w }
-
-// jobGlyph returns a single-rune status indicator for a job. It is a thin
-// wrapper around glyph() (theme.go), which is the single source of truth.
-func jobGlyph(s domain.JobStatus) string { return glyph(s) }
 
 // sectionRule renders a panel header (SPECS §10.7.8 / §10.7.1): a lowercase
 // label, a space, then a run of "─" filling out to width, all styled with
@@ -127,13 +121,12 @@ func (m jobsModel) View() string {
 	b.WriteString(sectionRule("jobs", m.width, m.theme))
 	b.WriteString("\n")
 	if len(m.jobs) == 0 {
-		b.WriteString(m.theme.Subtle.Render(clipLine(
+		b.WriteString(m.theme.Subtle.Render(wrapText(
 			"no jobs yet · /install a tool or ask the agent to design", m.width)))
 		return b.String()
 	}
 	for _, j := range m.jobs {
-		g := lipgloss.NewStyle().Foreground(m.theme.statusColor(j.Status)).
-			Render(glyph(j.Status))
+		g := m.theme.statusMarker(j.Status)
 		line := fmt.Sprintf("%-16s %s %s",
 			j.Tool, shortID(string(j.ID)), jobTimeInfo(j))
 		b.WriteString(g + " " + m.theme.ToolTrace.Render(clipLine(line, m.width-2)))

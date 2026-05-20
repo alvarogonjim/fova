@@ -1,0 +1,83 @@
+# fova model catalog. API keys are NEVER stored here — api_key_env names the
+# environment variable fova reads the key from at run time.
+
+[[provider]]
+name        = "anthropic"
+kind        = "anthropic"
+api_key_env = "ANTHROPIC_API_KEY"
+
+[[provider]]
+name        = "openai"
+kind        = "openai"
+base_url    = "https://api.openai.com/v1"
+api_key_env = "OPENAI_API_KEY"
+
+[[provider]]
+name        = "google"
+kind        = "google"
+api_key_env = "GOOGLE_API_KEY"
+
+[[provider]]
+name        = "ollama"
+kind        = "openai"
+base_url    = "http://localhost:11434/v1"
+
+[[provider]]
+name        = "vllm"
+kind        = "openai"
+base_url    = "http://localhost:8000/v1"
+api_key_env = "VLLM_API_KEY"
+
+[[model]]
+id             = "claude-opus-4-7"
+display_name   = "Claude Opus 4.7"
+provider       = "anthropic"
+context_tokens = 200000
+supports_tools = true
+input_price_per_1m  = 15
+output_price_per_1m = 75
+
+[[model]]
+id             = "claude-sonnet-4-6"
+display_name   = "Claude Sonnet 4.6"
+provider       = "anthropic"
+context_tokens = 200000
+supports_tools = true
+input_price_per_1m  = 3
+output_price_per_1m = 15
+
+[[model]]
+id             = "gpt-4o"
+display_name   = "GPT-4o"
+provider       = "openai"
+context_tokens = 128000
+supports_tools = true
+input_price_per_1m  = 2.5
+output_price_per_1m = 10
+
+[[model]]
+id             = "gemini-2.0-flash"
+display_name   = "Gemini 2.0 Flash"
+provider       = "google"
+context_tokens = 1000000
+supports_tools = true
+input_price_per_1m  = 0.1
+output_price_per_1m = 0.4
+
+[[model]]
+id             = "llama3.3:70b"
+display_name   = "Llama 3.3 70B (local)"
+provider       = "ollama"
+context_tokens = 128000
+supports_tools = true
+input_price_per_1m  = 0
+output_price_per_1m = 0
+
+[[model]]
+id             = "Qwen/Qwen3.6-27B"
+display_name   = "Qwen3.6 27B (local vLLM)"
+provider       = "vllm"
+context_tokens = 32768
+supports_tools = true
+input_price_per_1m  = 0
+output_price_per_1m = 0

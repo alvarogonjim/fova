@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/alvarogonjim/proteus/internal/domain"
+	"github.com/alvarogonjim/fova/internal/domain"
 )
 
 // bashDenyTokens trigger a confirmation modal before fs.bash runs.
@@ -25,7 +25,7 @@ var bashAllowlist = []string{"ls", "cat", "grep", "sed", "awk", "jq", "python3",
 // entry for fs.bash child processes. On failure it returns "" so callers
 // fail closed (an empty PATH resolves no external commands).
 func buildBashSandbox() string {
-	dir, err := os.MkdirTemp("", "proteus-bash-*")
+	dir, err := os.MkdirTemp("", "fova-bash-*")
 	if err != nil {
 		return ""
 	}
@@ -39,11 +39,12 @@ func buildBashSandbox() string {
 	return dir
 }
 
-// NewFSTools returns the four filesystem/shell tools bound to a workspace root.
+// NewFSTools returns the five filesystem/structure tools bound to a workspace root.
 func NewFSTools(root string) []Tool {
 	return []Tool{
 		fsRead{root: root}, fsWrite{root: root}, fsEdit{root: root},
 		fsBash{root: root, binDir: buildBashSandbox()},
+		fsReadStructure{root: root},
 	}
 }
 

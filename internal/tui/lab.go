@@ -5,7 +5,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/alvarogonjim/proteus/internal/domain"
+	"github.com/alvarogonjim/fova/internal/domain"
 )
 
 // turnaroundDays is the typical Adaptyv wet-lab turnaround used for the
@@ -47,7 +47,7 @@ func (m labModel) View() string {
 	b.WriteString(sectionRule("wet-lab", m.width, m.theme))
 	b.WriteString("\n")
 	if len(m.experiments) == 0 {
-		b.WriteString(m.theme.Subtle.Render(clipLine(
+		b.WriteString(m.theme.Subtle.Render(wrapText(
 			"no experiments yet · ask the agent to submit designs to Adaptyv", m.width)))
 		return b.String()
 	}

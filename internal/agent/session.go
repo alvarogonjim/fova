@@ -1,7 +1,7 @@
-// Package agent implements the Proteus ReAct agent loop.
+// Package agent implements the fova ReAct agent loop.
 package agent
 
-import "github.com/alvarogonjim/proteus/internal/llm"
+import "github.com/alvarogonjim/fova/internal/llm"
 
 // MessageSink persists messages as a session accumulates them.
 // Implementations must be safe to call from the agent goroutine.

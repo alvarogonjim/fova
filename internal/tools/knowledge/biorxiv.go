@@ -7,21 +7,23 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/alvarogonjim/proteus/internal/domain"
-	"github.com/alvarogonjim/proteus/internal/tools"
+	"github.com/alvarogonjim/fova/internal/domain"
+	"github.com/alvarogonjim/fova/internal/tools"
 )
 
 const bioRxivEndpoint = "https://api.biorxiv.org/details/biorxiv"
 
 // BioRxiv implements knowledge.biorxiv: free preprint listing by date range.
 type BioRxiv struct {
-	BaseURL string
-	results *Results
+	BaseURL    string
+	RecentDays int
+	results    *Results
 }
 
-// NewBioRxiv builds the knowledge.biorxiv tool.
-func NewBioRxiv(r *Results) *BioRxiv {
-	return &BioRxiv{BaseURL: bioRxivEndpoint, results: r}
+// NewBioRxiv builds the knowledge.biorxiv tool. recentDays is the default
+// look-back window; a value <= 0 falls back to 30.
+func NewBioRxiv(r *Results, recentDays int) *BioRxiv {
+	return &BioRxiv{BaseURL: bioRxivEndpoint, RecentDays: recentDays, results: r}
 }
 
 func (*BioRxiv) Name() string { return "knowledge.biorxiv" }
@@ -59,7 +61,11 @@ func (t *BioRxiv) Execute(ctx context.Context, input json.RawMessage) (tools.Res
 		if err != nil {
 			return tools.Result{}, fmt.Errorf("knowledge.biorxiv: invalid 'to' date %q: %w", to, err)
 		}
-		from = toTime.AddDate(0, 0, -30).Format("2006-01-02")
+		days := t.RecentDays
+		if days <= 0 {
+			days = 30
+		}
+		from = toTime.AddDate(0, 0, -days).Format("2006-01-02")
 	}
 
 	var raw struct {

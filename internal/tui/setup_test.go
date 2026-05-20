@@ -5,16 +5,18 @@ import (
 	"io"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
-	"github.com/alvarogonjim/proteus/internal/agent"
-	"github.com/alvarogonjim/proteus/internal/backends/local"
-	"github.com/alvarogonjim/proteus/internal/domain"
-	jobmgr "github.com/alvarogonjim/proteus/internal/jobs"
-	"github.com/alvarogonjim/proteus/internal/llm"
-	"github.com/alvarogonjim/proteus/internal/store"
-	"github.com/alvarogonjim/proteus/internal/tools"
+	"github.com/alvarogonjim/fova/internal/agent"
+	"github.com/alvarogonjim/fova/internal/backends/local"
+	"github.com/alvarogonjim/fova/internal/config"
+	"github.com/alvarogonjim/fova/internal/domain"
+	jobmgr "github.com/alvarogonjim/fova/internal/jobs"
+	"github.com/alvarogonjim/fova/internal/llm"
+	"github.com/alvarogonjim/fova/internal/store"
+	"github.com/alvarogonjim/fova/internal/tools"
 )
 
 // newSetupTestModel builds a Model wired with a local registry and a job
@@ -33,12 +35,12 @@ func newSetupTestModel(t *testing.T) *Model {
 	t.Cleanup(func() { st.Close() })
 	return New(Deps{
 		Registry:     tools.NewRegistry(),
-		Models:       llm.NewModelRegistry(),
+		Models:       llm.NewModelRegistry(config.DefaultCatalog()),
 		SystemPrompt: agent.SystemPrompt,
 		Store:        st,
 		Jobs:         jobmgr.NewManager(st, nil),
 		Local:        reg,
-		ProteusHome:  home,
+		FovaHome:     home,
 	})
 }
 
@@ -49,8 +51,22 @@ func TestCmdDoctorPostsReport(t *testing.T) {
 	if len(m.chat.entries) <= before {
 		t.Fatal("cmdDoctor posted nothing to chat")
 	}
-	if m.chat.entries[len(m.chat.entries)-1].kind != entryAgent {
-		t.Error("doctor report should be an agent entry")
+	last := m.chat.entries[len(m.chat.entries)-1]
+	if last.kind != entrySlash {
+		t.Errorf("doctor report should be a slash-output entry, got kind=%d", last.kind)
+	}
+	// The posted text must be multi-line (one labelled row per line), and the
+	// rendered chat must keep those newlines — guards spec Bug 7.
+	if strings.Count(last.text, "\n") < 3 {
+		t.Errorf("doctor report should contain >=3 newlines, got %d:\n%s",
+			strings.Count(last.text, "\n"), last.text)
+	}
+	rendered := m.chat.renderEntries()
+	if !strings.Contains(rendered, "System") {
+		t.Errorf("rendered chat missing System header:\n%s", rendered)
+	}
+	if !strings.Contains(rendered, "Local protein tools") {
+		t.Errorf("rendered chat missing Local protein tools header:\n%s", rendered)
 	}
 }
 
@@ -58,8 +74,8 @@ func TestCmdToolsListsTools(t *testing.T) {
 	m := newSetupTestModel(t)
 	m.cmdTools()
 	last := m.chat.entries[len(m.chat.entries)-1]
-	if last.kind != entryAgent || last.text == "" {
-		t.Fatalf("cmdTools should post a non-empty agent entry, got %+v", last)
+	if last.kind != entrySlash || last.text == "" {
+		t.Fatalf("cmdTools should post a non-empty slash-output entry, got %+v", last)
 	}
 }
 
@@ -120,8 +136,8 @@ func TestCmdInstallDryRunSubmitsNothing(t *testing.T) {
 	if len(jobs) != 0 {
 		t.Fatalf("--dry-run must not submit a job, got %d", len(jobs))
 	}
-	if m.chat.entries[len(m.chat.entries)-1].kind != entryAgent {
-		t.Error("--dry-run should post an agent block with the steps")
+	if m.chat.entries[len(m.chat.entries)-1].kind != entrySlash {
+		t.Error("--dry-run should post a slash-output block with the steps")
 	}
 }
 

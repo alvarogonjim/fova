@@ -1,8 +1,10 @@
 package local
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -76,8 +78,11 @@ func TestParseBindCraftOutputEmptyErrors(t *testing.T) {
 // settings file named after --settings, then writes a fixture results dir
 // (Accepted/*.pdb + final_design_stats.csv) into that settings' design_path.
 func bindCraftStubRunner(ran *[]string) CmdRunner {
-	return func(ctx context.Context, dir, cmd string) (string, error) {
+	return func(ctx context.Context, dir, cmd string, log io.Writer) (string, error) {
 		*ran = append(*ran, cmd)
+		if log != nil {
+			_, _ = log.Write([]byte("stub: " + cmd + "\n"))
+		}
 		_, after, ok := strings.Cut(cmd, "--settings ")
 		if !ok {
 			return "", nil
@@ -110,8 +115,9 @@ func bindCraftStubRunner(ran *[]string) CmdRunner {
 }
 
 // bindCraftTestEnv builds an AdapterEnv with an installed-looking recipe and a
-// registry whose alphafold_params directory exists on disk.
-func bindCraftTestEnv(t *testing.T, ran *[]string) AdapterEnv {
+// registry whose alphafold_params directory exists on disk. logBuf and
+// progress (when non-nil) capture the adapter's log writes and progress ticks.
+func bindCraftTestEnv(t *testing.T, ran *[]string, logBuf *bytes.Buffer, progress *[]float64) AdapterEnv {
 	t.Helper()
 	home := t.TempDir()
 	reg, err := LoadRegistry(home)
@@ -125,17 +131,26 @@ func bindCraftTestEnv(t *testing.T, ran *[]string) AdapterEnv {
 	if err := os.MkdirAll(asset.ExtractTo, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	return AdapterEnv{
+	env := AdapterEnv{
 		Recipe:   ToolRecipe{Name: "bindcraft", InstallDir: t.TempDir(), VenvDir: t.TempDir()},
 		Run:      bindCraftStubRunner(ran),
 		WorkDir:  t.TempDir(),
 		Registry: reg,
 	}
+	if logBuf != nil {
+		env.Log = logBuf
+	}
+	if progress != nil {
+		env.Progress = func(f float64) { *progress = append(*progress, f) }
+	}
+	return env
 }
 
 func TestBindCraftAdapterInvoke(t *testing.T) {
 	var ran []string
-	env := bindCraftTestEnv(t, &ran)
+	var logBuf bytes.Buffer
+	var progress []float64
+	env := bindCraftTestEnv(t, &ran, &logBuf, &progress)
 	starting := filepath.Join(t.TempDir(), "target.pdb")
 	if err := os.WriteFile(starting, []byte("ATOM\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -157,7 +172,7 @@ func TestBindCraftAdapterInvoke(t *testing.T) {
 		t.Error("design structure_file must be set")
 	}
 	if !strings.HasPrefix(env2.Designs[0].StructureFile, env.Registry.Home()) {
-		t.Errorf("structure_file %q must be under PROTEUS_HOME %q (outlives the temp WorkDir)",
+		t.Errorf("structure_file %q must be under FOVA_HOME %q (outlives the temp WorkDir)",
 			env2.Designs[0].StructureFile, env.Registry.Home())
 	}
 	if env2.Designs[0].Sequence["A"] != "MKLV" {
@@ -166,11 +181,21 @@ func TestBindCraftAdapterInvoke(t *testing.T) {
 	if len(ran) != 1 || !strings.Contains(ran[0], "bindcraft.py --settings ") {
 		t.Fatalf("want one bindcraft.py --settings command, got: %v", ran)
 	}
+	// Bug 2: log must be written and progress must be ticked.
+	if logBuf.Len() == 0 {
+		t.Error("env.Log should receive the stubbed bindcraft.py output")
+	}
+	if !strings.Contains(logBuf.String(), "bindcraft.py") {
+		t.Errorf("env.Log should carry the bindcraft.py invocation, got: %q", logBuf.String())
+	}
+	if len(progress) < 2 {
+		t.Errorf("env.Progress should have been called at least twice, got %v", progress)
+	}
 }
 
 func TestBindCraftAdapterInvokeMissingSettings(t *testing.T) {
 	var ran []string
-	env := bindCraftTestEnv(t, &ran)
+	env := bindCraftTestEnv(t, &ran, nil, nil)
 	if _, err := (bindCraftAdapter{}).Invoke(context.Background(), env, []byte(`{}`)); err == nil {
 		t.Fatal("expected an error when settings is missing")
 	}
@@ -178,11 +203,15 @@ func TestBindCraftAdapterInvokeMissingSettings(t *testing.T) {
 
 func TestBindCraftAdapterInvokeBadStartingPDB(t *testing.T) {
 	var ran []string
-	env := bindCraftTestEnv(t, &ran)
+	env := bindCraftTestEnv(t, &ran, nil, nil)
 	_, err := bindCraftAdapter{}.Invoke(context.Background(), env,
 		[]byte(`{"settings":{"starting_pdb":"/no/such/file.pdb"}}`))
 	if err == nil {
 		t.Fatal("expected an error when starting_pdb does not exist")
+	}
+	// Bug 4: error should steer the agent at fs.read_structure.
+	if !strings.Contains(err.Error(), "fs.read_structure") {
+		t.Errorf("error %q should point at fs.read_structure", err)
 	}
 	if len(ran) != 0 {
 		t.Errorf("a bad starting_pdb must not run any command, got %d", len(ran))
@@ -229,7 +258,7 @@ func TestRunDesignBindCraftIsRegistered(t *testing.T) {
 	}
 	// Missing settings makes Invoke fail fast — still proves design.bindcraft
 	// is registered and dispatched.
-	_, err = RunDesign(context.Background(), reg, "design.bindcraft", []byte(`{}`))
+	_, err = RunDesign(context.Background(), reg, "design.bindcraft", []byte(`{}`), io.Discard, nil)
 	if err == nil {
 		t.Fatal("expected an error")
 	}

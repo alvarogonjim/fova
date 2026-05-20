@@ -13,12 +13,18 @@ import (
 	"strings"
 	"time"
 
-	"github.com/alvarogonjim/proteus/internal/domain"
-	"github.com/alvarogonjim/proteus/internal/tools"
+	"github.com/alvarogonjim/fova/internal/domain"
+	"github.com/alvarogonjim/fova/internal/tools"
 )
 
 // esmAtlasEndpoint is the public ESM Atlas folding endpoint (SPECS §7.2.2).
 const esmAtlasEndpoint = "https://api.esmatlas.com/foldSequence/v1/pdb/"
+
+// esmfoldClient is a dedicated HTTP client so a stuck connection cannot hang
+// indefinitely even if the caller's context has no deadline. Folds typically
+// finish in well under a minute; 10 minutes is the upper bound the public
+// endpoint accepts.
+var esmfoldClient = &http.Client{Timeout: 10 * time.Minute}
 
 // ESMFold implements the fold.esmfold tool.
 type ESMFold struct {
@@ -90,7 +96,7 @@ func (e *ESMFold) Execute(ctx context.Context, input json.RawMessage) (tools.Res
 		return tools.Result{}, err
 	}
 	req.Header.Set("Content-Type", "text/plain")
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := esmfoldClient.Do(req)
 	if err != nil {
 		return tools.Result{}, fmt.Errorf("ESM Atlas request failed: %w", err)
 	}

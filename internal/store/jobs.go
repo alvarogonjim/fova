@@ -4,7 +4,7 @@ import (
 	"database/sql"
 	"time"
 
-	"github.com/alvarogonjim/proteus/internal/domain"
+	"github.com/alvarogonjim/fova/internal/domain"
 )
 
 const jobColumns = `id, kind, tool, status, created, started, finished,

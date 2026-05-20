@@ -1,6 +1,6 @@
-"""Proteus Modal app: GPU functions for the protein-design tools.
+"""fova Modal app: GPU functions for the protein-design tools.
 
-Deploy with `proteus modal deploy` (which runs `modal deploy` on this file).
+Deploy with `fova modal deploy` (which runs `modal deploy` on this file).
 Each tool gets an isolated image built from the same uv-based install recipe
 the local backend uses, plus a Modal @app.function. A single POST web endpoint
 dispatches a {"tool": ..., "input": {...}} request to the matching function so
@@ -11,7 +11,7 @@ import subprocess
 
 import modal
 
-app = modal.App("proteus-tools")
+app = modal.App("fova-tools")
 
 
 def _tool_image(python_version: str, install_commands: list[str]) -> modal.Image:

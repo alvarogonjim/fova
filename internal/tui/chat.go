@@ -9,7 +9,7 @@ import (
 	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/alvarogonjim/proteus/internal/domain"
+	"github.com/alvarogonjim/fova/internal/domain"
 )
 
 // entryKind classifies a chat entry.
@@ -20,8 +20,16 @@ const (
 	entryAgent
 	entryTool
 	entryError
-	entryWelcome
 	entryJobLog
+	// entryRaw is a passthrough entry whose text is emitted verbatim, with no
+	// markdown rendering or style wrapping. Used for inline-graphics escape
+	// sequences (SP-B) that must reach the terminal untouched.
+	entryRaw
+	// entrySlash carries pre-formatted slash-command output (/plan, /doctor,
+	// /tools, /install --dry-run). The chat renderer applies agent styling but
+	// does NOT run the text through glamour — single newlines must survive so
+	// labelled-row layouts stay one-row-per-line (spec Bugs 6 + 7).
+	entrySlash
 )
 
 // toolBodyMaxLines caps how many result lines a tool trace renders before it is
@@ -86,13 +94,6 @@ func (c *chatModel) appendUser(text string) {
 	c.refresh()
 }
 
-// appendWelcome appends the startup welcome block as an entryWelcome chat entry
-// (SPECS §10.7.7). It is cleared by /clear like any other history.
-func (c *chatModel) appendWelcome(text string) {
-	c.entries = append(c.entries, chatEntry{kind: entryWelcome, text: text})
-	c.refresh()
-}
-
 // appendAgentDelta appends to the last agent entry, or starts a new one.
 func (c *chatModel) appendAgentDelta(delta string) {
 	if n := len(c.entries); n > 0 && c.entries[n-1].kind == entryAgent {
@@ -150,6 +151,24 @@ func (c *chatModel) appendToolDone(name, display string) {
 // appendAgentDeltaBlock appends text as a standalone agent entry.
 func (c *chatModel) appendAgentDeltaBlock(text string) {
 	c.entries = append(c.entries, chatEntry{kind: entryAgent, text: text})
+	c.refresh()
+}
+
+// appendSlashOutput appends pre-formatted slash-command output as an entry
+// whose newlines survive the chat renderer (no markdown collapsing). Used by
+// /plan, /doctor, /tools, /install --dry-run — anything that ships a labelled
+// multi-row block to the user.
+func (c *chatModel) appendSlashOutput(text string) {
+	c.entries = append(c.entries, chatEntry{kind: entrySlash, text: text})
+	c.refresh()
+}
+
+// appendRaw appends text as an entryRaw block: emitted verbatim with no
+// markdown rendering or styling. Used by SP-B's RenderStructure so terminal
+// graphics escape sequences (Kitty / iTerm2 / Sixel) reach the host terminal
+// intact.
+func (c *chatModel) appendRaw(text string) {
+	c.entries = append(c.entries, chatEntry{kind: entryRaw, text: text})
 	c.refresh()
 }
 
@@ -271,20 +290,30 @@ func (c *chatModel) renderEntries() string {
 		switch e.kind {
 		case entryUser:
 			b.WriteString(c.theme.UserText.Render("› " + e.text))
-		case entryWelcome:
-			b.WriteString(c.theme.Muted.Render(e.text))
 		case entryAgent:
 			md, err := c.renderer.Render(e.text)
 			if err != nil {
 				md = e.text
 			}
 			b.WriteString(c.theme.AgentText.Render(strings.TrimRight(md, "\n")))
+		case entrySlash:
+			// Per-line agent styling preserves the original line breaks (the
+			// glamour markdown path would collapse them — see entrySlash docs).
+			lines := strings.Split(e.text, "\n")
+			for i, line := range lines {
+				if i > 0 {
+					b.WriteString("\n")
+				}
+				b.WriteString(c.theme.AgentText.Render(line))
+			}
 		case entryTool:
 			b.WriteString(c.renderToolEntry(e))
 		case entryJobLog:
 			b.WriteString(c.renderJobLogEntry(e))
 		case entryError:
 			b.WriteString(c.theme.Error.Render("✗ " + e.text))
+		case entryRaw:
+			b.WriteString(e.text)
 		}
 		b.WriteString("\n\n")
 	}
@@ -297,13 +326,6 @@ func (c *chatModel) refresh() {
 }
 
 func (c *chatModel) View() string { return c.viewport.View() }
-
-func firstLine(s string) string {
-	if i := strings.IndexByte(s, '\n'); i >= 0 {
-		return s[:i]
-	}
-	return s
-}
 
 // formatToolDur renders an elapsed duration compactly for a tool-trace header.
 func formatToolDur(d time.Duration) string {

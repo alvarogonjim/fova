@@ -60,10 +60,12 @@ func (t *thinkingModel) tick() {
 // active reports whether the indicator is currently showing.
 func (t thinkingModel) active() bool { return t.on }
 
-// view renders the indicator line styled with Theme.Muted, or "" when the
-// indicator is not active. now is injected so callers (and tests) control the
-// elapsed-seconds counter; elapsed is the whole seconds between the start time
-// and now.
+// view renders the indicator line, or "" when the indicator is not active.
+// The braille spinner glyph is rendered in Theme.MarkerRunning (moss) per
+// the fova rebrand spec §3.4; the rest of the line (verb, elapsed counter,
+// hint) stays in Theme.Muted. now is injected so callers (and tests)
+// control the elapsed-seconds counter; elapsed is the whole seconds between
+// the start time and now.
 func (t thinkingModel) view(th Theme, now time.Time) string {
 	if !t.on {
 		return ""
@@ -73,8 +75,9 @@ func (t thinkingModel) view(th Theme, now time.Time) string {
 	if elapsed < 0 {
 		elapsed = 0
 	}
-	line := fmt.Sprintf("%c %s… (%ds · esc to interrupt)", frame, t.verb, elapsed)
-	return th.Muted.Render(line)
+	glyph := th.MarkerRunning.Render(string(frame))
+	tail := fmt.Sprintf(" %s… (%ds · esc to interrupt)", t.verb, elapsed)
+	return glyph + th.Muted.Render(tail)
 }
 
 // verbForTool maps a tool name to a human activity verb. The match is on

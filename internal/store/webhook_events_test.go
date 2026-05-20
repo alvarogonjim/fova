@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/alvarogonjim/proteus/internal/domain"
+	"github.com/alvarogonjim/fova/internal/domain"
 )
 
 func TestWebhookEventsInsertList(t *testing.T) {

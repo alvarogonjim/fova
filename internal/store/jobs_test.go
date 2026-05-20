@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/alvarogonjim/proteus/internal/domain"
+	"github.com/alvarogonjim/fova/internal/domain"
 )
 
 func sampleJob(id domain.JobID) domain.Job {

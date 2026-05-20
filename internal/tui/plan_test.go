@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/alvarogonjim/proteus/internal/domain"
+	"github.com/alvarogonjim/fova/internal/domain"
 )
 
 func TestRenderPlan(t *testing.T) {
@@ -22,8 +22,11 @@ func TestRenderPlan(t *testing.T) {
 		EstimatedCost:  12.50,
 		EstimatedTime:  "~3h",
 		Rationale:      "BindCraft excels at de novo binders.",
-		EvidencePapers: []domain.PaperRef{
-			{Title: "BindCraft de novo binders", Year: 2024, DOI: "10.1101/2024.01.01"},
+		Evidence: []domain.EvidenceEntry{
+			{
+				CorpusPaperID: "10.1101/2024.01.01",
+				Citation:      "Smith et al. 2024. BindCraft de novo binders. 10.1101/2024.01.01",
+			},
 		},
 		Approved:   true,
 		ApprovedAt: &approvedAt,

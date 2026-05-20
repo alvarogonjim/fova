@@ -10,14 +10,14 @@ import (
 	"strings"
 	"time"
 
-	"github.com/alvarogonjim/proteus/internal/version"
+	"github.com/alvarogonjim/fova/internal/version"
 )
 
 // defaultBaseURL is the public Adaptyv Foundry API root (SPECS §12.1).
 const defaultBaseURL = "https://foundry-api-public.adaptyvbio.com/api/v1"
 
-// userAgent identifies Proteus on every Adaptyv request.
-var userAgent = "Proteus/" + version.String() + " (https://github.com/alvarogonjim/proteus)"
+// userAgent identifies fova on every Adaptyv request.
+var userAgent = "fova/" + version.String() + " (https://github.com/alvarogonjim/fova)"
 
 // Client is a minimal Adaptyv Foundry API client.
 //

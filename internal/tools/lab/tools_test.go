@@ -8,8 +8,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/alvarogonjim/proteus/internal/store"
-	"github.com/alvarogonjim/proteus/internal/tools"
+	"github.com/alvarogonjim/fova/internal/store"
+	"github.com/alvarogonjim/fova/internal/tools"
 )
 
 // toolTestClient returns a Client whose requests are served by the given
@@ -33,7 +33,7 @@ func TestLabToolNames(t *testing.T) {
 		{NewCostEstimateTool(c), "lab.cost_estimate"},
 		{NewExperimentStatusTool(c), "lab.experiment_status"},
 		{NewResultsTool(c), "lab.results"},
-		{NewSubmitExperimentTool(c, st), "lab.submit_experiment"},
+		{NewSubmitExperimentTool(c, st, ""), "lab.submit_experiment"},
 	} {
 		if got := tc.tool.Name(); got != tc.name {
 			t.Errorf("Name = %q, want %q", got, tc.name)
@@ -49,14 +49,14 @@ func TestLabToolsImplementToolInterface(t *testing.T) {
 	var _ tools.Tool = NewCostEstimateTool(c)
 	var _ tools.Tool = NewExperimentStatusTool(c)
 	var _ tools.Tool = NewResultsTool(c)
-	var _ tools.Tool = NewSubmitExperimentTool(c, st)
+	var _ tools.Tool = NewSubmitExperimentTool(c, st, "")
 }
 
 // TestLabToolSubmitRequiresConfirmation checks only the submit tool confirms.
 func TestLabToolSubmitRequiresConfirmation(t *testing.T) {
 	c := NewClient("tok")
 	st := &store.Store{}
-	if !NewSubmitExperimentTool(c, st).RequiresConfirmation(nil) {
+	if !NewSubmitExperimentTool(c, st, "").RequiresConfirmation(nil) {
 		t.Error("lab.submit_experiment must require confirmation")
 	}
 	for _, tl := range []tools.Tool{
@@ -165,7 +165,7 @@ func TestLabToolSubmitPersistsExperiment(t *testing.T) {
 	}
 	t.Cleanup(func() { st.Close() })
 
-	tool := NewSubmitExperimentTool(c, st)
+	tool := NewSubmitExperimentTool(c, st, "")
 	in := json.RawMessage(`{"target_id":"t1","assay_type":"affinity","sequences":[{"name":"d1","sequence":"MAQVQL"}]}`)
 	res, err := tool.Execute(context.Background(), in)
 	if err != nil {
@@ -193,5 +193,33 @@ func TestLabToolSubmitPersistsExperiment(t *testing.T) {
 	}
 	if list[0].CostUSD != 900 {
 		t.Errorf("CostUSD = %v, want 900", list[0].CostUSD)
+	}
+}
+
+func TestSubmitExperimentToolDefaultsWebhookURL(t *testing.T) {
+	tool := &submitExperimentTool{defaultWebhookURL: "https://example.test/webhooks/adaptyv"}
+
+	// Caller omits webhook_url → the configured default fills it in.
+	var req SubmitRequest
+	if err := json.Unmarshal([]byte(`{"target_id":"t","assay_type":"a","sequences":[]}`), &req); err != nil {
+		t.Fatal(err)
+	}
+	if req.WebhookURL == "" {
+		req.WebhookURL = tool.defaultWebhookURL
+	}
+	if req.WebhookURL != "https://example.test/webhooks/adaptyv" {
+		t.Errorf("default not applied: %q", req.WebhookURL)
+	}
+
+	// A caller-supplied webhook_url is preserved.
+	var req2 SubmitRequest
+	if err := json.Unmarshal([]byte(`{"target_id":"t","assay_type":"a","sequences":[],"webhook_url":"https://caller.test/cb"}`), &req2); err != nil {
+		t.Fatal(err)
+	}
+	if req2.WebhookURL == "" {
+		req2.WebhookURL = tool.defaultWebhookURL
+	}
+	if req2.WebhookURL != "https://caller.test/cb" {
+		t.Errorf("caller URL overwritten: %q", req2.WebhookURL)
 	}
 }

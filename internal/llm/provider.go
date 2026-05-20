@@ -57,6 +57,7 @@ type ToolSpec struct {
 // ChatResponse is a completed model response.
 type ChatResponse struct {
 	Text       string
+	Reasoning  string // chain-of-thought (vLLM's reasoning_content); empty when absent
 	ToolCalls  []ToolCall
 	Usage      Usage
 	StopReason string
@@ -68,8 +69,11 @@ type Usage struct {
 	OutputTokens int
 }
 
-// ChatEvent is one streamed event. Kind is text_delta | tool_call | done | error.
-// Usage and StopReason are set on the "done" event (v0.1 extension over SPECS §6.1).
+// ChatEvent is one streamed event.
+// Kind is one of: text_delta | reasoning_delta | tool_call | done | error.
+// "reasoning_delta" carries a chunk of the model's chain-of-thought in Delta
+// (the agent loop routes it onto a separate bus message); the rest match the
+// SPECS §6.1 shape. Usage and StopReason are set on "done".
 type ChatEvent struct {
 	Kind       string
 	Delta      string

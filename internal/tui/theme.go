@@ -1,21 +1,28 @@
-// Package tui implements the Proteus terminal UI.
+// Package tui implements the fova terminal UI.
 package tui
 
 import (
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/alvarogonjim/proteus/internal/domain"
+	"github.com/alvarogonjim/fova/internal/domain"
 )
 
-// Palette is the v0.4 design-token set (SPECS §10.5). Every UI style is derived
-// from these semantic roles — no view code hard-codes a hex value. Colours are
-// AdaptiveColor so the TUI renders correctly on light and dark terminals.
+// Palette is the fova design-token set (SPECS §10.5 + 2026-05-20 rebrand
+// spec §2). Every UI style is derived from these semantic roles — no view
+// code hard-codes a hex value.
+//
+// The mockup is dark-only, so the brand roles flatten Light and Dark to the
+// same value rather than inventing a light variant. Failed keeps an adaptive
+// shape because it is not depicted in the mockup and a sensible default is
+// useful on light terminals.
 type Palette struct {
-	Fg       lipgloss.AdaptiveColor // primary text
-	FgMuted  lipgloss.AdaptiveColor // tool output, hints, footer
-	FgSubtle lipgloss.AdaptiveColor // section rules, placeholders, unfocused border
-	Accent   lipgloss.AdaptiveColor // the single brand colour
-	Border   lipgloss.AdaptiveColor // input border when unfocused
+	Bg       lipgloss.AdaptiveColor // dark forest background (forced dark)
+	Fg       lipgloss.AdaptiveColor // primary text (sand)
+	FgMuted  lipgloss.AdaptiveColor // tool output, hints, footer (dim)
+	FgSubtle lipgloss.AdaptiveColor // section rules, idle borders (moss-dim)
+	Primary  lipgloss.AdaptiveColor // brand / agent voice / success (moss)
+	Accent   lipgloss.AdaptiveColor // attention, focus, cost, modal (saffron)
+	Border   lipgloss.AdaptiveColor // input border when unfocused (moss-dim)
 
 	Queued    lipgloss.AdaptiveColor
 	Running   lipgloss.AdaptiveColor
@@ -24,19 +31,22 @@ type Palette struct {
 	Warning   lipgloss.AdaptiveColor
 }
 
-// DefaultPalette is the single adaptive palette shipped in v0.4. The status
-// colours keep their v0.2 hex values; the foreground roles are new.
+// DefaultPalette is the fova adaptive palette. The brand roles (Bg, Fg,
+// Primary, Accent, …) are dark-only — Light and Dark share the same value
+// — because the mockup is dark-only. Failed retains an adaptive value.
 var DefaultPalette = Palette{
-	Fg:        lipgloss.AdaptiveColor{Light: "#1F2937", Dark: "#E5E7EB"},
-	FgMuted:   lipgloss.AdaptiveColor{Light: "#6B7280", Dark: "#9CA3AF"},
-	FgSubtle:  lipgloss.AdaptiveColor{Light: "#9CA3AF", Dark: "#4B5563"},
-	Accent:    lipgloss.AdaptiveColor{Light: "#7C3AED", Dark: "#A78BFA"},
-	Border:    lipgloss.AdaptiveColor{Light: "#D1D5DB", Dark: "#374151"},
-	Queued:    lipgloss.AdaptiveColor{Light: "#9CA3AF", Dark: "#6B7280"},
-	Running:   lipgloss.AdaptiveColor{Light: "#2563EB", Dark: "#60A5FA"},
-	Succeeded: lipgloss.AdaptiveColor{Light: "#059669", Dark: "#34D399"},
+	Bg:        lipgloss.AdaptiveColor{Light: "#0d1f15", Dark: "#0d1f15"},
+	Fg:        lipgloss.AdaptiveColor{Light: "#d4cfc0", Dark: "#d4cfc0"},
+	FgMuted:   lipgloss.AdaptiveColor{Light: "#6b7a6b", Dark: "#6b7a6b"},
+	FgSubtle:  lipgloss.AdaptiveColor{Light: "#4a7e2a", Dark: "#4a7e2a"},
+	Primary:   lipgloss.AdaptiveColor{Light: "#7fc14a", Dark: "#7fc14a"},
+	Accent:    lipgloss.AdaptiveColor{Light: "#EF9F27", Dark: "#EF9F27"},
+	Border:    lipgloss.AdaptiveColor{Light: "#4a7e2a", Dark: "#4a7e2a"},
+	Queued:    lipgloss.AdaptiveColor{Light: "#6b7a6b", Dark: "#6b7a6b"},
+	Running:   lipgloss.AdaptiveColor{Light: "#7fc14a", Dark: "#7fc14a"},
+	Succeeded: lipgloss.AdaptiveColor{Light: "#7fc14a", Dark: "#7fc14a"},
 	Failed:    lipgloss.AdaptiveColor{Light: "#DC2626", Dark: "#F87171"},
-	Warning:   lipgloss.AdaptiveColor{Light: "#D97706", Dark: "#FBBF24"},
+	Warning:   lipgloss.AdaptiveColor{Light: "#EF9F27", Dark: "#EF9F27"},
 }
 
 // Theme groups the Lip Gloss styles the TUI uses, all derived from a Palette.
@@ -63,29 +73,63 @@ type Theme struct {
 	InputBorder       lipgloss.Style // message input, idle / unfocused
 	InputBorderActive lipgloss.Style // message input, focused
 	InputBorderBusy   lipgloss.Style // message input, turn running
+
+	// fova-rebrand fields (spec §3.4) — status glyphs for the jobs panel.
+	// The glyph itself is pre-rendered into the style so callers just write
+	// `theme.MarkerSuccess.Render("")` or use `.String()`-style helpers.
+	MarkerSuccess   lipgloss.Style // ✓ in Primary (moss)
+	MarkerRunning   lipgloss.Style // ⠿ in Primary (moss) — single-frame style
+	MarkerQueued    lipgloss.Style // ○ in FgMuted (dim)
+	MarkerAttention lipgloss.Style // ▸ in Accent (saffron)
+}
+
+// themeApplier is the seam ApplyTheme uses to set the global background mode.
+// Production code points it at lipgloss.SetHasDarkBackground; tests swap it
+// for a recording stub. It is a package-level variable rather than a parameter
+// so callers (cmd/fova, /theme handler) can keep calling ApplyTheme without
+// threading a dependency through.
+var themeApplier = lipgloss.SetHasDarkBackground
+
+// ApplyTheme forces the lipgloss adaptive-colour mode based on cfg.UI.Theme.
+// "light" → SetHasDarkBackground(false); "dark" → SetHasDarkBackground(true);
+// "auto" (or any unknown value) → no-op, leaving lipgloss's auto-detection
+// alone. Calling ApplyTheme is safe at any time — it merely flips a global
+// flag the next style.Render() will read.
+func ApplyTheme(mode string) {
+	switch mode {
+	case "light":
+		themeApplier(false)
+	case "dark":
+		themeApplier(true)
+	}
 }
 
 // NewTheme returns the default light/dark-adaptive theme.
 func NewTheme() Theme { return NewThemeFromPalette(DefaultPalette) }
 
 // NewThemeFromPalette builds a Theme from an explicit palette.
+//
+// Note on Accent vs Primary: in the fova palette, Primary (moss) is the
+// brand / agent / success role and Accent (saffron) is the attention /
+// focus / cost role. Styles that previously used Accent for brand identity
+// (StatusBar, UserText, Header, PickerSel) now consume Primary.
 func NewThemeFromPalette(p Palette) Theme {
 	rounded := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).Padding(0, 1)
 	return Theme{
 		Palette:    p,
-		StatusBar:  lipgloss.NewStyle().Bold(true).Foreground(p.Accent),
+		StatusBar:  lipgloss.NewStyle().Bold(true).Foreground(p.Primary),
 		CommandBar: lipgloss.NewStyle().Foreground(p.FgMuted),
-		UserText:   lipgloss.NewStyle().Bold(true).Foreground(p.Accent),
+		UserText:   lipgloss.NewStyle().Bold(true).Foreground(p.Primary),
 		AgentText:  lipgloss.NewStyle().Foreground(p.Fg),
 		ToolTrace:  lipgloss.NewStyle().Foreground(p.FgMuted),
 		Error:      lipgloss.NewStyle().Bold(true).Foreground(p.Failed),
 		ModalBox: lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
-			BorderForeground(p.Warning).
+			BorderForeground(p.Accent).
 			Padding(1, 2),
-		PickerSel: lipgloss.NewStyle().Bold(true).Foreground(p.Accent),
+		PickerSel: lipgloss.NewStyle().Bold(true).Foreground(p.Primary),
 
-		Header:            lipgloss.NewStyle().Bold(true).Foreground(p.Accent),
+		Header:            lipgloss.NewStyle().Bold(true).Foreground(p.Primary),
 		Footer:            lipgloss.NewStyle().Foreground(p.FgMuted),
 		Hint:              lipgloss.NewStyle().Foreground(p.FgMuted),
 		Muted:             lipgloss.NewStyle().Foreground(p.FgMuted),
@@ -94,23 +138,40 @@ func NewThemeFromPalette(p Palette) Theme {
 		InputBorder:       rounded.BorderForeground(p.Border),
 		InputBorderActive: rounded.BorderForeground(p.Accent),
 		InputBorderBusy:   rounded.BorderForeground(p.FgSubtle),
+
+		MarkerSuccess:   lipgloss.NewStyle().Foreground(p.Primary),
+		MarkerRunning:   lipgloss.NewStyle().Foreground(p.Primary),
+		MarkerQueued:    lipgloss.NewStyle().Foreground(p.FgMuted),
+		MarkerAttention: lipgloss.NewStyle().Foreground(p.Accent),
 	}
 }
 
-// glyph returns the single-rune status indicator for a job status
-// (SPECS §10.7.8). It is the single source of truth for status glyphs.
+// Marker glyph constants (spec §3.4). These are the runes the rebrand markers
+// render; pairing them with the Theme.Marker* styles is the only correct way
+// to display a job's status in the jobs panel.
+const (
+	MarkerSuccessGlyph   = "✓"
+	MarkerRunningGlyph   = "⠿"
+	MarkerQueuedGlyph    = "○"
+	MarkerAttentionGlyph = "▸"
+)
+
+// glyph returns the single-rune status indicator for a job status. It is the
+// single source of truth for status glyphs in the jobs panel (spec §3.4).
+// The "failed" and "cancelled" glyphs are not depicted in the mockup; their
+// pre-rebrand glyphs are retained.
 func glyph(s domain.JobStatus) string {
 	switch s {
 	case domain.JobRunning:
-		return "⟳"
+		return MarkerRunningGlyph
 	case domain.JobSucceeded:
-		return "✓"
+		return MarkerSuccessGlyph
 	case domain.JobFailed:
 		return "✗"
 	case domain.JobCancelled:
 		return "⊘"
 	default: // queued
-		return "·"
+		return MarkerQueuedGlyph
 	}
 }
 
@@ -127,5 +188,26 @@ func (t Theme) statusColor(s domain.JobStatus) lipgloss.AdaptiveColor {
 		return t.Palette.FgMuted
 	default: // queued
 		return t.Palette.Queued
+	}
+}
+
+// statusMarker returns the pre-styled glyph string for a job status, using
+// the Theme.Marker* styles where the rebrand spec defines them and falling
+// back to a per-status foreground style for failed/cancelled (no marker
+// style is defined for those in the mockup).
+func (t Theme) statusMarker(s domain.JobStatus) string {
+	switch s {
+	case domain.JobQueued:
+		return t.MarkerQueued.Render(MarkerQueuedGlyph)
+	case domain.JobRunning:
+		return t.MarkerRunning.Render(MarkerRunningGlyph)
+	case domain.JobSucceeded:
+		return t.MarkerSuccess.Render(MarkerSuccessGlyph)
+	case domain.JobFailed:
+		return lipgloss.NewStyle().Foreground(t.Palette.Failed).Render("✗")
+	case domain.JobCancelled:
+		return lipgloss.NewStyle().Foreground(t.Palette.FgMuted).Render("⊘")
+	default:
+		return t.MarkerQueued.Render(MarkerQueuedGlyph)
 	}
 }

@@ -1,11 +1,18 @@
-# Proteus
+# fova
 
-A terminal UI agent for de novo protein design. See `docs/SPECS.md`.
+A terminal agent for de novo protein design. It plans, runs, and ranks design
+jobs — and ships the survivors to a wet lab — from a single Go binary.
+
+**Free by default.** No account needed. Local LLMs work out of the box. Paid
+LLMs and Adaptyv wet-lab submission are opt-in.
+
+See `docs/SPECS.md` for the full spec, and `docs/DESIGN.md` for the visual
+identity.
 
 ## Build
 
     make build
-    ./bin/proteus
+    ./bin/fova
 
 ## Status
 

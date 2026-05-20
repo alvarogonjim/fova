@@ -1,4 +1,4 @@
-// Package local implements Proteus's uv-managed local tool backend: parsing
+// Package local implements fova's uv-managed local tool backend: parsing
 // install recipes, installing tools, running them, and diagnostics.
 package local
 
@@ -14,7 +14,14 @@ import (
 //go:embed tools.toml
 var toolsTOML string
 
-// ToolRecipe describes how one Python tool is installed and invoked.
+// TODO(maintainer): verify sm_121 support in this tag before locking v0.7.0.
+const BaseImage = "nvcr.io/nvidia/pytorch:25.04-py3"
+
+// ToolRecipe describes how one tool is installed and invoked. Two install
+// shapes are supported: the legacy uv-venv shape (InstallSteps + RunCommand)
+// and the container shape (ImageTag + Containerfile + Entrypoint). Phase 2
+// migrates one tool at a time; the platform supports both until the last
+// per-tool migration lands.
 type ToolRecipe struct {
 	Name         string   `toml:"-"`
 	DisplayName  string   `toml:"display_name"`
@@ -29,6 +36,23 @@ type ToolRecipe struct {
 	ExtraData    []string `toml:"extra_data"`
 	InstallSteps []string `toml:"install_steps"`
 	RunCommand   string   `toml:"run_command"`
+
+	// Container-mode fields (Phase 1: schema only; Phase 2 populates per tool).
+	ImageTag       string   `toml:"image_tag"`
+	Containerfile  string   `toml:"containerfile"`
+	Entrypoint     string   `toml:"entrypoint"`
+	GPU            bool     `toml:"gpu"`
+	WeightsPaths   []string `toml:"weights_paths"`
+	TimeoutSeconds int      `toml:"timeout_seconds"`
+	SmokeTest      string   `toml:"smoke_test"`
+
+	// Weights enumerates per-file model-checkpoint downloads to populate the
+	// host-side cache at ~/.fova/models/<name>/ at install time. Each entry
+	// is expressed in tools.toml as `[[tools.<name>.weights]]` with url + path
+	// (+ optional sha256). The Installer's post-build hook hands the list to
+	// models_cache.EnsureWeights; the runner bind-mounts the cache at /models
+	// inside the container (via WeightsPaths).
+	Weights []WeightSpec `toml:"weights"`
 }
 
 // DataAsset is a large shared download (model weights) used by some tools.
@@ -50,8 +74,8 @@ type Registry struct {
 	data  map[string]DataAsset
 }
 
-// LoadRegistry parses the embedded tools.toml and expands ${PROTEUS_HOME} and
-// recipe-field {{ }} placeholders against the given Proteus home directory.
+// LoadRegistry parses the embedded tools.toml and expands ${FOVA_HOME} and
+// recipe-field {{ }} placeholders against the given fova home directory.
 func LoadRegistry(home string) (*Registry, error) {
 	var doc struct {
 		Tools map[string]ToolRecipe `toml:"tools"`
@@ -67,7 +91,7 @@ func LoadRegistry(home string) (*Registry, error) {
 			rec.GitRef = "main"
 		}
 		if rec.InstallDir == "" {
-			rec.InstallDir = "${PROTEUS_HOME}/tools/" + name
+			rec.InstallDir = "${FOVA_HOME}/tools/" + name
 		}
 		r.tools[name] = expandRecipe(rec, home)
 	}
@@ -102,14 +126,14 @@ func (r *Registry) DataAsset(name string) (DataAsset, bool) {
 	return d, ok
 }
 
-// Home returns the Proteus home directory the registry was loaded for.
+// Home returns the fova home directory the registry was loaded for.
 func (r *Registry) Home() string { return r.home }
 
 func expandHome(s, home string) string {
-	return strings.ReplaceAll(s, "${PROTEUS_HOME}", home)
+	return strings.ReplaceAll(s, "${FOVA_HOME}", home)
 }
 
-// expandRecipe expands ${PROTEUS_HOME} and the recipe-field {{ }} placeholders.
+// expandRecipe expands ${FOVA_HOME} and the recipe-field {{ }} placeholders.
 // Runtime placeholders in run_command (e.g. {{ input_json }}) that do not match
 // a recipe field are deliberately left intact for the runner to fill.
 func expandRecipe(rec ToolRecipe, home string) ToolRecipe {

@@ -5,23 +5,46 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
 
-	"github.com/alvarogonjim/proteus/internal/domain"
-	"github.com/alvarogonjim/proteus/internal/store"
-	"github.com/alvarogonjim/proteus/internal/tools"
+	"github.com/alvarogonjim/fova/internal/backends/local"
+	"github.com/alvarogonjim/fova/internal/domain"
+	"github.com/alvarogonjim/fova/internal/store"
+	"github.com/alvarogonjim/fova/internal/tools"
 )
 
 // TODO(spec): SPECS §7 has no plan.* tool table; see §8.2 plan-from-target.md and §20 v0.3 AC1.
 
+// InstallChecker reports whether a named tool's local install artefact (image
+// for container-mode tools, lock file for legacy ones) is present. It is the
+// minimal surface plan.create needs from *local.Installer — using an
+// interface lets tests inject a fake instead of dragging in the real
+// container runtime.
+type InstallChecker interface {
+	Status(name string) local.ToolStatus
+}
+
 // CreateTool implements plan.create: build a DesignPlan from a target and
 // persist it for the user to review and approve.
-type CreateTool struct{ store *store.Store }
+type CreateTool struct {
+	store     *store.Store
+	installer InstallChecker
+}
 
 // NewPlanCreateTool builds the plan.create tool.
-func NewPlanCreateTool(st *store.Store) tools.Tool { return &CreateTool{store: st} }
+//
+// installer is consulted to reject plans whose method tool isn't installed
+// (Bug 11). Passing nil disables that check — only the in-memory schema
+// validation runs — which is useful for tests that don't care about the
+// install path, but production wiring always supplies a real installer.
+func NewPlanCreateTool(st *store.Store, installer InstallChecker) tools.Tool {
+	return &CreateTool{store: st, installer: installer}
+}
 
 func (*CreateTool) Name() string { return "plan.create" }
 func (*CreateTool) Description() string {
@@ -47,20 +70,36 @@ func (*CreateTool) InputSchema() map[string]any {
 				"description": "The protein-design application area.",
 			},
 			"method": map[string]any{
-				"type":        "string",
-				"description": "The primary design method/tool to run.",
+				"type": "string",
+				"description": "The primary design method/tool to run. Accepted: " +
+					"BindCraft, RFdiffusion, RFdiffusion2, ProteinMPNN, " +
+					"LigandMPNN, RFantibody, Chai2 (the design.* registered " +
+					"name and lowercase tool name are also accepted). The " +
+					"method must be compatible with the chosen application " +
+					"and the underlying tool must be installed locally " +
+					"(plan.create rejects plans that fail either check).",
 			},
 			"fallback_method": map[string]any{
 				"type":        "string",
-				"description": "An optional fallback design method.",
+				"description": "An optional fallback design method (same naming rules as method).",
 			},
 			"filters": map[string]any{
-				"type":        "object",
-				"description": "FilterConfig thresholds for shortlisting (min_ipsae, min_plddt, ...).",
+				"type": "object",
+				"description": "FilterConfig thresholds for shortlisting. Each field " +
+					"is bounded by its physically meaningful range: " +
+					"min_ipsae, min_iptm, min_pdockq in [0, 1]; " +
+					"min_plddt, min_plddt_min in [0, 100]; " +
+					"max_pae_interface in [0, 32]; " +
+					"max_rmsd_to_model, max_motif_rmsd, max_esm_perplexity > 0. " +
+					"Optional: max_kd (> 0, with max_kd_units one of " +
+					"M, mM, uM, nM, pM, fM).",
 			},
 			"shortlist_size": map[string]any{
-				"type":        "integer",
-				"description": "Number of designs to keep on the shortlist.",
+				"type": "integer",
+				"description": "Number of designs to keep on the shortlist. " +
+					"Must be in [1, 500] (the soft cap protects against " +
+					"unbounded compute spend); 0 is accepted as 'use the " +
+					"default'.",
 			},
 			"compute_backend": map[string]any{
 				"type":        "string",
@@ -78,17 +117,27 @@ func (*CreateTool) InputSchema() map[string]any {
 				"type":        "string",
 				"description": "Why this plan was chosen.",
 			},
-			"evidence_papers": map[string]any{
-				"type":        "array",
-				"description": "Supporting literature references.",
+			"evidence": map[string]any{
+				"type": "array",
+				"description": "Supporting literature references. Every entry must " +
+					"reference a paper that already exists in the active project's " +
+					"corpus via corpus_paper_id (the id returned by knowledge.corpus " +
+					"add/search). plan.create formats the citation itself from the " +
+					"stored paper metadata; any caller-supplied citation field is " +
+					"ignored.",
 				"items": map[string]any{
 					"type": "object",
 					"properties": map[string]any{
-						"doi":   map[string]any{"type": "string"},
-						"title": map[string]any{"type": "string"},
-						"year":  map[string]any{"type": "integer"},
-						"url":   map[string]any{"type": "string"},
+						"corpus_paper_id": map[string]any{
+							"type":        "string",
+							"description": "REQUIRED. Paper id in the active project's corpus.",
+						},
+						"excerpt": map[string]any{
+							"type":        "string",
+							"description": "Optional quote or note about why this paper is cited.",
+						},
 					},
+					"required": []any{"corpus_paper_id"},
 				},
 			},
 		},
@@ -118,6 +167,40 @@ func (t *CreateTool) Execute(_ context.Context, input json.RawMessage) (tools.Re
 		return tools.Result{}, fmt.Errorf("plan.create: method is required")
 	}
 
+	// Bug 11: cross-check method against the compat table, the installed-tool
+	// set, and the filter range bounds before persisting the plan.
+	method, ok := parseMethod(p.Method)
+	if !ok {
+		return tools.Result{}, fmt.Errorf(
+			"plan.create: method %q is not a known design method — accepted "+
+				"names: BindCraft, RFdiffusion, RFdiffusion2, ProteinMPNN, "+
+				"LigandMPNN, RFantibody, Chai2 (lower-case and design.* "+
+				"forms also accepted)", p.Method)
+	}
+	if !methodAllowed(p.Application, method) {
+		return tools.Result{}, fmt.Errorf(
+			"plan.create: method %q is not compatible with application %q "+
+				"— compatible methods for %q: %s. Pick one of those or "+
+				"change the application.",
+			method, p.Application, p.Application,
+			strings.Join(compatibleMethods(p.Application), ", "))
+	}
+	if err := t.checkInstalled(method); err != nil {
+		return tools.Result{}, err
+	}
+	if err := validateFilters(input, p.Filters); err != nil {
+		return tools.Result{}, err
+	}
+	if err := validateShortlist(p.ShortlistSize); err != nil {
+		return tools.Result{}, err
+	}
+
+	// Ground every evidence entry in the corpus. The Citation field is
+	// computed here; any value the caller supplied for it is discarded.
+	if err := t.resolveEvidence(&p); err != nil {
+		return tools.Result{}, err
+	}
+
 	// Server-controlled fields.
 	p.ID = domain.PlanID("p_" + uuid.NewString())
 	p.ProjectID = store.DefaultProjectID
@@ -138,4 +221,319 @@ func (t *CreateTool) Execute(_ context.Context, input json.RawMessage) (tools.Re
 		Display:    fmt.Sprintf("created plan %s — review it with /plan", p.ID),
 		Provenance: domain.NewToolCallRef("plan.create", input),
 	}, nil
+}
+
+// resolveEvidence validates each evidence entry against the active project's
+// corpus and overwrites Citation with a string formatted from the stored
+// paper metadata. Caller-supplied Citation values are intentionally discarded
+// — only the corpus is allowed to ground a citation.
+func (t *CreateTool) resolveEvidence(p *domain.DesignPlan) error {
+	for i := range p.Evidence {
+		ev := &p.Evidence[i]
+		id := strings.TrimSpace(ev.CorpusPaperID)
+		if id == "" {
+			return fmt.Errorf(
+				"plan.create: evidence[%d].corpus_paper_id is required — "+
+					"every evidence entry must reference a paper in the active "+
+					"project's corpus (use knowledge.corpus.search or "+
+					"knowledge.corpus.list to find ids; free-text citations are "+
+					"not accepted)", i)
+		}
+		paper, err := t.store.GetCorpusPaper(id)
+		if err != nil {
+			return fmt.Errorf(
+				"plan.create: evidence[%d].corpus_paper_id %q is not in the "+
+					"active project's corpus — add it first with "+
+					"knowledge.corpus.add or pick an id returned by "+
+					"knowledge.corpus.search/list (underlying error: %w)",
+				i, id, err)
+		}
+		ev.CorpusPaperID = paper.ID
+		// Caller-supplied citation is discarded; we format our own.
+		ev.Citation = formatCitation(paper)
+	}
+	return nil
+}
+
+// formatCitation renders a single human-readable citation string from a
+// corpus paper's stored metadata. The order is:
+//
+//	"<author> et al. <year>. <Title>. <DOI>"
+//
+// Each component is included only if present in the stored record. The DOI
+// is sourced from the paper's metadata JSON when available; otherwise — when
+// the paper's id is itself a DOI (the europepmc/openalex convention) — the id
+// is used.
+func formatCitation(p domain.CorpusPaper) string {
+	var parts []string
+
+	authorYear := strings.TrimSpace(formatAuthorYear(p.Authors, p.Year))
+	if authorYear != "" {
+		parts = append(parts, authorYear)
+	}
+
+	if title := strings.TrimSpace(p.Title); title != "" {
+		parts = append(parts, title)
+	}
+
+	if doi := extractDOI(p); doi != "" {
+		parts = append(parts, doi)
+	}
+
+	return strings.Join(parts, ". ")
+}
+
+// formatAuthorYear renders the leading "Lastname et al. YYYY" segment. Authors
+// is the comma-separated string we get from europepmc-style sources.
+func formatAuthorYear(authors string, year int) string {
+	first := firstAuthorSurname(authors)
+	switch {
+	case first != "" && year > 0:
+		// "Pacesa et al. 2024"
+		// We always use the "et al." form so the citation is short and
+		// stable even if downstream code only got the first author.
+		return first + " et al. " + strconv.Itoa(year)
+	case first != "":
+		return first + " et al."
+	case year > 0:
+		return strconv.Itoa(year)
+	}
+	return ""
+}
+
+// firstAuthorSurname pulls the surname of the first author out of a
+// comma-separated authors string. Common shapes from corpus sources:
+//
+//	"Pacesa, Nickel, Yang"    -> "Pacesa"
+//	"Pacesa M, Nickel L, ..." -> "Pacesa"
+//	"Pacesa M"                -> "Pacesa"
+//	"Pacesa"                  -> "Pacesa"
+func firstAuthorSurname(authors string) string {
+	authors = strings.TrimSpace(authors)
+	if authors == "" {
+		return ""
+	}
+	first := authors
+	if idx := strings.IndexAny(authors, ",;"); idx >= 0 {
+		first = authors[:idx]
+	}
+	first = strings.TrimSpace(first)
+	if first == "" {
+		return ""
+	}
+	// Drop trailing initials like "Pacesa M" -> "Pacesa".
+	if idx := strings.IndexByte(first, ' '); idx >= 0 {
+		first = first[:idx]
+	}
+	return strings.TrimSpace(first)
+}
+
+// extractDOI returns the paper's DOI. CorpusPaper.ID is itself a DOI when the
+// paper came from a DOI-keyed source (europepmc, openalex); otherwise we try
+// the metadata JSON which sources like the test seed and knowledge.crossref
+// store there.
+func extractDOI(p domain.CorpusPaper) string {
+	if looksLikeDOI(p.ID) {
+		return p.ID
+	}
+	if p.Metadata == "" {
+		return ""
+	}
+	var raw map[string]any
+	if err := json.Unmarshal([]byte(p.Metadata), &raw); err != nil {
+		return ""
+	}
+	for _, key := range []string{"doi", "DOI"} {
+		if v, ok := raw[key]; ok {
+			if s, ok := v.(string); ok && s != "" {
+				return s
+			}
+		}
+	}
+	return ""
+}
+
+// looksLikeDOI is a cheap heuristic: real DOIs start with "10." followed by a
+// registrant code and a slash.
+func looksLikeDOI(s string) bool {
+	if !strings.HasPrefix(s, "10.") {
+		return false
+	}
+	return strings.Contains(s, "/")
+}
+
+// checkInstalled returns an error if the local tool implementing method m is
+// not installed. When the installer is nil (legacy test paths) the check is
+// skipped — production wiring always supplies one.
+func (t *CreateTool) checkInstalled(m Method) error {
+	if t.installer == nil {
+		return nil
+	}
+	tool := toolForMethod(m)
+	if tool == "" {
+		// Defensive: parseMethod accepted m but no tools.toml mapping
+		// exists. Surface that as a configuration error rather than a
+		// silent skip.
+		return fmt.Errorf("plan.create: method %q has no local tool mapping — extend toolForMethod in compat.go", m)
+	}
+	if t.installer.Status(tool).Installed {
+		return nil
+	}
+	return fmt.Errorf(
+		"plan.create: method %q requires tool %q which is not installed "+
+			"— run /install %s or pick a different method (see /doctor "+
+			"for the full tool status)",
+		m, tool, tool)
+}
+
+// validateFilters bounds-checks every populated field in FilterConfig and
+// the optional Kd budget. The Kd parse is intentionally pulled from the raw
+// JSON because domain.FilterConfig has no Kd field — adding one is a v0.8
+// concern. Until then, callers express the Kd cap as filters.max_kd with an
+// optional filters.max_kd_units (default "M").
+func validateFilters(input json.RawMessage, f domain.FilterConfig) error {
+	// FilterConfig fields. Each row is "name, current value, lo, hi" where lo
+	// and hi are inclusive bounds. A value of 0 means "unset" (the legacy
+	// FilterConfig sentinel) and is skipped.
+	type bound struct {
+		name string
+		v    float64
+		lo   float64
+		hi   float64
+	}
+	checks := []bound{
+		{"min_ipsae", f.MinIPSAE, 0, 1},
+		{"min_iptm", f.MinIPTM, 0, 1},
+		{"min_pdockq", f.MinPDockQ, 0, 1},
+		{"min_plddt", f.MinPLDDT, 0, 100},
+		{"min_plddt_min", f.MinPLDDTMin, 0, 100},
+		{"max_pae_interface", f.MaxPAEInterface, 0, 32},
+		{"max_rmsd_to_model", f.MaxRMSDtoModel, 0, math.MaxFloat64},
+		{"max_motif_rmsd", f.MaxMotifRMSD, 0, math.MaxFloat64},
+		{"max_esm_perplexity", f.MaxESMPerplexity, 0, math.MaxFloat64},
+	}
+	for _, c := range checks {
+		if c.v == 0 {
+			continue // unset sentinel
+		}
+		if c.v < c.lo || c.v > c.hi {
+			return fmt.Errorf(
+				"plan.create: filters.%s = %g is out of range [%g, %g] "+
+					"— check the value or omit the filter",
+				c.name, c.v, c.lo, c.hi)
+		}
+	}
+	// Kd: parsed from the raw filters JSON. We accept any number (with or
+	// without units) and reject only Kd <= 0, which is physically
+	// impossible. Kd unit normalisation happens via kdToMolar.
+	kd, kdUnits, hasKd, err := extractKdFromFilters(input)
+	if err != nil {
+		return err
+	}
+	if hasKd {
+		molar, err := kdToMolar(kd, kdUnits)
+		if err != nil {
+			return fmt.Errorf("plan.create: filters.max_kd_units %q is not a known unit — accepted: M, mM, uM, nM, pM, fM", kdUnits)
+		}
+		if molar <= 0 {
+			return fmt.Errorf(
+				"plan.create: filters.max_kd = %g %s must be > 0 — Kd is a "+
+					"dissociation constant and is always positive",
+				kd, kdUnits)
+		}
+	}
+	return nil
+}
+
+// validateShortlist enforces the [1, 500] band on ShortlistSize. The legacy
+// "0 == unset" sentinel passes through untouched so callers that don't set
+// the field aren't punished.
+func validateShortlist(n int) error {
+	if n == 0 {
+		return nil
+	}
+	if n < 0 {
+		return fmt.Errorf(
+			"plan.create: shortlist_size = %d must be > 0 — pick a positive "+
+				"integer or omit the field to use the default",
+			n)
+	}
+	if n > 500 {
+		return fmt.Errorf(
+			"plan.create: shortlist_size = %d exceeds compute budget — "+
+				"confirm or trim to <= 500 (the soft cap protects against "+
+				"unbounded compute spend; raise it intentionally by setting "+
+				"a smaller number)",
+			n)
+	}
+	return nil
+}
+
+// extractKdFromFilters reads filters.max_kd and filters.max_kd_units out of
+// the raw plan.create input. Returns hasKd=false when the field is absent —
+// the Kd bound is opt-in and FilterConfig has no place for it (see the
+// v0.7 spec note on Bug 11).
+func extractKdFromFilters(input json.RawMessage) (kd float64, units string, hasKd bool, err error) {
+	var envelope struct {
+		Filters json.RawMessage `json:"filters"`
+	}
+	if uerr := json.Unmarshal(input, &envelope); uerr != nil {
+		// Already validated upstream; treat as "no filters block".
+		return 0, "", false, nil
+	}
+	if len(envelope.Filters) == 0 {
+		return 0, "", false, nil
+	}
+	var raw map[string]any
+	if uerr := json.Unmarshal(envelope.Filters, &raw); uerr != nil {
+		return 0, "", false, nil
+	}
+	v, ok := raw["max_kd"]
+	if !ok {
+		return 0, "", false, nil
+	}
+	f, ok := toFloat64(v)
+	if !ok {
+		return 0, "", false, fmt.Errorf("plan.create: filters.max_kd must be a number")
+	}
+	units = "M"
+	if u, ok := raw["max_kd_units"]; ok {
+		if s, ok := u.(string); ok {
+			units = s
+		}
+	}
+	return f, units, true, nil
+}
+
+// toFloat64 coerces a JSON-unmarshalled value (float64 or json.Number) to a
+// float64. Returns ok=false for any other type.
+func toFloat64(v any) (float64, bool) {
+	switch x := v.(type) {
+	case float64:
+		return x, true
+	case json.Number:
+		f, err := x.Float64()
+		return f, err == nil
+	}
+	return 0, false
+}
+
+// kdToMolar normalises a Kd value with an SI prefix to mol/L. The accepted
+// units mirror the ones the lab side already uses for ExperimentResult.
+func kdToMolar(kd float64, units string) (float64, error) {
+	switch strings.ToLower(strings.TrimSpace(units)) {
+	case "", "m":
+		return kd, nil
+	case "mm":
+		return kd * 1e-3, nil
+	case "um", "µm", "μm":
+		return kd * 1e-6, nil
+	case "nm":
+		return kd * 1e-9, nil
+	case "pm":
+		return kd * 1e-12, nil
+	case "fm":
+		return kd * 1e-15, nil
+	}
+	return 0, fmt.Errorf("unknown unit %q", units)
 }

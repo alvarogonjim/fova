@@ -1,8 +1,8 @@
 package fold
 
 import (
-	"github.com/alvarogonjim/proteus/internal/backends"
-	"github.com/alvarogonjim/proteus/internal/jobs"
+	"github.com/alvarogonjim/fova/internal/backends"
+	"github.com/alvarogonjim/fova/internal/jobs"
 )
 
 // NewBoltz2 returns the fold.boltz2 tool: Boltz-2 complex structure prediction

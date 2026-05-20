@@ -1,0 +1,29 @@
+# Shipped placeholder list for the fova content-filter guard.
+#
+# This file ships embedded with the binary as the v0.5 wiring for the refusal
+# guard in the agent loop. The signatures here are SYNTHETIC permutations of
+# the 20 canonical amino-acid letters; they exist only to exercise the matcher,
+# the JSON extractor, and the agent-loop refusal path under tests. They will
+# not collide with real protein sequences in normal usage.
+#
+# Operators who deploy fova in regulated settings replace this file with
+# their organisation's real screening list at deployment time. The contents
+# of that list are not part of this codebase.
+#
+# Schema:
+#   [[entry]]
+#   id         = stable identifier (kebab-case)
+#   reason     = single-sentence message shown verbatim to the user on refusal
+#   signatures = list of contiguous residue strings whose presence implies a
+#                match. Case-insensitive substring match against the
+#                (whitespace-stripped) input sequence.
+
+[[entry]]
+id = "placeholder-entry-1"
+reason = "Matches the shipped placeholder list. Operators must replace this file with their real screening list before production use."
+signatures = ["ACDEFGHIKLMNPQRSTVWY"]
+
+[[entry]]
+id = "placeholder-entry-2"
+reason = "Matches the shipped placeholder list. Operators must replace this file with their real screening list before production use."
+signatures = ["YWVTSRQPNMLKIHGFEDCA"]

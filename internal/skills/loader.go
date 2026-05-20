@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/alvarogonjim/proteus/internal/domain"
-	"github.com/alvarogonjim/proteus/internal/tools"
+	"github.com/alvarogonjim/fova/internal/domain"
+	"github.com/alvarogonjim/fova/internal/tools"
 )
 
 //go:embed builtin/*.md
@@ -61,7 +61,7 @@ func (l *Loader) ReadTool() tools.Tool { return skillsRead{l} }
 type skillsList struct{ l *Loader }
 
 func (skillsList) Name() string        { return "skills.list" }
-func (skillsList) Description() string { return "List available Proteus skills." }
+func (skillsList) Description() string { return "List available fova skills." }
 func (skillsList) InputSchema() map[string]any {
 	return map[string]any{"type": "object", "properties": map[string]any{}}
 }

@@ -13,7 +13,7 @@ import (
 
 // EndpointEnvVar names the environment variable holding the deployed Modal
 // web-endpoint URL.
-const EndpointEnvVar = "PROTEUS_MODAL_ENDPOINT"
+const EndpointEnvVar = "FOVA_MODAL_ENDPOINT"
 
 // Client invokes the deployed Modal functions app over HTTP.
 type Client struct {
@@ -26,7 +26,7 @@ func NewClient(endpoint string) *Client {
 	return &Client{endpoint: endpoint, http: &http.Client{Timeout: time.Hour}}
 }
 
-// NewClientFromEnv builds a client from PROTEUS_MODAL_ENDPOINT. The returned
+// NewClientFromEnv builds a client from FOVA_MODAL_ENDPOINT. The returned
 // client reports Configured()==false when the variable is unset.
 func NewClientFromEnv() *Client {
 	return NewClient(os.Getenv(EndpointEnvVar))

@@ -131,7 +131,11 @@ func (bindCraftAdapter) Invoke(ctx context.Context, env AdapterEnv, request []by
 	}
 	if sp, ok := settings["starting_pdb"].(string); ok && strings.TrimSpace(sp) != "" {
 		if info, err := os.Stat(sp); err != nil || info.IsDir() {
-			return nil, fmt.Errorf("design.bindcraft: starting_pdb %q does not exist", sp)
+			return nil, fmt.Errorf(
+				"design.bindcraft: starting_pdb %q not found (workspace root). "+
+					"Use fs.read_structure or fs.bash to confirm the file exists, "+
+					"or pass an absolute path.",
+				sp)
 		}
 	}
 	if info, err := os.Stat(env.Recipe.InstallDir); err != nil || !info.IsDir() {
@@ -166,14 +170,16 @@ func (bindCraftAdapter) Invoke(ctx context.Context, env AdapterEnv, request []by
 	if err := os.WriteFile(settingsFile, settingsJSON, 0o644); err != nil {
 		return nil, err
 	}
+	env.Tick(0.05) // settings file staged
 
 	cmd := fmt.Sprintf("%s %s --settings %s",
 		filepath.Join(env.Recipe.VenvDir, "bin", "python"),
 		filepath.Join(env.Recipe.InstallDir, "bindcraft.py"),
 		settingsFile)
-	if out, err := env.Run(ctx, env.Recipe.InstallDir, cmd); err != nil {
+	if out, err := env.Run(ctx, env.Recipe.InstallDir, cmd, env.LogWriter()); err != nil {
 		return nil, fmt.Errorf("design.bindcraft: run failed: %w\n%s", err, out)
 	}
+	env.Tick(0.95) // bindcraft.py done
 
 	designs, err := parseBindCraftOutput(designPath)
 	if err != nil {

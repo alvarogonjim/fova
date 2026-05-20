@@ -24,8 +24,8 @@ func TestGetJSONDecodesAndSetsUserAgent(t *testing.T) {
 	if out.Hits != 3 {
 		t.Errorf("Hits = %d, want 3", out.Hits)
 	}
-	if len(gotUA) < 7 || gotUA[:7] != "Proteus" {
-		t.Errorf("User-Agent = %q, want a Proteus/... agent", gotUA)
+	if len(gotUA) < 4 || gotUA[:4] != "fova" {
+		t.Errorf("User-Agent = %q, want a fova/... agent", gotUA)
 	}
 }
 

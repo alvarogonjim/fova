@@ -8,8 +8,8 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/alvarogonjim/proteus/internal/domain"
-	"github.com/alvarogonjim/proteus/internal/tools"
+	"github.com/alvarogonjim/fova/internal/domain"
+	"github.com/alvarogonjim/fova/internal/tools"
 )
 
 const crossrefEndpoint = "https://api.crossref.org/works"

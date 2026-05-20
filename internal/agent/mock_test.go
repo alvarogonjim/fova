@@ -3,7 +3,7 @@ package agent
 import (
 	"context"
 
-	"github.com/alvarogonjim/proteus/internal/llm"
+	"github.com/alvarogonjim/fova/internal/llm"
 )
 
 // mockProvider returns scripted responses, one per Chat/StreamChat call.
@@ -35,7 +35,7 @@ func (m *mockProvider) StreamChat(ctx context.Context, req llm.ChatRequest) (<-c
 		for i := range resp.ToolCalls {
 			ch <- llm.ChatEvent{Kind: "tool_call", Call: &resp.ToolCalls[i]}
 		}
-		ch <- llm.ChatEvent{Kind: "done", StopReason: resp.StopReason}
+		ch <- llm.ChatEvent{Kind: "done", StopReason: resp.StopReason, Usage: resp.Usage}
 	}()
 	return ch, nil
 }

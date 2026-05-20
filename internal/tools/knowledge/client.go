@@ -12,17 +12,17 @@ import (
 	"sync"
 	"time"
 
-	"github.com/alvarogonjim/proteus/internal/version"
+	"github.com/alvarogonjim/fova/internal/version"
 )
 
 // userAgent is sent on every knowledge request (SPECS §7.2.5).
-var userAgent = "Proteus/" + version.String() + " (https://github.com/alvarogonjim/proteus)"
+var userAgent = "fova/" + version.String() + " (https://github.com/alvarogonjim/fova)"
 
 // httpClient is the shared client for all knowledge HTTP calls.
 var httpClient = &http.Client{Timeout: 30 * time.Second}
 
 // getJSON performs a GET against url and decodes a JSON body into out.
-// A non-2xx response is an error. The Proteus User-Agent is always set.
+// A non-2xx response is an error. The fova User-Agent is always set.
 func getJSON(ctx context.Context, url string, out any) error {
 	body, err := getBytes(ctx, url, "application/json")
 	if err != nil {

@@ -10,9 +10,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/alvarogonjim/proteus/internal/backends/local"
-	"github.com/alvarogonjim/proteus/internal/domain"
-	"github.com/alvarogonjim/proteus/internal/tools"
+	"github.com/alvarogonjim/fova/internal/backends/local"
+	"github.com/alvarogonjim/fova/internal/domain"
+	"github.com/alvarogonjim/fova/internal/tools"
 )
 
 // ipsaeRunner runs the installed ipsae tool on a scores file and structure,
@@ -29,30 +29,34 @@ func NewIPSAETool() *IPSAETool {
 	return &IPSAETool{run: realIPSAERunner}
 }
 
-// realIPSAERunner invokes the uv-installed ipsae tool via the local runner.
+// realIPSAERunner invokes the installed ipsae container via the local
+// package's container-mode helper. The Runner can't be reused for ipsae:
+// its entrypoint takes positional args (pae_file, pdb_file, pae_cutoff,
+// dist_cutoff) that don't match the workspace-mounted placeholder model,
+// and the two input paths live anywhere on the host. RunIPSAE stages
+// both into a temp dir mounted at /work and runs the container directly.
 func realIPSAERunner(ctx context.Context, scoresJSON, structureFile string) (string, error) {
-	reg, err := local.LoadRegistry(proteusHome())
+	reg, err := local.LoadRegistry(fovaHome())
 	if err != nil {
 		return "", err
 	}
-	return local.NewRunner(reg).Run(ctx, "ipsae", map[string]string{
-		"scores_json":    scoresJSON,
-		"structure_file": structureFile,
-		"pae_cutoff":     "10",
-		"plddt_cutoff":   "70",
-	})
+	rec, ok := reg.Tool("ipsae")
+	if !ok {
+		return "", fmt.Errorf("ipsae: recipe not found in registry (run /install ipsae)")
+	}
+	return local.RunIPSAE(ctx, scoresJSON, structureFile, rec, nil)
 }
 
-// proteusHome resolves the Proteus home directory ($PROTEUS_HOME or ~/proteus).
-func proteusHome() string {
-	if h := os.Getenv("PROTEUS_HOME"); h != "" {
+// fovaHome resolves the fova home directory ($FOVA_HOME or ~/fova).
+func fovaHome() string {
+	if h := os.Getenv("FOVA_HOME"); h != "" {
 		return h
 	}
 	uh, err := os.UserHomeDir()
 	if err != nil {
-		return "proteus"
+		return "fova"
 	}
-	return filepath.Join(uh, "proteus")
+	return filepath.Join(uh, "fova")
 }
 
 func (*IPSAETool) Name() string { return "score.ipsae" }
@@ -83,7 +87,7 @@ func (t *IPSAETool) Execute(ctx context.Context, input json.RawMessage) (tools.R
 	}
 	out, err := t.run(ctx, in.ScoresJSON, in.StructureFile)
 	if err != nil {
-		return tools.Result{}, fmt.Errorf("score.ipsae failed (is ipsae installed? run `proteus install ipsae`): %w", err)
+		return tools.Result{}, fmt.Errorf("score.ipsae failed (is ipsae installed? run `fova install ipsae`): %w", err)
 	}
 	score, ok := parseIPSAE(out)
 	if !ok {

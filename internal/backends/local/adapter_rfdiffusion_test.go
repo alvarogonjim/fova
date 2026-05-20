@@ -1,9 +1,11 @@
 package local
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -44,8 +46,11 @@ func TestParseRFdiffusionOutputEmptyErrors(t *testing.T) {
 // the raw command (not strings.Fields) so a contig with embedded spaces does
 // not break output-prefix detection.
 func rfdiffStubRunner(ran *[]string) CmdRunner {
-	return func(ctx context.Context, dir, cmd string) (string, error) {
+	return func(ctx context.Context, dir, cmd string, log io.Writer) (string, error) {
 		*ran = append(*ran, cmd)
+		if log != nil {
+			_, _ = log.Write([]byte("stub: " + cmd + "\n"))
+		}
 		if _, after, ok := strings.Cut(cmd, "inference.output_prefix="); ok {
 			prefix, _, _ := strings.Cut(after, " ")
 			outDir := filepath.Dir(prefix)
@@ -61,8 +66,9 @@ func rfdiffStubRunner(ran *[]string) CmdRunner {
 }
 
 // rfdiffTestEnv builds an AdapterEnv with an installed-looking recipe and a
-// registry whose rfdiffusion_weights directory exists on disk.
-func rfdiffTestEnv(t *testing.T, ran *[]string) AdapterEnv {
+// registry whose rfdiffusion_weights directory exists on disk. logBuf and
+// progress (when non-nil) capture the adapter's log writes and progress ticks.
+func rfdiffTestEnv(t *testing.T, ran *[]string, logBuf *bytes.Buffer, progress *[]float64) AdapterEnv {
 	t.Helper()
 	home := t.TempDir()
 	reg, err := LoadRegistry(home)
@@ -76,17 +82,26 @@ func rfdiffTestEnv(t *testing.T, ran *[]string) AdapterEnv {
 	if err := os.MkdirAll(asset.TargetDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	return AdapterEnv{
+	env := AdapterEnv{
 		Recipe:   ToolRecipe{Name: "rfdiffusion", InstallDir: t.TempDir(), VenvDir: t.TempDir()},
 		Run:      rfdiffStubRunner(ran),
 		WorkDir:  t.TempDir(),
 		Registry: reg,
 	}
+	if logBuf != nil {
+		env.Log = logBuf
+	}
+	if progress != nil {
+		env.Progress = func(f float64) { *progress = append(*progress, f) }
+	}
+	return env
 }
 
 func TestRFdiffusionAdapterInvoke(t *testing.T) {
 	var ran []string
-	env := rfdiffTestEnv(t, &ran)
+	var logBuf bytes.Buffer
+	var progress []float64
+	env := rfdiffTestEnv(t, &ran, &logBuf, &progress)
 
 	out, err := rfdiffusionAdapter{}.Invoke(context.Background(), env,
 		[]byte(`{"contigs":"50-70","num_designs":2}`))
@@ -104,7 +119,7 @@ func TestRFdiffusionAdapterInvoke(t *testing.T) {
 		t.Error("design structure_file must be set")
 	}
 	if !strings.HasPrefix(env2.Designs[0].StructureFile, env.Registry.Home()) {
-		t.Errorf("structure_file %q must be under PROTEUS_HOME %q (outlives the temp WorkDir)",
+		t.Errorf("structure_file %q must be under FOVA_HOME %q (outlives the temp WorkDir)",
 			env2.Designs[0].StructureFile, env.Registry.Home())
 	}
 	if len(ran) != 1 {
@@ -119,11 +134,21 @@ func TestRFdiffusionAdapterInvoke(t *testing.T) {
 	if !strings.Contains(ran[0], "Base_ckpt.pt") {
 		t.Errorf("no target → Base_ckpt.pt expected: %s", ran[0])
 	}
+	// Bug 2: log must be written and progress must be ticked.
+	if logBuf.Len() == 0 {
+		t.Error("env.Log should receive the stubbed run_inference.py output")
+	}
+	if !strings.Contains(logBuf.String(), "run_inference.py") {
+		t.Errorf("env.Log should carry the run_inference.py invocation, got: %q", logBuf.String())
+	}
+	if len(progress) < 2 {
+		t.Errorf("env.Progress should have been called at least twice, got %v", progress)
+	}
 }
 
 func TestRFdiffusionAdapterInvokeComplexCheckpoint(t *testing.T) {
 	var ran []string
-	env := rfdiffTestEnv(t, &ran)
+	env := rfdiffTestEnv(t, &ran, nil, nil)
 	target := filepath.Join(t.TempDir(), "t.pdb")
 	if err := os.WriteFile(target, []byte("ATOM\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -147,7 +172,7 @@ func TestRFdiffusionAdapterInvokeComplexCheckpoint(t *testing.T) {
 
 func TestRFdiffusionAdapterInvokeMissingContigs(t *testing.T) {
 	var ran []string
-	env := rfdiffTestEnv(t, &ran)
+	env := rfdiffTestEnv(t, &ran, nil, nil)
 	if _, err := (rfdiffusionAdapter{}).Invoke(context.Background(), env, []byte(`{"num_designs":1}`)); err == nil {
 		t.Fatal("expected an error when contigs is missing")
 	}
@@ -189,7 +214,7 @@ func TestRFdiffusionAdapterInvokeNotInstalled(t *testing.T) {
 
 func TestRFdiffusionAdapterInvokeBadTarget(t *testing.T) {
 	var ran []string
-	env := rfdiffTestEnv(t, &ran)
+	env := rfdiffTestEnv(t, &ran, nil, nil)
 
 	// A target that is not a .pdb file.
 	notPDB := filepath.Join(t.TempDir(), "target.txt")
@@ -202,9 +227,13 @@ func TestRFdiffusionAdapterInvokeBadTarget(t *testing.T) {
 	}
 
 	// A .pdb target path that does not exist.
-	if _, err := (rfdiffusionAdapter{}).Invoke(context.Background(), env,
-		[]byte(`{"contigs":"50-70","target":"/no/such/file.pdb"}`)); err == nil {
+	_, err := rfdiffusionAdapter{}.Invoke(context.Background(), env,
+		[]byte(`{"contigs":"50-70","target":"/no/such/file.pdb"}`))
+	if err == nil {
 		t.Error("expected an error when the target file does not exist")
+	} else if !strings.Contains(err.Error(), "fs.read_structure") {
+		// Bug 4: error should steer the agent at fs.read_structure.
+		t.Errorf("error %q should point at fs.read_structure", err)
 	}
 	if len(ran) != 0 {
 		t.Errorf("a bad target must not run any command, got %d", len(ran))
@@ -218,7 +247,7 @@ func TestRunDesignRFdiffusionIsRegistered(t *testing.T) {
 	}
 	// Missing contigs makes Invoke fail fast — which still proves
 	// design.rfdiffusion is registered and dispatched.
-	_, err = RunDesign(context.Background(), reg, "design.rfdiffusion", []byte(`{"num_designs":1}`))
+	_, err = RunDesign(context.Background(), reg, "design.rfdiffusion", []byte(`{"num_designs":1}`), io.Discard, nil)
 	if err == nil {
 		t.Fatal("expected an error")
 	}

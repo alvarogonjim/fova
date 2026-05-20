@@ -1,4 +1,4 @@
-// Package store persists Proteus domain objects in a per-project SQLite DB.
+// Package store persists fova domain objects in a per-project SQLite DB.
 package store
 
 import (
@@ -10,7 +10,7 @@ import (
 
 	_ "modernc.org/sqlite"
 
-	"github.com/alvarogonjim/proteus/internal/domain"
+	"github.com/alvarogonjim/fova/internal/domain"
 )
 
 //go:embed schema.sql

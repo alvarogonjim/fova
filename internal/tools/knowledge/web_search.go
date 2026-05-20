@@ -9,8 +9,8 @@ import (
 	"os"
 	"time"
 
-	"github.com/alvarogonjim/proteus/internal/domain"
-	"github.com/alvarogonjim/proteus/internal/tools"
+	"github.com/alvarogonjim/fova/internal/domain"
+	"github.com/alvarogonjim/fova/internal/tools"
 )
 
 // tavilySearchURL is the default Tavily search endpoint (SPECS §7.2.5).

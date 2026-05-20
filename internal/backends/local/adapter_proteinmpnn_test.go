@@ -1,8 +1,10 @@
 package local
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -61,8 +63,14 @@ func TestProteinMPNNAdapterInvoke(t *testing.T) {
 	}
 
 	var ran []string
-	stub := func(ctx context.Context, dir, cmd string) (string, error) {
+	var logBuf bytes.Buffer
+	var progress []float64
+	stub := func(ctx context.Context, dir, cmd string, log io.Writer) (string, error) {
 		ran = append(ran, cmd)
+		// Mimic bashRunner: also write a line to log so we can assert log is wired.
+		if log != nil {
+			_, _ = log.Write([]byte("stub: " + cmd + "\n"))
+		}
 		if strings.Contains(cmd, "protein_mpnn_run.py") {
 			seqs := filepath.Join(workDir, "seqs")
 			if err := os.MkdirAll(seqs, 0o755); err != nil {
@@ -75,9 +83,11 @@ func TestProteinMPNNAdapterInvoke(t *testing.T) {
 		return "ok", nil
 	}
 	env := AdapterEnv{
-		Recipe:  ToolRecipe{Name: "proteinmpnn", InstallDir: t.TempDir(), VenvDir: t.TempDir()},
-		Run:     stub,
-		WorkDir: workDir,
+		Recipe:   ToolRecipe{Name: "proteinmpnn", InstallDir: t.TempDir(), VenvDir: t.TempDir()},
+		Run:      stub,
+		WorkDir:  workDir,
+		Log:      &logBuf,
+		Progress: func(f float64) { progress = append(progress, f) },
 	}
 
 	out, err := proteinMPNNAdapter{}.Invoke(context.Background(), env,
@@ -101,12 +111,35 @@ func TestProteinMPNNAdapterInvoke(t *testing.T) {
 	if !strings.Contains(ran[1], "--num_seq_per_target 2") {
 		t.Errorf("command 2 should request 2 sequences: %s", ran[1])
 	}
+	// Bug 2: the adapter must stream stdout+stderr to env.Log and tick env.Progress.
+	if logBuf.Len() == 0 {
+		t.Error("env.Log should receive the stubbed command output")
+	}
+	if !strings.Contains(logBuf.String(), "parse_multiple_chains.py") {
+		t.Errorf("env.Log should carry the parse step's output, got: %q", logBuf.String())
+	}
+	if len(progress) < 2 {
+		t.Errorf("env.Progress should have been called at least twice, got %v", progress)
+	}
 }
 
 func TestProteinMPNNAdapterInvokeMissingTarget(t *testing.T) {
 	env := AdapterEnv{Recipe: ToolRecipe{VenvDir: t.TempDir()}, WorkDir: t.TempDir()}
 	if _, err := (proteinMPNNAdapter{}).Invoke(context.Background(), env, []byte(`{"num_designs":1}`)); err == nil {
 		t.Fatal("expected an error when target is missing")
+	}
+}
+
+// Bug 4 — a missing-target error must steer the agent at fs.read_structure.
+func TestProteinMPNNAdapterInvokeNotFoundIncludesHint(t *testing.T) {
+	env := AdapterEnv{Recipe: ToolRecipe{VenvDir: t.TempDir()}, WorkDir: t.TempDir()}
+	_, err := proteinMPNNAdapter{}.Invoke(context.Background(), env,
+		[]byte(`{"target":"/no/such/file.pdb"}`))
+	if err == nil {
+		t.Fatal("expected a 'not found' error")
+	}
+	if !strings.Contains(err.Error(), "fs.read_structure") {
+		t.Errorf("error %q should point at fs.read_structure", err)
 	}
 }
 
@@ -131,7 +164,7 @@ func TestRunDesignProteinMPNNIsRegistered(t *testing.T) {
 	}
 	// A nonexistent target makes Invoke fail fast before any command runs —
 	// which still proves design.proteinmpnn is registered and dispatched.
-	_, err = RunDesign(context.Background(), reg, "design.proteinmpnn", []byte(`{"target":"/no/such/file.pdb"}`))
+	_, err = RunDesign(context.Background(), reg, "design.proteinmpnn", []byte(`{"target":"/no/such/file.pdb"}`), io.Discard, nil)
 	if err == nil {
 		t.Fatal("expected an error")
 	}

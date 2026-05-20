@@ -1,8 +1,8 @@
 package fold
 
 import (
-	"github.com/alvarogonjim/proteus/internal/backends"
-	"github.com/alvarogonjim/proteus/internal/jobs"
+	"github.com/alvarogonjim/fova/internal/backends"
+	"github.com/alvarogonjim/fova/internal/jobs"
 )
 
 // NewChai1 returns the fold.chai1 tool: Chai-1 complex structure prediction on

@@ -6,16 +6,23 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/alvarogonjim/proteus/internal/domain"
-	jobmgr "github.com/alvarogonjim/proteus/internal/jobs"
-	"github.com/alvarogonjim/proteus/internal/tools"
+	"github.com/alvarogonjim/fova/internal/domain"
+	jobmgr "github.com/alvarogonjim/fova/internal/jobs"
+	"github.com/alvarogonjim/fova/internal/tools"
 )
 
 // ResultTool implements jobs.result.
-type ResultTool struct{ mgr *jobmgr.Manager }
+type ResultTool struct {
+	mgr  *jobmgr.Manager
+	estd EstimatedDurationFn
+}
 
-// NewResultTool builds the jobs.result tool.
-func NewResultTool(mgr *jobmgr.Manager) *ResultTool { return &ResultTool{mgr: mgr} }
+// NewResultTool builds the jobs.result tool. estd may be nil; when non-nil it
+// is used to enrich the "still running" display with the job's `estimated`
+// field, mirroring jobs.status.
+func NewResultTool(mgr *jobmgr.Manager, estd EstimatedDurationFn) *ResultTool {
+	return &ResultTool{mgr: mgr, estd: estd}
+}
 
 func (*ResultTool) Name() string { return "jobs.result" }
 func (*ResultTool) Description() string {
@@ -39,13 +46,28 @@ func (t *ResultTool) Execute(_ context.Context, input json.RawMessage) (tools.Re
 	switch j.Status {
 	case domain.JobSucceeded:
 		display = "job " + string(j.ID) + " succeeded. output: " + string(j.Output)
+		if e := elapsedOf(j); e != "" {
+			display += "  elapsed=" + e
+		}
 	case domain.JobFailed:
 		display = "job " + string(j.ID) + " failed: " + j.Error
+		if e := elapsedOf(j); e != "" {
+			display += "  elapsed=" + e
+		}
 	case domain.JobCancelled:
 		display = "job " + string(j.ID) + " was cancelled"
+		if e := elapsedOf(j); e != "" {
+			display += "  elapsed=" + e
+		}
 	default:
 		display = fmt.Sprintf("job %s is still %s (progress %.0f%%) — poll again later",
 			j.ID, j.Status, j.Progress*100)
+		if e := elapsedOf(j); e != "" {
+			display += "  elapsed=" + e
+		}
+		if est := estimatedOf(j, t.estd); est != "" {
+			display += "  estimated=" + est
+		}
 	}
 	out, _ := json.Marshal(j)
 	return tools.Result{

@@ -1,102 +1,64 @@
 package tui
 
-import (
-	"fmt"
-	"strings"
-	"time"
-)
-
-// statusBarModel renders the slim header and the status footer (SPECS §10.7.6).
-// The v0.1 combined status bar is split into headerView() (top) and
-// footerView() (bottom).
+// statusBarModel is, post-rebrand, the footer-hint line only (rebrand spec
+// §3.1: the title role moved to the new RenderHeader). Many of its fields
+// (model, cost, costLimit, ctxPercent) are kept as no-op state so the rest
+// of the TUI (app.go, addTurnCost, /model, /reload) can still write to them
+// without compiling errors — they simply do not surface in the view today.
+// A future surface (e.g. a "cost" peek pane) can re-read them.
 type statusBarModel struct {
 	theme      Theme
 	width      int
 	provider   string
 	model      string
 	cost       float64
-	elapsed    time.Duration
+	costLimit  float64
 	project    string
 	ctxPercent int
+	replay     string // "replay X/Y" — set only in replay mode
 }
 
 func newStatusBarModel(th Theme) statusBarModel {
 	return statusBarModel{theme: th}
 }
 
-// setProject records the active project name shown in the header.
+// setProject is retained for API compatibility with app.go and the v0.4
+// header-takes-the-project-path behaviour. The new header derives the path
+// from m.fovaHome directly, so this is now a no-op-ish setter that just
+// records the project name in case a future surface wants it.
 func (s *statusBarModel) setProject(name string) { s.project = name }
 
-// setContextPercent records the running token estimate as a percentage of the
-// active model's context window.
+// setContextPercent records the running token estimate. Held for the same
+// "future surface" reason as setProject: today the footer is a static hint
+// line, but the percentage is still wired up in case it returns.
 func (s *statusBarModel) setContextPercent(pct int) { s.ctxPercent = pct }
 
-// View renders the status bar. It delegates to headerView so app.go keeps
-// compiling against the original API.
-func (s statusBarModel) View() string { return s.headerView() }
+// footerHintText is the static slash-command hint displayed under the
+// message input (rebrand spec §3.1).
+const footerHintText = "type a message, or / for commands  ·  /keys  ·  ctrl+x for $EDITOR"
 
-// headerView renders the slim top bar: " proteus · <project> " in Header
-// style. When no project is set it renders just " proteus ".
-func (s statusBarModel) headerView() string {
-	line := " proteus "
-	if s.project != "" {
-		line = " proteus · " + s.project + " "
-	}
-	if s.width > 0 {
-		line = clipRunes(line, s.width)
-	}
-	return s.theme.Header.Render(line)
-}
+// View returns the footer hint line. Kept named View() for compat with the
+// pre-rebrand call sites; today there is no separate "header" view on the
+// status bar — that role moved to RenderHeader.
+func (s statusBarModel) View() string { return s.footerView() }
 
-// footerView renders the bottom status line (SPECS §10.7.6):
-//
-//	<hint>   <model> · $<cost> · <NN>% context
-//
-// The context segment turns Warning above 80%. The line is clipped to width
-// before any styling so the rendered output never exceeds the terminal.
+// footerView renders the bottom hint line. In replay mode it appends a
+// " · replay X/Y" segment so the user always knows which event they're on.
 func (s statusBarModel) footerView() string {
-	hint := footerHint()
-	left := fmt.Sprintf("%s   %s · $%.2f · ", hint, orDash(s.model), s.cost)
-	ctx := fmt.Sprintf("%d%% context", s.ctxPercent)
-
-	// Clip the plain text first so styling escapes are never counted or cut.
+	hint := footerHintText
+	if s.replay != "" {
+		hint += "  ·  " + s.replay
+	}
 	if s.width > 0 {
-		full := []rune(left + ctx)
-		if len(full) > s.width {
-			full = full[:s.width]
-			leftRunes := []rune(left)
-			if len(full) <= len(leftRunes) {
-				left = string(full)
-				ctx = ""
-			} else {
-				left = string(leftRunes)
-				ctx = string(full[len(leftRunes):])
-			}
-		}
+		hint = clipRunes(hint, s.width)
 	}
-
-	ctxStyle := s.theme.Footer
-	if s.ctxPercent > 80 {
-		ctxStyle = s.theme.Footer.Foreground(s.theme.Palette.Warning)
-	}
-	return s.theme.Footer.Render(left) + ctxStyle.Render(ctx)
+	return s.theme.Footer.Render(hint)
 }
 
-// footerHint builds the slash-command hint from the first four catalogue
-// entries, e.g. "/model  /provider  /clear  /help".
-func footerHint() string {
-	n := 4
-	if n > len(slashCommands) {
-		n = len(slashCommands)
-	}
-	parts := make([]string, 0, n)
-	for _, c := range slashCommands[:n] {
-		parts = append(parts, "/"+c.Name)
-	}
-	return strings.Join(parts, "  ")
-}
-
-// clipRunes truncates s to at most w runes (w<=0 means no clipping).
+// clipRunes truncates s to at most w runes (w<=0 means no clipping). Used
+// by footerView to keep the hint line within the terminal width on narrow
+// terminals; the dim style remains intact because clipping happens before
+// rendering.
 func clipRunes(s string, w int) string {
 	if w <= 0 {
 		return s
@@ -108,6 +70,9 @@ func clipRunes(s string, w int) string {
 	return string(r[:w])
 }
 
+// orDash returns "—" for an empty input so missing labels (model id,
+// provider name, target id) read uniformly across the TUI. Retained from
+// the v0.4 statusbar because submit-modal helpers (app.go) still call it.
 func orDash(v string) string {
 	if v == "" {
 		return "—"

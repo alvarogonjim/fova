@@ -8,18 +8,21 @@ import (
 	"testing"
 	"time"
 
-	"github.com/alvarogonjim/proteus/internal/domain"
-	"github.com/alvarogonjim/proteus/internal/jobs"
-	"github.com/alvarogonjim/proteus/internal/store"
-	"github.com/alvarogonjim/proteus/internal/tools"
+	"github.com/alvarogonjim/fova/internal/domain"
+	"github.com/alvarogonjim/fova/internal/jobs"
+	"github.com/alvarogonjim/fova/internal/store"
+	"github.com/alvarogonjim/fova/internal/tools"
 )
 
 // stubBackend returns a fixed structure-prediction output, ignoring the request.
 type stubBackend struct{ output string }
 
 func (s stubBackend) Name() string { return "stub" }
-func (s stubBackend) Run(ctx context.Context, tool string, input []byte, log io.Writer) ([]byte, error) {
+func (s stubBackend) Run(ctx context.Context, tool string, input []byte, log io.Writer, progress func(float64)) ([]byte, error) {
 	_, _ = log.Write(input)
+	if progress != nil {
+		progress(0.5)
+	}
 	return []byte(s.output), nil
 }
 

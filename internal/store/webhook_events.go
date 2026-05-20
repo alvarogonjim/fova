@@ -3,10 +3,10 @@ package store
 import (
 	"encoding/json"
 
-	"github.com/alvarogonjim/proteus/internal/domain"
+	"github.com/alvarogonjim/fova/internal/domain"
 )
 
-// webhookSource labels every row Proteus writes to webhook_events. The schema
+// webhookSource labels every row fova writes to webhook_events. The schema
 // has no experiment_id / event_type columns, so the full domain.WebhookEvent
 // is JSON-encoded into the payload column (mirroring experiments.body).
 const webhookSource = "adaptyv"

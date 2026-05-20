@@ -1,3 +1,8 @@
+# .github/workflows/ci.yml — v0.5 SPECS §20 #5.
+#
+# Cheap per-push / per-PR validation on linux/amd64 only. The five-platform
+# cross-build matrix is exercised only when a release tag fires release.yml.
+
 name: CI
 
 on:
@@ -12,8 +17,17 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: 'go.mod'
+          cache: true
       - name: Vet
         run: go vet ./...
+      - name: Gofmt
+        run: |
+          out=$(gofmt -l internal cmd pkg)
+          if [ -n "$out" ]; then
+            echo "::error::gofmt has changes for these files:"
+            echo "$out"
+            exit 1
+          fi
       - name: Build
         run: go build ./...
       - name: Test

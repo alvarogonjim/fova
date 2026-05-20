@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/alvarogonjim/proteus/internal/domain"
+	"github.com/alvarogonjim/fova/internal/domain"
 )
 
 func TestChatAppendAndRender(t *testing.T) {
@@ -29,15 +29,6 @@ func TestChatToolTrace(t *testing.T) {
 	out := c.renderEntries()
 	if !strings.Contains(out, "fold.esmfold") || !strings.Contains(out, "pLDDT") {
 		t.Errorf("tool trace not rendered: %q", out)
-	}
-}
-
-func TestChatWelcomeEntry(t *testing.T) {
-	c := newChatModel(NewTheme(), 80, 20)
-	c.appendWelcome("hi there")
-	out := c.renderEntries()
-	if !strings.Contains(out, "hi there") {
-		t.Errorf("welcome text missing: %q", out)
 	}
 }
 
@@ -104,6 +95,42 @@ func TestChatJobLogUpsertUpdatesInPlace(t *testing.T) {
 	out := c.renderEntries()
 	if !strings.Contains(out, "line b") {
 		t.Errorf("updated tail line missing: %q", out)
+	}
+}
+
+// TestChatSlashOutputPreservesNewlines guards against the v0.6 regression
+// where slash-command output (/plan, /doctor, /tools) collapsed into a single
+// paragraph because the agent renderer ran multi-line plain text through
+// glamour, which folds intra-paragraph newlines into spaces. Multi-line slash
+// output must keep at least its original line count when rendered.
+func TestChatSlashOutputPreservesNewlines(t *testing.T) {
+	c := newChatModel(NewTheme(), 80, 20)
+	multi := "Target:        1LYZ chain A\nApplication:   binder\nMethod:        BindCraft\nFilters:       (none set)\nShortlist:     50"
+	c.appendSlashOutput(multi)
+	out := c.renderEntries()
+	for _, want := range []string{"Target:", "Application:", "Method:", "Filters:", "Shortlist:"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("label %q missing from rendered slash output: %q", want, out)
+		}
+	}
+	// All five labels must each appear on their own line — count newlines that
+	// sit between the labels.
+	idxs := []int{
+		strings.Index(out, "Target:"),
+		strings.Index(out, "Application:"),
+		strings.Index(out, "Method:"),
+		strings.Index(out, "Filters:"),
+		strings.Index(out, "Shortlist:"),
+	}
+	for i := 1; i < len(idxs); i++ {
+		if idxs[i] <= idxs[i-1] {
+			t.Fatalf("labels out of order in output: %v\n%s", idxs, out)
+		}
+		between := out[idxs[i-1]:idxs[i]]
+		if !strings.Contains(between, "\n") {
+			t.Errorf("no newline between %q and %q:\n%s",
+				out[idxs[i-1]:idxs[i-1]+10], out[idxs[i]:idxs[i]+10], out)
+		}
 	}
 }
 

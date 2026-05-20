@@ -41,6 +41,10 @@ func Open(dbPath string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("apply schema: %w", err)
 	}
+	if err := migrate(db); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate schema: %w", err)
+	}
 	// One connection: SQLite serializes writers anyway, and a single-user TUI
 	// has no need for a pool. This eliminates SQLITE_BUSY when several job
 	// goroutines write concurrently.
@@ -55,6 +59,38 @@ func Open(dbPath string) (*Store, error) {
 
 // Close closes the database.
 func (s *Store) Close() error { return s.db.Close() }
+
+// migrate applies idempotent column additions that `CREATE TABLE IF NOT EXISTS`
+// cannot make to an already-existing table. Each ALTER is tolerated when the
+// column is already present, so this is safe to run on every Open.
+func migrate(db *sql.DB) error {
+	if hasColumn(db, "jobs", "log_file") {
+		return nil
+	}
+	if _, err := db.Exec(`ALTER TABLE jobs ADD COLUMN log_file TEXT`); err != nil {
+		return err
+	}
+	return nil
+}
+
+// hasColumn reports whether table has a column named col.
+func hasColumn(db *sql.DB, table, col string) bool {
+	rows, err := db.Query(`SELECT name FROM pragma_table_info(?)`, table)
+	if err != nil {
+		return false
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return false
+		}
+		if name == col {
+			return true
+		}
+	}
+	return false
+}
 
 func (s *Store) ensureDefaultProject(workspace string) error {
 	_, err := s.db.Exec(

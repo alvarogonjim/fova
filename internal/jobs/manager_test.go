@@ -3,6 +3,8 @@ package jobs
 import (
 	"context"
 	"errors"
+	"io"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -45,7 +47,7 @@ func TestManagerSubmitSucceeds(t *testing.T) {
 	id, err := m.Submit(Spec{
 		Kind: domain.JobCompute, Tool: "test.tool", Backend: "local",
 		Input: []byte(`{}`),
-		Run: func(ctx context.Context, progress func(float64)) ([]byte, error) {
+		Run: func(ctx context.Context, progress func(float64), log io.Writer) ([]byte, error) {
 			progress(0.5)
 			return []byte(`{"ok":true}`), nil
 		},
@@ -72,7 +74,7 @@ func TestManagerSubmitFails(t *testing.T) {
 	m := newTestManager(t)
 	id, _ := m.Submit(Spec{
 		Kind: domain.JobCompute, Tool: "test.tool", Backend: "local", Input: []byte(`{}`),
-		Run: func(ctx context.Context, progress func(float64)) ([]byte, error) {
+		Run: func(ctx context.Context, progress func(float64), log io.Writer) ([]byte, error) {
 			return nil, errors.New("boom")
 		},
 	})
@@ -89,7 +91,7 @@ func TestManagerCancel(t *testing.T) {
 	m := newTestManager(t)
 	id, _ := m.Submit(Spec{
 		Kind: domain.JobCompute, Tool: "test.tool", Backend: "local", Input: []byte(`{}`),
-		Run: func(ctx context.Context, progress func(float64)) ([]byte, error) {
+		Run: func(ctx context.Context, progress func(float64), log io.Writer) ([]byte, error) {
 			<-ctx.Done() // block until cancelled
 			return nil, ctx.Err()
 		},
@@ -116,7 +118,7 @@ func TestManagerProgressFromGoroutineRaceClean(t *testing.T) {
 	m := newTestManager(t)
 	id, err := m.Submit(Spec{
 		Kind: domain.JobCompute, Tool: "test.tool", Backend: "local", Input: []byte(`{}`),
-		Run: func(ctx context.Context, progress func(float64)) ([]byte, error) {
+		Run: func(ctx context.Context, progress func(float64), log io.Writer) ([]byte, error) {
 			// Report progress from a background goroutine that keeps firing
 			// briefly after Run returns — this exercises the progress/terminal
 			// race that issue #1 fixed.
@@ -141,7 +143,7 @@ func TestManagerListAndCancelUnknown(t *testing.T) {
 	m := newTestManager(t)
 	id, _ := m.Submit(Spec{
 		Kind: domain.JobCompute, Tool: "test.tool", Backend: "local", Input: []byte(`{}`),
-		Run: func(ctx context.Context, progress func(float64)) ([]byte, error) {
+		Run: func(ctx context.Context, progress func(float64), log io.Writer) ([]byte, error) {
 			return []byte(`{}`), nil
 		},
 	})
@@ -152,5 +154,56 @@ func TestManagerListAndCancelUnknown(t *testing.T) {
 	}
 	if err := m.Cancel("no-such-job"); err == nil {
 		t.Error("cancelling an unknown job should error")
+	}
+}
+
+func TestManagerWritesPerJobLogFile(t *testing.T) {
+	m := newTestManager(t)
+	m.SetLogDir(t.TempDir())
+
+	const want = "hello from the job\nsecond line\n"
+	id, err := m.Submit(Spec{
+		Kind: domain.JobCompute, Tool: "test.tool", Backend: "local", Input: []byte(`{}`),
+		Run: func(ctx context.Context, progress func(float64), log io.Writer) ([]byte, error) {
+			if _, err := io.WriteString(log, want); err != nil {
+				return nil, err
+			}
+			return []byte(`{"ok":true}`), nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("Submit: %v", err)
+	}
+	j := waitJob(t, m, id)
+	if j.Status != domain.JobSucceeded {
+		t.Fatalf("status = %s, want succeeded", j.Status)
+	}
+	if j.LogFile == "" {
+		t.Fatal("a finished job with a log dir must have a non-empty LogFile")
+	}
+	body, err := os.ReadFile(j.LogFile)
+	if err != nil {
+		t.Fatalf("the job log file must exist: %v", err)
+	}
+	if string(body) != want {
+		t.Errorf("log file = %q, want %q", string(body), want)
+	}
+}
+
+func TestManagerNoLogDirHasEmptyLogFile(t *testing.T) {
+	m := newTestManager(t) // no SetLogDir call
+	id, err := m.Submit(Spec{
+		Kind: domain.JobCompute, Tool: "test.tool", Backend: "local", Input: []byte(`{}`),
+		Run: func(ctx context.Context, progress func(float64), log io.Writer) ([]byte, error) {
+			_, _ = io.WriteString(log, "discarded") // log is io.Discard
+			return []byte(`{}`), nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("Submit: %v", err)
+	}
+	j := waitJob(t, m, id)
+	if j.LogFile != "" {
+		t.Errorf("LogFile = %q, want empty when no log dir is set", j.LogFile)
 	}
 }

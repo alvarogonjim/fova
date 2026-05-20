@@ -4,6 +4,9 @@ package jobs
 import (
 	"context"
 	"fmt"
+	"io"
+	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -19,9 +22,10 @@ type Spec struct {
 	Tool    string
 	Backend string
 	Input   []byte
-	// Run performs the work. It must honour ctx (abort promptly when cancelled)
-	// and may call progress(fraction) to report 0..1 completion.
-	Run func(ctx context.Context, progress func(float64)) ([]byte, error)
+	// Run performs the work. It must honour ctx (abort promptly when cancelled),
+	// may call progress(fraction) to report 0..1 completion, and may write its
+	// subprocess output to log (the job's per-job log file, or io.Discard).
+	Run func(ctx context.Context, progress func(float64), log io.Writer) ([]byte, error)
 }
 
 // Manager submits, tracks, and cancels async jobs, persisting every state
@@ -31,6 +35,7 @@ type Manager struct {
 	onUpdate func(domain.Job) // optional; called on every job state change
 	mu       sync.Mutex
 	cancels  map[domain.JobID]context.CancelFunc
+	logDir   string // when non-empty, each job gets a <logDir>/<jobID>.log file
 }
 
 // NewManager builds a job manager. onUpdate may be nil.
@@ -40,6 +45,14 @@ func NewManager(st *store.Store, onUpdate func(domain.Job)) *Manager {
 		onUpdate: onUpdate,
 		cancels:  map[domain.JobID]context.CancelFunc{},
 	}
+}
+
+// SetLogDir tells the Manager to give every subsequent job its own log file at
+// <dir>/<jobID>.log. An empty dir disables per-job log files.
+func (m *Manager) SetLogDir(dir string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.logDir = dir
 }
 
 // Submit persists a queued job and starts running it in the background. It
@@ -89,6 +102,24 @@ func (m *Manager) run(ctx context.Context, job domain.Job, spec Spec) {
 		m.emit(job)
 	}
 
+	// Set up the per-job log file before the first mutate, so the job record
+	// carries its LogFile from the moment it starts running. A failure to
+	// create the file is non-fatal: the job still runs, logging to io.Discard.
+	var log io.Writer = io.Discard
+	m.mu.Lock()
+	logDir := m.logDir
+	m.mu.Unlock()
+	if logDir != "" {
+		if err := os.MkdirAll(logDir, 0o755); err == nil {
+			path := filepath.Join(logDir, string(job.ID)+".log")
+			if f, err := os.Create(path); err == nil {
+				job.LogFile = path
+				log = f
+				defer f.Close()
+			}
+		}
+	}
+
 	mutate(func(j *domain.Job) {
 		t := time.Now().UTC()
 		j.Status = domain.JobRunning
@@ -102,7 +133,7 @@ func (m *Manager) run(ctx context.Context, job domain.Job, spec Spec) {
 			}
 			j.Progress = clamp01(f)
 		})
-	})
+	}, log)
 
 	mutate(func(j *domain.Job) {
 		t := time.Now().UTC()

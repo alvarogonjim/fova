@@ -5,8 +5,7 @@ package backends
 import (
 	"context"
 	"fmt"
-	"os"
-	"path/filepath"
+	"io"
 
 	"github.com/alvarogonjim/proteus/internal/backends/local"
 	"github.com/alvarogonjim/proteus/internal/backends/modal"
@@ -14,37 +13,23 @@ import (
 
 // Backend runs a protein tool with a JSON request and returns its JSON output.
 // The same input yields the same output schema regardless of implementation
-// (the backend-symmetry guarantee, SPECS §13.2).
+// (the backend-symmetry guarantee, SPECS §13.2). It also tees the tool's output
+// to log (the job's log file, or io.Discard).
 type Backend interface {
 	Name() string
-	Run(ctx context.Context, tool string, input []byte) ([]byte, error)
+	Run(ctx context.Context, tool string, input []byte, log io.Writer) ([]byte, error)
 }
 
-// localBackend runs tools via the SP3 uv-managed local runner.
-type localBackend struct{ runner *local.Runner }
+// localBackend runs design tools via per-tool adapters (local.RunDesign).
+type localBackend struct{ registry *local.Registry }
 
 func (b *localBackend) Name() string { return "local" }
 
-func (b *localBackend) Run(ctx context.Context, tool string, input []byte) ([]byte, error) {
-	dir, err := os.MkdirTemp("", "proteus-run-*")
-	if err != nil {
-		return nil, err
-	}
-	defer os.RemoveAll(dir)
-	reqPath := filepath.Join(dir, "request.json")
-	if err := os.WriteFile(reqPath, input, 0o644); err != nil {
-		return nil, err
-	}
-	// The recipes use different placeholder names for the request file; fill
-	// every common one to the same path (unused names are simply ignored).
-	out, err := b.runner.Run(ctx, tool, map[string]string{
-		"input_json":  reqPath,
-		"args_file":   reqPath,
-		"input_yaml":  reqPath,
-		"input_fasta": reqPath,
-		"out_dir":     dir,
-	})
-	return []byte(out), err
+func (b *localBackend) Run(ctx context.Context, tool string, input []byte, log io.Writer) ([]byte, error) {
+	out, err := local.RunDesign(ctx, b.registry, tool, input)
+	// Tee the tool's output to the job log.
+	_, _ = log.Write(out)
+	return out, err
 }
 
 // modalBackend runs tools via the SP4 Modal client.
@@ -52,8 +37,10 @@ type modalBackend struct{ client *modal.Client }
 
 func (b *modalBackend) Name() string { return "modal" }
 
-func (b *modalBackend) Run(ctx context.Context, tool string, input []byte) ([]byte, error) {
+func (b *modalBackend) Run(ctx context.Context, tool string, input []byte, log io.Writer) ([]byte, error) {
 	out, err := b.client.Run(ctx, tool, input)
+	// Write the returned payload to the job log.
+	_, _ = log.Write([]byte(out))
 	return []byte(out), err
 }
 
@@ -66,7 +53,7 @@ func Select(computeBackend, home string) (Backend, error) {
 		if err != nil {
 			return nil, err
 		}
-		return &localBackend{runner: local.NewRunner(reg)}, nil
+		return &localBackend{registry: reg}, nil
 	case "modal":
 		return &modalBackend{client: modal.NewClientFromEnv()}, nil
 	default:

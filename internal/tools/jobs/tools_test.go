@@ -3,6 +3,7 @@ package jobs
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -26,7 +27,7 @@ func newTestManagerWithJob(t *testing.T) (*jobmgr.Manager, domain.JobID) {
 	id, err := m.Submit(jobmgr.Spec{
 		Kind: domain.JobCompute, Tool: "design.bindcraft", Backend: "local",
 		Input: []byte(`{}`),
-		Run: func(ctx context.Context, progress func(float64)) ([]byte, error) {
+		Run: func(ctx context.Context, progress func(float64), log io.Writer) ([]byte, error) {
 			return []byte(`{"designs":3}`), nil
 		},
 	})

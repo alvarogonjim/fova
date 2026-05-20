@@ -38,6 +38,14 @@ type TurnErrorMsg struct{ Err error }
 // ConfirmRequestMsg asks the TUI to confirm a sensitive tool call.
 type ConfirmRequestMsg struct{ Prompt string }
 
+// ConfirmContextMsg precedes a ConfirmRequestMsg on the bus, carrying the tool
+// name and raw input so the TUI can render a tool-specific confirmation (such
+// as the rich Adaptyv submit modal) instead of the generic prompt.
+type ConfirmContextMsg struct {
+	Tool  string
+	Input json.RawMessage
+}
+
 // Loop is the ReAct agent loop.
 type Loop struct {
 	provider llm.Provider
@@ -126,6 +134,7 @@ func (l *Loop) executeTool(ctx context.Context, tc llm.ToolCall) string {
 		return "error: cancelled by user"
 	}
 	if tool.RequiresConfirmation(input) {
+		l.bus <- ConfirmContextMsg{Tool: tc.Name, Input: input}
 		if !l.confirm("Run " + tc.Name + "? " + string(input)) {
 			l.bus <- ToolDoneMsg{Name: tc.Name, Display: "declined by user"}
 			return "error: user declined to run " + tc.Name

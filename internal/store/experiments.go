@@ -23,6 +23,23 @@ func (s *Store) InsertExperiment(e domain.Experiment) error {
 	return err
 }
 
+// UpdateExperiment overwrites the stored row for e.ID with e's current state.
+// It is used by the webhook receiver to apply status and result updates.
+func (s *Store) UpdateExperiment(e domain.Experiment) error {
+	body, err := json.Marshal(e)
+	if err != nil {
+		return err
+	}
+	_, err = s.db.Exec(
+		`UPDATE experiments SET backend=?, external_id=?, assay_type=?, target_id=?,
+		   target_name=?, submitted=?, status=?, cost_usd=?, body=? WHERE id=?`,
+		e.Backend, e.ExternalID, e.AssayType, e.TargetID, e.TargetName,
+		e.SubmittedAt.UTC().Format(timeLayout), e.Status, e.CostUSD, string(body),
+		string(e.ID),
+	)
+	return err
+}
+
 // GetExperiment returns one experiment by ID.
 func (s *Store) GetExperiment(id domain.ExperimentID) (domain.Experiment, error) {
 	var body string

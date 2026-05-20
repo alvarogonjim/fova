@@ -82,3 +82,9 @@ func TestJobAndPlanCompile(t *testing.T) {
 	_ = Message{ID: "m1", Role: "user", ToolCalls: []ToolCall{{ID: "tc1", Input: json.RawMessage(`{}`)}}}
 	_ = Session{ID: "s1", ProjectID: "default"}
 }
+
+func TestJobSetupKind(t *testing.T) {
+	if JobSetup != "setup" {
+		t.Fatalf("JobSetup = %q, want \"setup\"", JobSetup)
+	}
+}

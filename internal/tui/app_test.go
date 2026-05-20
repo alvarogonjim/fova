@@ -2,9 +2,11 @@ package tui
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -16,7 +18,11 @@ import (
 )
 
 func newTestApp() *Model {
-	return New(tools.NewRegistry(), llm.NewModelRegistry(), agent.SystemPrompt, nil)
+	return New(Deps{
+		Registry:     tools.NewRegistry(),
+		Models:       llm.NewModelRegistry(),
+		SystemPrompt: agent.SystemPrompt,
+	})
 }
 
 func TestAppPersistsSessionAndMessages(t *testing.T) {
@@ -26,7 +32,12 @@ func TestAppPersistsSessionAndMessages(t *testing.T) {
 	}
 	defer st.Close()
 
-	m := New(tools.NewRegistry(), llm.NewModelRegistry(), agent.SystemPrompt, st)
+	m := New(Deps{
+		Registry:     tools.NewRegistry(),
+		Models:       llm.NewModelRegistry(),
+		SystemPrompt: agent.SystemPrompt,
+		Store:        st,
+	})
 	if m.sessionID == "" {
 		t.Fatal("New with a store must create a session row")
 	}
@@ -124,7 +135,12 @@ func TestAppRefreshLoadsPanelsFromStore(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	m := New(tools.NewRegistry(), llm.NewModelRegistry(), agent.SystemPrompt, st)
+	m := New(Deps{
+		Registry:     tools.NewRegistry(),
+		Models:       llm.NewModelRegistry(),
+		SystemPrompt: agent.SystemPrompt,
+		Store:        st,
+	})
 	m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
 	// A refresh tick reloads the panels from the store.
 	m.Update(refreshMsg{})
@@ -147,8 +163,8 @@ func TestAppWideLayoutShowsPanels(t *testing.T) {
 	m := newTestApp()
 	m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
 	view := m.View()
-	if !strings.Contains(view, "JOBS") || !strings.Contains(view, "DESIGNS") {
-		t.Errorf("wide layout must show the JOBS and DESIGNS panels:\n%s", view)
+	if !strings.Contains(view, "jobs") || !strings.Contains(view, "designs") {
+		t.Errorf("wide layout must show the jobs and designs panels:\n%s", view)
 	}
 }
 
@@ -175,7 +191,12 @@ func TestAppPlanCommandShowsPersistedPlan(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	m := New(tools.NewRegistry(), llm.NewModelRegistry(), agent.SystemPrompt, st)
+	m := New(Deps{
+		Registry:     tools.NewRegistry(),
+		Models:       llm.NewModelRegistry(),
+		SystemPrompt: agent.SystemPrompt,
+		Store:        st,
+	})
 	m.runSlashCommand("plan", "")
 	out := m.chat.renderEntries()
 	if !contains(out, "p_view") || !contains(out, "design.bindcraft") {
@@ -196,7 +217,12 @@ func TestAppPlanApprove(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	m := New(tools.NewRegistry(), llm.NewModelRegistry(), agent.SystemPrompt, st)
+	m := New(Deps{
+		Registry:     tools.NewRegistry(),
+		Models:       llm.NewModelRegistry(),
+		SystemPrompt: agent.SystemPrompt,
+		Store:        st,
+	})
 	m.runSlashCommand("plan", "approve")
 	out := m.chat.renderEntries()
 	if !contains(out, "p_appr approved") {
@@ -232,6 +258,83 @@ func TestAppOtherSlashStubsRemain(t *testing.T) {
 	out := m.chat.renderEntries()
 	if !contains(out, "later Proteus milestone") {
 		t.Fatalf("/jobs should still be a stub:\n%s", out)
+	}
+}
+
+func TestRunSlashCommandRoutesSetupCommands(t *testing.T) {
+	// Each setup command must reach its handler — not the "later milestone"
+	// stub or the unknown-command default.
+	for _, cmd := range []string{"doctor", "tools", "install", "uninstall", "modal"} {
+		m := newSetupTestModel(t)
+		before := len(m.chat.entries)
+		m.runSlashCommand(cmd, "")
+		if len(m.chat.entries) <= before {
+			t.Errorf("/%s produced no chat output — not routed?", cmd)
+			continue
+		}
+		last := m.chat.entries[len(m.chat.entries)-1].text
+		if strings.Contains(last, "later Proteus milestone") ||
+			strings.Contains(last, "unknown command") {
+			t.Errorf("/%s hit the stub/unknown path: %q", cmd, last)
+		}
+	}
+}
+
+func TestAppSubmitConfirmShowsRichModal(t *testing.T) {
+	m := newTestApp()
+	input := `{"target_id":"comp-her2","assay_type":"binding","sequences":[{"name":"d1","sequence":"MAQVQL"}]}`
+	m.Update(agent.ConfirmContextMsg{Tool: "lab.submit_experiment", Input: []byte(input)})
+	m.Update(agent.ConfirmRequestMsg{Prompt: "Run lab.submit_experiment?"})
+	if m.overlay != overlaySubmit {
+		t.Fatalf("lab.submit_experiment should open the rich submit overlay, got %v", m.overlay)
+	}
+	if m.submit.AssayType != "binding" || len(m.submit.Sequences) != 1 {
+		t.Fatalf("submit modal not populated from the tool input: %+v", m.submit)
+	}
+}
+
+func TestAppGenericConfirmForOtherTools(t *testing.T) {
+	m := newTestApp()
+	m.Update(agent.ConfirmContextMsg{Tool: "design.bindcraft", Input: []byte(`{}`)})
+	m.Update(agent.ConfirmRequestMsg{Prompt: "Run design.bindcraft?"})
+	if m.overlay != overlayConfirm {
+		t.Fatalf("a non-lab tool should use the generic confirm overlay, got %v", m.overlay)
+	}
+}
+
+func TestAppRefreshShowsJobLogBlock(t *testing.T) {
+	m := newTestApp()
+	logf := filepath.Join(t.TempDir(), "j.log")
+	if err := os.WriteFile(logf, []byte("step one\nstep two\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	started := time.Now().UTC()
+	m.jobs.setJobs([]domain.Job{{
+		ID: "j_demo", Tool: "install bindcraft", Status: domain.JobRunning,
+		Created: time.Now().UTC(), Started: &started, LogFile: logf,
+	}})
+	m.Update(refreshMsg{})
+	out := m.chat.renderEntries()
+	if !contains(out, "install bindcraft") || !contains(out, "step two") {
+		t.Fatalf("expected an in-chat job-log block with the tool name and a log line:\n%s", out)
+	}
+}
+
+func TestAppTabFocusesRunningJob(t *testing.T) {
+	m := newTestApp()
+	m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	started := time.Now().UTC()
+	m.jobs.setJobs([]domain.Job{{
+		ID: "j_run", Tool: "design.bindcraft", Status: domain.JobRunning,
+		Created: time.Now().UTC(), Started: &started, LogFile: "",
+	}})
+	m.Update(tea.KeyMsg{Type: tea.KeyTab}) // chat → the running job
+	if m.overlay != overlayJobLog || m.jobLogID != "j_run" {
+		t.Fatalf("Tab should focus the running job's log overlay; overlay=%v jobLogID=%q", m.overlay, m.jobLogID)
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyEsc}) // overlay → back to chat
+	if m.overlay != overlayNone {
+		t.Fatalf("Esc should close the job-log overlay, got %v", m.overlay)
 	}
 }
 

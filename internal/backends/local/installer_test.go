@@ -1,6 +1,7 @@
 package local
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"strings"
@@ -92,4 +93,25 @@ func TestInstallerRemove(t *testing.T) {
 func TestUVPath(t *testing.T) {
 	// UVPath must not panic and returns ok=false cleanly when uv is absent.
 	_, _ = UVPath()
+}
+
+func TestInstallerInstallLoggedWritesStepOutput(t *testing.T) {
+	home := t.TempDir()
+	reg, _ := LoadRegistry(home)
+	inst := NewInstaller(reg)
+	inst.ensureUV = func(ctx context.Context) error { return nil }
+	inst.run = func(ctx context.Context, dir, command string) (string, error) {
+		return "step-output-here", nil
+	}
+
+	var log bytes.Buffer
+	if err := inst.InstallLogged(context.Background(), "ipsae", &log); err != nil {
+		t.Fatalf("InstallLogged: %v", err)
+	}
+	if !strings.Contains(log.String(), "step-output-here") {
+		t.Errorf("log missing step output, got: %q", log.String())
+	}
+	if !inst.Status("ipsae").Installed {
+		t.Error("InstallLogged should mark the tool installed")
+	}
 }

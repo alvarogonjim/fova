@@ -174,6 +174,11 @@ func (c *Corpus) cmdAdd(ctx context.Context, in corpusInput, result resultFn) (t
 		if err != nil {
 			text = "" // best-effort: store the paper anyway
 		}
+		if text == "" {
+			// Offline/rate-limited: fall back to the abstract so the paper
+			// is still searchable, greppable and mappable.
+			text = p.Abstract
+		}
 		meta, _ := json.Marshal(p)
 		source := p.Source
 		if source == "" {
@@ -190,6 +195,8 @@ func (c *Corpus) cmdAdd(ctx context.Context, in corpusInput, result resultFn) (t
 			Metadata:  string(meta),
 			Added:     time.Now().UTC(),
 		}
+		// The SQLite insert and the bleve index update are not transactional:
+		// if indexing fails the row exists but is unindexed (best-effort).
 		if err := c.st.InsertCorpusPaper(cp); err != nil {
 			return tools.Result{}, err
 		}
@@ -206,6 +213,9 @@ func (c *Corpus) cmdAdd(ctx context.Context, in corpusInput, result resultFn) (t
 
 // --- search ---
 
+// cmdSearch ranks papers via the bleve analyzer (tokenized/stemmed), whereas
+// cmdGrep matches a literal Go regex: they scan the same store rows but may
+// rank or match differently.
 func (c *Corpus) cmdSearch(in corpusInput, result resultFn) (tools.Result, error) {
 	if in.Query == "" {
 		return tools.Result{}, fmt.Errorf("knowledge.corpus: query is required for search")
@@ -247,6 +257,8 @@ func (c *Corpus) cmdSearch(in corpusInput, result resultFn) (tools.Result, error
 
 // --- grep ---
 
+// cmdGrep matches a literal Go regex against the same store rows as cmdSearch;
+// unlike search it does no analyzer tokenizing/stemming, so results may differ.
 func (c *Corpus) cmdGrep(in corpusInput, result resultFn) (tools.Result, error) {
 	if in.Pattern == "" {
 		return tools.Result{}, fmt.Errorf("knowledge.corpus: pattern is required for grep")
@@ -294,6 +306,10 @@ func (c *Corpus) cmdMap(ctx context.Context, in corpusInput, result resultFn) (t
 	var wg sync.WaitGroup
 	var mapErr error
 	var errMu sync.Mutex
+	// Cancel in-flight and queued workers as soon as one Map call errors so
+	// we stop wasting (possibly paid) LLM calls.
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 	for i, p := range papers {
 		wg.Add(1)
 		sem <- struct{}{}
@@ -307,6 +323,7 @@ func (c *Corpus) cmdMap(ctx context.Context, in corpusInput, result resultFn) (t
 					mapErr = err
 				}
 				errMu.Unlock()
+				cancel()
 				return
 			}
 			out[i] = mapResult{PaperID: p.ID, Answer: ans}
@@ -463,6 +480,19 @@ func (c *Corpus) openIndex() (bleve.Index, error) {
 	}
 	c.index = idx
 	return idx, nil
+}
+
+// Close releases the bleve index if it was lazily opened; safe to call when
+// the index was never opened and safe to call more than once.
+func (c *Corpus) Close() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.index == nil {
+		return nil
+	}
+	idx := c.index
+	c.index = nil
+	return idx.Close()
 }
 
 // indexPaper adds one paper to the bleve full-text index.

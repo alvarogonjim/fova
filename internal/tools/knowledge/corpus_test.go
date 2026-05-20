@@ -198,3 +198,50 @@ func TestCorpusUnknownCommand(t *testing.T) {
 		t.Fatal("expected error for unknown command")
 	}
 }
+
+// TestCorpusAddFallsBackToAbstract verifies that a paper whose FetchText
+// returns empty is still stored and indexed using its abstract, so it stays
+// searchable, greppable and readable.
+func TestCorpusAddFallsBackToAbstract(t *testing.T) {
+	c, res := newTestCorpus(t, map[string]string{
+		"10.1/abs": "", // FetchText returns ("", nil)
+	})
+	rid := res.Put("europepmc", []Paper{
+		{ID: "10.1/abs", Title: "Folding paper", Source: "europepmc",
+			Abstract: "alpha helix folding kinetics"},
+	})
+	out := runCmd(t, c, `{"command":"add","from_search":"`+rid+`"}`)
+	if int(out["added"].(float64)) != 1 {
+		t.Fatalf("added = %v, want 1", out["added"])
+	}
+
+	read := runCmd(t, c, `{"command":"read","paper_id":"10.1/abs"}`)
+	if read["full_text"].(string) != "alpha helix folding kinetics" {
+		t.Fatalf("read full_text = %q, want the abstract", read["full_text"])
+	}
+
+	grepped := runCmd(t, c, `{"command":"grep","pattern":"folding"}`)
+	if int(grepped["count"].(float64)) != 1 {
+		t.Fatalf("grep count = %v, want 1", grepped["count"])
+	}
+
+	searched := runCmd(t, c, `{"command":"search","query":"folding"}`)
+	if int(searched["count"].(float64)) != 1 {
+		t.Fatalf("search count = %v, want 1", searched["count"])
+	}
+}
+
+// TestCorpusClose verifies Close is nil-safe before the index is opened and
+// after an add (which lazily opens the index).
+func TestCorpusClose(t *testing.T) {
+	c, _ := newTestCorpus(t, nil)
+	if err := c.Close(); err != nil {
+		t.Fatalf("Close on fresh corpus: %v", err)
+	}
+
+	c2, _ := newTestCorpus(t, map[string]string{"10.1/aaa": "alpha helix"})
+	runCmd(t, c2, `{"command":"add","paper_ids":["10.1/aaa"]}`)
+	if err := c2.Close(); err != nil {
+		t.Fatalf("Close after add: %v", err)
+	}
+}

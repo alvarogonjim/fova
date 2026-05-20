@@ -60,7 +60,8 @@ CREATE TABLE IF NOT EXISTS jobs (
     cost_usd    REAL NOT NULL DEFAULT 0,
     input       TEXT NOT NULL,
     output      TEXT,
-    error       TEXT
+    error       TEXT,
+    log_file    TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status, created);

@@ -3,6 +3,7 @@ package design
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"path/filepath"
 	"testing"
 	"time"
@@ -17,7 +18,8 @@ import (
 type stubBackend struct{ output string }
 
 func (s stubBackend) Name() string { return "stub" }
-func (s stubBackend) Run(ctx context.Context, tool string, input []byte) ([]byte, error) {
+func (s stubBackend) Run(ctx context.Context, tool string, input []byte, log io.Writer) ([]byte, error) {
+	_, _ = log.Write(input)
 	return []byte(s.output), nil
 }
 
@@ -111,4 +113,98 @@ func TestDesignToolsImplementToolInterface(t *testing.T) {
 	var _ tools.Tool = NewBindCraftTool(mgr, backend, st)
 	var _ tools.Tool = NewRFdiffusionTool(mgr, backend, st)
 	var _ tools.Tool = NewProteinMPNNTool(mgr, backend, st)
+	var _ tools.Tool = NewRFAntibodyTool(mgr, backend, st)
+	var _ tools.Tool = NewChai2Tool(mgr, backend, st)
+	var _ tools.Tool = NewRFdiffusion2Tool(mgr, backend, st)
+	var _ tools.Tool = NewLigandMPNNTool(mgr, backend, st)
+}
+
+// TestAntibodyEnzymeToolMetadata checks the v0.4 antibody and enzyme design
+// tools report the right names and persist designs with the right origin and
+// application.
+func TestAntibodyEnzymeToolMetadata(t *testing.T) {
+	// Every new tool must report its declared name.
+	for _, tc := range []struct {
+		newTool func(*jobs.Manager, *store.Store, stubBackend) *designTool
+		name    string
+	}{
+		{func(m *jobs.Manager, s *store.Store, b stubBackend) *designTool {
+			return NewRFAntibodyTool(m, b, s)
+		}, "design.rfantibody"},
+		{func(m *jobs.Manager, s *store.Store, b stubBackend) *designTool {
+			return NewChai2Tool(m, b, s)
+		}, "design.chai2"},
+		{func(m *jobs.Manager, s *store.Store, b stubBackend) *designTool {
+			return NewRFdiffusion2Tool(m, b, s)
+		}, "design.rfdiffusion2"},
+		{func(m *jobs.Manager, s *store.Store, b stubBackend) *designTool {
+			return NewLigandMPNNTool(m, b, s)
+		}, "design.ligandmpnn"},
+	} {
+		mgr, st, backend := newTestDeps(t, `{"designs":[]}`)
+		if got := tc.newTool(mgr, st, backend).Name(); got != tc.name {
+			t.Errorf("Name = %q, want %q", got, tc.name)
+		}
+	}
+
+	const stubOut = `{"designs":[{"sequence":{"A":"MAQVQL"},"structure_file":"d.pdb","scores":{"ipsae":0.7}}]}`
+
+	// One antibody tool and one enzyme tool must persist designs tagged with
+	// the matching origin and application.
+	for _, tc := range []struct {
+		newTool func(*jobs.Manager, *store.Store, stubBackend) *designTool
+		origin  domain.DesignOrigin
+		app     domain.Application
+	}{
+		{func(m *jobs.Manager, s *store.Store, b stubBackend) *designTool {
+			return NewRFAntibodyTool(m, b, s)
+		}, domain.OriginRFAntibody, domain.AppAntibody},
+		{func(m *jobs.Manager, s *store.Store, b stubBackend) *designTool {
+			return NewRFdiffusion2Tool(m, b, s)
+		}, domain.OriginRFDiff2MPNN, domain.AppEnzyme},
+	} {
+		mgr, st, backend := newTestDeps(t, stubOut)
+		tool := tc.newTool(mgr, st, backend)
+		res, err := tool.Execute(context.Background(), json.RawMessage(`{"target":"1ZWG"}`))
+		if err != nil {
+			t.Fatalf("Execute: %v", err)
+		}
+		waitJob(t, mgr, res.JobID)
+
+		designs, err := st.ListDesigns(store.DefaultProjectID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(designs) != 1 {
+			t.Fatalf("%s: expected 1 persisted design, got %d", tool.Name(), len(designs))
+		}
+		if designs[0].Origin != tc.origin {
+			t.Errorf("%s: design origin = %q, want %q", tool.Name(), designs[0].Origin, tc.origin)
+		}
+		if designs[0].Application != tc.app {
+			t.Errorf("%s: design application = %q, want %q", tool.Name(), designs[0].Application, tc.app)
+		}
+	}
+}
+
+func TestDesignToolSchemaAdvertisesContigs(t *testing.T) {
+	tool := NewRFdiffusionTool(nil, nil, nil)
+	props, ok := tool.InputSchema()["properties"].(map[string]any)
+	if !ok {
+		t.Fatal("InputSchema has no properties map")
+	}
+	if _, ok := props["contigs"]; !ok {
+		t.Error("InputSchema must advertise the contigs property")
+	}
+}
+
+func TestDesignToolSchemaAdvertisesSettings(t *testing.T) {
+	tool := NewBindCraftTool(nil, nil, nil)
+	props, ok := tool.InputSchema()["properties"].(map[string]any)
+	if !ok {
+		t.Fatal("InputSchema has no properties map")
+	}
+	if _, ok := props["settings"]; !ok {
+		t.Error("InputSchema must advertise the settings property")
+	}
 }

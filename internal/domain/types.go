@@ -40,6 +40,7 @@ type JobKind string
 const (
 	JobCompute JobKind = "compute"
 	JobLab     JobKind = "lab"
+	JobSetup   JobKind = "setup" // install / uninstall / modal deploy
 )
 
 type JobStatus string
@@ -232,6 +233,7 @@ type Job struct {
 	Input           []byte     `json:"input"`
 	Output          []byte     `json:"output,omitempty"`
 	Error           string     `json:"error,omitempty"`
+	LogFile         string     `json:"log_file,omitempty"`
 	ProducedDesigns []DesignID `json:"produced_designs,omitempty"`
 }
 
@@ -262,6 +264,16 @@ type ExperimentResult struct {
 	RSquared        *float64 `json:"r_squared,omitempty"`
 	NReplicates     int      `json:"n_replicates,omitempty"`
 	IsControl       bool     `json:"is_control"`
+}
+
+// WebhookEvent is one inbound webhook delivery (e.g. an Adaptyv results
+// notification). The raw Payload is retained verbatim for audit and replay.
+type WebhookEvent struct {
+	ID           string          `json:"id"`
+	ExperimentID ExperimentID    `json:"experiment_id"`
+	EventType    string          `json:"event_type"`
+	Received     time.Time       `json:"received"`
+	Payload      json.RawMessage `json:"payload"`
 }
 
 // --- Session and messages ---

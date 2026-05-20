@@ -30,7 +30,7 @@ disk_gb      = 0.5
 install_steps = [
   "git clone {{ repo }} .",
   "uv venv --python {{ python }} {{ venv_dir }}",
-  "uv pip install --python {{ venv_dir }}/bin/python --torch-backend=auto torch==2.4.1",
+  "uv pip install --python {{ venv_dir }}/bin/python --torch-backend=auto torch==2.8.0",
   "uv pip install --python {{ venv_dir }}/bin/python numpy",
 ]
 run_command = "{{ venv_dir }}/bin/python {{ install_dir }}/protein_mpnn_run.py @{{ args_file }}"
@@ -47,7 +47,7 @@ extra_data   = ["rfdiffusion_weights"]
 install_steps = [
   "git clone {{ repo }} .",
   "uv venv --python {{ python }} {{ venv_dir }}",
-  "uv pip install --python {{ venv_dir }}/bin/python --torch-backend=auto torch==2.4.1",
+  "uv pip install --python {{ venv_dir }}/bin/python --torch-backend=auto torch==2.8.0",
   "uv pip install --python {{ venv_dir }}/bin/python -e .",
   "uv pip install --python {{ venv_dir }}/bin/python -e env/SE3Transformer",
 ]
@@ -65,7 +65,7 @@ extra_data   = ["alphafold_params"]
 install_steps = [
   "git clone {{ repo }} .",
   "uv venv --python {{ python }} {{ venv_dir }}",
-  "uv pip install --python {{ venv_dir }}/bin/python --torch-backend=auto torch==2.4.1",
+  "uv pip install --python {{ venv_dir }}/bin/python --torch-backend=auto torch==2.8.0",
   "uv pip install --python {{ venv_dir }}/bin/python -r requirements.txt",
   "uv pip install --python {{ venv_dir }}/bin/python git+https://github.com/sokrypton/ColabDesign.git",
   "uv pip install --python {{ venv_dir }}/bin/python pyrosetta-installer",
@@ -84,7 +84,7 @@ disk_gb      = 1.2
 install_steps = [
   "git clone {{ repo }} .",
   "uv venv --python {{ python }} {{ venv_dir }}",
-  "uv pip install --python {{ venv_dir }}/bin/python --torch-backend=auto torch==2.4.1",
+  "uv pip install --python {{ venv_dir }}/bin/python --torch-backend=auto torch==2.8.0",
   "uv pip install --python {{ venv_dir }}/bin/python -r requirements.txt",
 ]
 run_command = "{{ venv_dir }}/bin/python {{ install_dir }}/run.py @{{ args_file }}"
@@ -100,7 +100,7 @@ disk_gb      = 6.0
 install_steps = [
   "git clone {{ repo }} .",
   "uv venv --python {{ python }} {{ venv_dir }}",
-  "uv pip install --python {{ venv_dir }}/bin/python --torch-backend=auto torch==2.4.1",
+  "uv pip install --python {{ venv_dir }}/bin/python --torch-backend=auto torch==2.8.0",
   "uv pip install --python {{ venv_dir }}/bin/python -r requirements.txt",
 ]
 run_command = "{{ venv_dir }}/bin/python {{ install_dir }}/scripts/rfantibody.py @{{ args_file }}"
@@ -116,7 +116,7 @@ disk_gb      = 6.5
 install_steps = [
   "git clone {{ repo }} .",
   "uv venv --python {{ python }} {{ venv_dir }}",
-  "uv pip install --python {{ venv_dir }}/bin/python --torch-backend=auto torch==2.4.1",
+  "uv pip install --python {{ venv_dir }}/bin/python --torch-backend=auto torch==2.8.0",
   "uv pip install --python {{ venv_dir }}/bin/python -e .",
 ]
 run_command = "{{ venv_dir }}/bin/python {{ install_dir }}/scripts/run.py @{{ args_file }}"

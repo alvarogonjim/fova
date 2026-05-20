@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"time"
 
 	"github.com/google/uuid"
@@ -48,6 +49,8 @@ func (t *designTool) InputSchema() map[string]any {
 			"target":      map[string]any{"type": "string", "description": "Target PDB ID or file path"},
 			"hotspots":    map[string]any{"type": "string", "description": "Target hotspot residues"},
 			"num_designs": map[string]any{"type": "integer", "description": "Number of designs to generate"},
+			"contigs":     map[string]any{"type": "string", "description": "RFdiffusion contig map (design.rfdiffusion only)"},
+			"settings":    map[string]any{"type": "object", "description": "BindCraft target-settings JSON (design.bindcraft only)"},
 		},
 	}
 }
@@ -69,8 +72,8 @@ func (t *designTool) Execute(_ context.Context, input json.RawMessage) (tools.Re
 		Tool:    t.name,
 		Backend: t.backend.Name(),
 		Input:   input,
-		Run: func(ctx context.Context, progress func(float64)) ([]byte, error) {
-			out, err := t.backend.Run(ctx, t.name, input)
+		Run: func(ctx context.Context, progress func(float64), log io.Writer) ([]byte, error) {
+			out, err := t.backend.Run(ctx, t.name, input, log)
 			if err != nil {
 				return nil, err
 			}

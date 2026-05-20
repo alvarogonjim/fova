@@ -8,18 +8,18 @@ import (
 )
 
 const jobColumns = `id, kind, tool, status, created, started, finished,
-	progress, backend, cost_usd, input, output, error`
+	progress, backend, cost_usd, input, output, error, log_file`
 
 // InsertJob persists a new job. project_id is always the default project (v0.2).
 func (s *Store) InsertJob(j domain.Job) error {
 	_, err := s.db.Exec(
 		`INSERT INTO jobs (id, project_id, kind, tool, status, created, started,
-		   finished, progress, backend, cost_usd, input, output, error)
-		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		   finished, progress, backend, cost_usd, input, output, error, log_file)
+		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		string(j.ID), string(DefaultProjectID), string(j.Kind), j.Tool, string(j.Status),
 		j.Created.UTC().Format(timeLayout), nullTime(j.Started), nullTime(j.Finished),
 		j.Progress, j.Backend, j.CostUSD, string(j.Input),
-		nullStr(string(j.Output)), nullStr(j.Error),
+		nullStr(string(j.Output)), nullStr(j.Error), nullStr(j.LogFile),
 	)
 	return err
 }
@@ -28,9 +28,10 @@ func (s *Store) InsertJob(j domain.Job) error {
 func (s *Store) UpdateJob(j domain.Job) error {
 	_, err := s.db.Exec(
 		`UPDATE jobs SET status=?, started=?, finished=?, progress=?,
-		   cost_usd=?, output=?, error=? WHERE id=?`,
+		   cost_usd=?, output=?, error=?, log_file=? WHERE id=?`,
 		string(j.Status), nullTime(j.Started), nullTime(j.Finished), j.Progress,
-		j.CostUSD, nullStr(string(j.Output)), nullStr(j.Error), string(j.ID),
+		j.CostUSD, nullStr(string(j.Output)), nullStr(j.Error), nullStr(j.LogFile),
+		string(j.ID),
 	)
 	return err
 }
@@ -83,11 +84,11 @@ func scanJob(row rowScanner) (domain.Job, error) {
 		j                         domain.Job
 		created                   string
 		started, finished, output sql.NullString
-		errText                   sql.NullString
+		errText, logFile          sql.NullString
 	)
 	if err := row.Scan(
 		&j.ID, &j.Kind, &j.Tool, &j.Status, &created, &started, &finished,
-		&j.Progress, &j.Backend, &j.CostUSD, &j.Input, &output, &errText,
+		&j.Progress, &j.Backend, &j.CostUSD, &j.Input, &output, &errText, &logFile,
 	); err != nil {
 		return domain.Job{}, err
 	}
@@ -106,6 +107,9 @@ func scanJob(row rowScanner) (domain.Job, error) {
 	}
 	if errText.Valid {
 		j.Error = errText.String
+	}
+	if logFile.Valid {
+		j.LogFile = logFile.String
 	}
 	return j, nil
 }

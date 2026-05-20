@@ -1480,37 +1480,50 @@ type Model struct {
 
 ### 10.2 Layout (terminal ≥ 100×30)
 
+The canonical layout is a two-column dashboard — a conversational chat column on
+the left, status panels (jobs, designs, wet-lab) stacked on the right. Unlike a
+coding agent, Proteus runs GPU jobs that take minutes and wet-lab experiments
+that span weeks, so a persistent dashboard earns its place.
+
+The visual language follows modern agent CLIs (Claude Code, OpenAI Codex CLI,
+Gemini CLI, OpenCode) — see §10.7: no full-screen frame, panels separated by a
+dim rule under a lowercase label, exactly one bordered element (the message
+input), a dim status footer, and a single accent colour.
+
 ```
-┌─ proteus · <project> ─────────────────────────────────────────────────┐ ← status bar
-│  Model: <model>  ·  Provider: <provider>  ·  $X.XX / HH:MM:SS         │
-├────────────────────────────────────────┬──────────────────────────────┤
-│                                        │  JOBS                        │
-│  Chat pane (streaming markdown,        │  ⟳ <tool> <id> <ETA>         │
-│  collapsible tool traces, inline       │  ✓ <tool> <id> <elapsed>     │
-│  images via Kitty/Sixel)               │                              │
-│                                        │  DESIGNS  (N)                │
-│                                        │  ┌──────────────────────────┐│
-│                                        │  │ ID    pLDDT ipSAE ipTM Lab│
-│                                        │  │ d_001 91.3  0.78  0.89 — ││
-│                                        │  └──────────────────────────┘│
-│                                        │                              │
-│                                        │  WET-LAB                     │
-│                                        │  <expt> · day N of ~21       │
-│                                        │                              │
-│  > _                                   │                              │
-├────────────────────────────────────────┴──────────────────────────────┤
-│  /model /skills /jobs /plan /designs /lab /export  ?: help  q: quit   │
-└───────────────────────────────────────────────────────────────────────┘
+ proteus · <project>
+
+  ● design a 60-residue binder against PD-L1       jobs ───────────────────────
+                                                    ⟳ rfdiffusion  c_8f2a  1m20s
+  ● I'll generate the backbone, then run             ▓▓▓▓▓░░░  ~4m
+    sequence design.                                ✓ proteinmpnn  c_8e10  2m04s
+
+    ⏺ rfdiffusion.generate(PD-L1, len 60)           designs · 3 ─────────────────
+    ⎿ submitted job c_8f2a · ~4 min                  d_001  plddt 91.3  ipsae 0.78
+                                                     d_002  plddt 88.1  ipsae 0.71
+  ✻ Designing the backbone… (12s · esc)
+                                                    wet-lab ──────────────────────
+                                                     expt_4 · day 3 of ~21
+
+ ╭─ message ──────────────────────────────────────────────────────────────────╮
+ │ ›                                                                           │
+ ╰─────────────────────────────────────────────────────────────────────────────╯
+   /model  /jobs  /designs  /doctor          claude-opus-4-7 · $0.42 · 14% ctx
 ```
 
-For terminals < 100 columns, collapse to chat-only with a `Tab` cycle through other panels.
+For terminals < 100 columns, collapse to the chat column alone with `Tab`
+cycling the jobs / designs / wet-lab panels; the message input, footer, and
+overlays are unchanged in the narrow layout.
+
+> **Versioning.** v0.1–v0.3 render this layout minimally (plain status bar,
+> static hint line, no spinner). v0.4 delivers the modern visual design
+> specified in §10.7; the mockup above is the v0.4 target.
 
 ### 10.3 Slash commands
 
 | Command | Function |
 |---|---|
-| `/model` | Fuzzy-pick model |
-| `/provider` | Switch provider |
+| `/model` | Fuzzy-pick a model (switches the provider too) |
 | `/skills` | List/inspect skills |
 | `/jobs` | Full jobs view |
 | `/designs` | Full designs browser |
@@ -1535,19 +1548,50 @@ For terminals < 100 columns, collapse to chat-only with a `Tab` cycle through ot
 | `Enter` | Send message / activate |
 | `Shift+Enter` | Newline in input |
 
-### 10.5 Theme
+### 10.5 Theme and design tokens
 
-`internal/tui/theme.go` — two themes (light/dark) auto-detected from terminal background. Adaptive colors via Lipgloss. Status colors:
+`internal/tui/theme.go` defines a **token palette** — semantic colour roles, not
+ad-hoc per-widget styles. All colours are `lipgloss.AdaptiveColor` so the TUI
+renders correctly on light and dark terminals (auto-detected from the
+background); when `$NO_COLOR` is set the palette collapses to the terminal
+default. No view code hard-codes a hex value — every style is derived from a
+token.
 
 ```go
-var (
-    StatusQueued    = lipgloss.AdaptiveColor{Light: "#9CA3AF", Dark: "#6B7280"}
-    StatusRunning   = lipgloss.AdaptiveColor{Light: "#2563EB", Dark: "#60A5FA"}
-    StatusSucceeded = lipgloss.AdaptiveColor{Light: "#059669", Dark: "#34D399"}
-    StatusFailed    = lipgloss.AdaptiveColor{Light: "#DC2626", Dark: "#F87171"}
-    StatusWarning   = lipgloss.AdaptiveColor{Light: "#D97706", Dark: "#FBBF24"}
-)
+// Palette is the v0.4 token set. The status colours keep their v0.2 hex
+// values; the foreground roles (Fg/FgMuted/FgSubtle/Border) are new in v0.4.
+type Palette struct {
+    Fg        lipgloss.AdaptiveColor // primary text
+    FgMuted   lipgloss.AdaptiveColor // tool output, hints, footer
+    FgSubtle  lipgloss.AdaptiveColor // section rules, placeholders, unfocused border
+    Accent    lipgloss.AdaptiveColor // the single brand colour (focused border, user)
+    Border    lipgloss.AdaptiveColor // input border when unfocused
+
+    Queued    lipgloss.AdaptiveColor
+    Running   lipgloss.AdaptiveColor
+    Succeeded lipgloss.AdaptiveColor
+    Failed    lipgloss.AdaptiveColor
+    Warning   lipgloss.AdaptiveColor
+}
+
+var DefaultPalette = Palette{
+    Fg:        lipgloss.AdaptiveColor{Light: "#1F2937", Dark: "#E5E7EB"},
+    FgMuted:   lipgloss.AdaptiveColor{Light: "#6B7280", Dark: "#9CA3AF"},
+    FgSubtle:  lipgloss.AdaptiveColor{Light: "#9CA3AF", Dark: "#4B5563"},
+    Accent:    lipgloss.AdaptiveColor{Light: "#7C3AED", Dark: "#A78BFA"},
+    Border:    lipgloss.AdaptiveColor{Light: "#D1D5DB", Dark: "#374151"},
+    Queued:    lipgloss.AdaptiveColor{Light: "#9CA3AF", Dark: "#6B7280"},
+    Running:   lipgloss.AdaptiveColor{Light: "#2563EB", Dark: "#60A5FA"},
+    Succeeded: lipgloss.AdaptiveColor{Light: "#059669", Dark: "#34D399"},
+    Failed:    lipgloss.AdaptiveColor{Light: "#DC2626", Dark: "#F87171"},
+    Warning:   lipgloss.AdaptiveColor{Light: "#D97706", Dark: "#FBBF24"},
+}
 ```
+
+The `Theme` struct (rendered `lipgloss.Style` values) is rebuilt from the
+palette. A single multi-theme picker is **out of scope until v0.5** (§20) — v0.4
+ships one adaptive palette. See §10.7 for the components that consume the
+tokens.
 
 ### 10.6 Inline graphics
 
@@ -1559,6 +1603,119 @@ var (
    - Sixel: `\x1b[c` device-attributes response includes `4`
 2. Wrap a PNG path with the appropriate escape sequence when rendering in the chat pane.
 3. Fallback: show file path with a hint (`press 'o' to open`).
+
+### 10.7 Modern TUI design (v0.4)
+
+v0.1–v0.3 ship a functional but minimal TUI. v0.4 raises the visual language to
+the standard set by modern agent CLIs (Claude Code, OpenAI Codex CLI, Gemini
+CLI, OpenCode) while keeping the dashboard layout of §10.2. Every item below is
+**additive rendering or input affordance** — no change to the agent loop, tool
+behaviour, slash-command semantics, or persistence.
+
+Each component is a self-contained Bubble Tea sub-model in its own file so the
+work parallelises cleanly; `internal/tui/app.go` only wires them together.
+
+#### 10.7.1 Visual language
+
+- **No full-screen frame.** The terminal background is the canvas; the v0.1–v0.3
+  outer box is removed.
+- **Panels are separated by a dim rule, not a box.** A lowercase label followed
+  by a horizontal run of `─` in `FgSubtle` (`jobs ─────────`). The nested box
+  around the designs table is removed.
+- **Exactly one bordered element:** the message input (§10.7.2).
+- **One accent colour.** Everything else is `Fg` / `FgMuted` / `FgSubtle`.
+- **Spacing over rules:** a blank line between chat entries; a one-space left
+  gutter on every line.
+
+#### 10.7.2 Message input — `internal/tui/commandbar.go`
+
+- The `textarea` is wrapped in a `lipgloss.RoundedBorder()` with the label
+  `message`.
+- Border colour: `Accent` when the input is focused and idle, `FgSubtle` when a
+  turn is running (the agent has the floor), `Border` otherwise.
+- Prompt glyph `›` in `FgMuted`; placeholder `Type a message, or / for commands`.
+- The static `slashCommandHints` line is **removed** — its role is taken by the
+  autocomplete popup (§10.7.3) and the footer (§10.7.6).
+
+#### 10.7.3 Slash-command autocomplete — `internal/tui/slashmenu.go` (new)
+
+- Typing `/` as the first character of the input opens a popup **above** the
+  input listing every slash command whose name has the typed text as a prefix,
+  each with a one-line description.
+- Keys: `↑/↓` move the selection, `Tab` completes the highlighted command into
+  the input, `Esc` dismisses the popup, `Enter` submits the line as typed;
+  typing narrows the list.
+- The popup is a `slashMenuModel`; it reuses the `pickerModel` row styling.
+- The command catalogue (name + description) is a single source-of-truth slice
+  in `internal/tui/commands.go`, also consumed by `/help` and the footer hint.
+
+#### 10.7.4 Thinking indicator — `internal/tui/spinner.go` (new)
+
+- While a turn is running (`Model.running`) or a tool is mid-call, a status line
+  renders directly above the message input:
+  `<spinner> <verb>… (<elapsed>s · esc to interrupt)`.
+- `<spinner>` cycles the Braille frames `⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏` on an ~80 ms `tea.Tick`.
+- `<verb>` is drawn from a small set (`Designing`, `Folding`, `Scoring`,
+  `Searching`, `Thinking`) selected by the active tool, defaulting to `Thinking`.
+- `<elapsed>` counts whole seconds since the turn began.
+- The indicator clears on `TurnDoneMsg` / `TurnErrorMsg`.
+
+#### 10.7.5 Tool-call traces — `internal/tui/chat.go`
+
+- A tool call renders as a header line `⏺ <tool>(<args>)` in `Fg`, followed by
+  dim `FgMuted` result lines indented under a `⎿` connector.
+- While running the header shows the spinner glyph; on completion it shows `⏺`
+  (ok) or `✗` (error) and appends ` (<duration>)`.
+- Result output is truncated to 6 lines; a truncated trace ends with
+  `… +N lines` in `FgSubtle`.
+- This replaces the v0.1 single-line `⚙ name → firstline` rendering.
+
+#### 10.7.6 Status footer & context meter — `internal/tui/statusbar.go`
+
+- The top bar is reduced to ` proteus · <project> ` in `Accent`.
+- A new **footer** renders below the input in `FgMuted`:
+  `<slash hints>   <model> · $<cost> · <NN>% context`.
+- The context meter is the running token estimate as a percentage of the active
+  model's context window; it turns `Warning` above 80%.
+- The model has a `headerView()` (top) and a `footerView()` (bottom); the v0.1
+  combined status bar is split accordingly.
+
+#### 10.7.7 Startup welcome — `internal/tui/chat.go` + `app.go`
+
+- On first render the chat pane shows a compact welcome block (≤4 lines) — not a
+  large ASCII banner:
+
+  ```
+  proteus v0.4 · de novo protein design
+  cwd: <dir>   model: <model>
+  Type a message, or / for commands.  ? for help.
+  ```
+
+- It is a chat entry of a new `entryWelcome` kind, cleared by `/clear` like any
+  other history.
+
+#### 10.7.8 Panel polish — `internal/tui/jobs.go`, `designs.go`
+
+- Section headers use the dim-label-plus-rule style of §10.7.1.
+- Empty states are actionable: `no jobs yet · /install a tool or ask the agent
+  to design`; `no designs yet · ask the agent to design binders`.
+- A running job with a known ETA shows a unicode progress bar (`▓▓▓▓▓░░░`) sized
+  to the elapsed-over-ETA ratio.
+- Glyph set — single source of truth in `theme.go`:
+
+  | State | Glyph | Token |
+  |---|---|---|
+  | queued | `·` | `Queued` |
+  | running | spinner / `⟳` | `Running` |
+  | succeeded | `✓` | `Succeeded` |
+  | failed | `✗` | `Failed` |
+  | cancelled | `⊘` | `FgMuted` |
+
+#### 10.7.9 Out of scope for v0.4
+
+- No multi-theme picker (full theming stays v0.5, §20) — one adaptive palette.
+- No mouse support.
+- No change to slash-command behaviour, the agent loop, tools, or persistence.
 
 ---
 
@@ -2306,11 +2463,12 @@ Each milestone is a tagged release. Acceptance criteria are explicit and testabl
 2. Plan shows: target, application, method, filter thresholds, cost estimate, evidence papers with DOIs.
 3. User can approve, edit, or cancel the plan.
 4. Corpus persists per project; `knowledge.corpus.grep` returns results consistent with `corpus.search`.
-5. Three additional LLM providers (OpenAI, Google) work via `/provider`.
+5. Three additional LLM providers (OpenAI, Google) work via `/model`.
 
 ### v0.4 — "Closing the loop" (Week 7–8)
 
-**Scope:** Adaptyv integration, antibody + enzyme tracks (with installer recipes).
+**Scope:** Adaptyv integration, antibody + enzyme tracks (with installer
+recipes), and the modern TUI visual redesign (§10.7).
 
 **Implements:**
 - `internal/tools/lab/` (adaptyv.go + webhook.go)
@@ -2320,6 +2478,10 @@ Each milestone is a tagged release. Acceptance criteria are explicit and testabl
 - `internal/skills/builtin/design-antibody.md`, `design-enzyme.md`, `submit-to-adaptyv.md`, `close-the-loop.md`
 - Wet-lab panel in TUI
 - Webhook receiver
+- **Modern TUI design (§10.7):** design-token palette (`theme.go`), bordered
+  message input, slash-command autocomplete (`slashmenu.go`, `commands.go`),
+  thinking indicator (`spinner.go`), tree-connected tool traces, status footer
+  with a context meter, startup welcome, and panel polish.
 
 **Acceptance criteria:**
 1. `proteus auth adaptyv` stores token in keychain.
@@ -2329,6 +2491,15 @@ Each milestone is a tagged release. Acceptance criteria are explicit and testabl
 5. `proteus install rfantibody` and `proteus install ligandmpnn` succeed.
 6. Antibody track: user can design VHHs against PDB 6M0J using `design.rfantibody`; designs scored with `score.ipsae` even though AlphaFold2 is not the filter (ipSAE works on the RF2-AB output).
 7. Enzyme track: user can design enzymes around a theozyme using `design.rfdiffusion2` + `design.ligandmpnn` with `fold.chai1` as the validator.
+8. The TUI renders the §10.7 modern design: no full-screen frame, a single
+   bordered message input, dim section rules between panels, and a status
+   footer carrying the context meter.
+9. Typing `/` opens the slash-command autocomplete popup; `↑/↓` select, `Tab`
+   completes, `Esc` dismisses.
+10. A running turn shows an animated thinking indicator with elapsed seconds and
+    an `esc to interrupt` hint; tool calls render as `⏺`/`⎿` traces with a
+    duration.
+11. `go test ./...` passes and `go vet ./...` is clean after the redesign.
 
 ### v0.5 — "Polish" (Week 9–10)
 

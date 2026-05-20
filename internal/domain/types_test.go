@@ -1,6 +1,10 @@
 package domain
 
-import "testing"
+import (
+	"encoding/json"
+	"testing"
+	"time"
+)
 
 func TestValidAA(t *testing.T) {
 	cases := []struct {
@@ -44,5 +48,43 @@ func TestNewToolCallRef(t *testing.T) {
 	}
 	if a.Tool != "fold.esmfold" || a.InputHash == "" || a.CallID == "" {
 		t.Errorf("ToolCallRef not fully populated: %+v", a)
+	}
+}
+
+func TestDesignJSONRoundTrip(t *testing.T) {
+	d := Design{
+		ID:          "d_0001",
+		ProjectID:   "default",
+		Created:     time.Date(2026, 5, 16, 12, 0, 0, 0, time.UTC),
+		Origin:      OriginBindCraft,
+		Application: AppBinder,
+		Sequence:    Sequence{Chains: map[string]string{"A": "MAQ"}},
+		Scores:      map[string]float64{"ipsae": 0.7},
+		Provenance:  []ToolCallRef{{Tool: "design.bindcraft"}},
+	}
+	raw, err := json.Marshal(d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got Design
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.ID != d.ID || got.Origin != OriginBindCraft || got.Scores["ipsae"] != 0.7 {
+		t.Fatalf("round-trip mismatch: %+v", got)
+	}
+}
+
+func TestJobAndPlanCompile(t *testing.T) {
+	_ = Job{ID: "j1", Kind: JobCompute, Status: JobQueued, Input: []byte(`{}`)}
+	_ = DesignPlan{ID: "p1", Application: AppEnzyme, Filters: FilterConfig{MinIPSAE: 0.5}}
+	_ = Experiment{ID: "e1", Designs: []DesignID{"d_0001"}}
+	_ = Message{ID: "m1", Role: "user", ToolCalls: []ToolCall{{ID: "tc1", Input: json.RawMessage(`{}`)}}}
+	_ = Session{ID: "s1", ProjectID: "default"}
+}
+
+func TestJobSetupKind(t *testing.T) {
+	if JobSetup != "setup" {
+		t.Fatalf("JobSetup = %q, want \"setup\"", JobSetup)
 	}
 }

@@ -3,16 +3,33 @@ package agent
 
 import "github.com/alvarogonjim/proteus/internal/llm"
 
+// MessageSink persists messages as a session accumulates them.
+// Implementations must be safe to call from the agent goroutine.
+type MessageSink interface {
+	PersistMessage(role, content, toolCallID string)
+}
+
 // Session holds the conversation history for one agent run.
 // v0.1 keeps everything in memory with no compaction.
 type Session struct {
 	system   string
 	messages []llm.Message
+	sink     MessageSink
 }
 
 // NewSession starts a session with the given system prompt.
 func NewSession(systemPrompt string) *Session {
 	return &Session{system: systemPrompt}
+}
+
+// SetSink attaches a persistence sink. Messages added after this call are
+// forwarded to it. A nil sink (the default) disables persistence.
+func (s *Session) SetSink(sink MessageSink) { s.sink = sink }
+
+func (s *Session) persist(role, content, toolCallID string) {
+	if s.sink != nil {
+		s.sink.PersistMessage(role, content, toolCallID)
+	}
 }
 
 // SystemPrompt returns the system prompt.
@@ -28,6 +45,7 @@ func (s *Session) Messages() []llm.Message {
 // AddUserMessage appends a user turn.
 func (s *Session) AddUserMessage(content string) {
 	s.messages = append(s.messages, llm.Message{Role: "user", Content: content})
+	s.persist("user", content, "")
 }
 
 // AddAssistantMessage appends an assistant turn from a model response.
@@ -37,6 +55,7 @@ func (s *Session) AddAssistantMessage(resp llm.ChatResponse) {
 		Content:   resp.Text,
 		ToolCalls: resp.ToolCalls,
 	})
+	s.persist("assistant", resp.Text, "")
 }
 
 // AddToolResult appends a tool-result turn answering a tool call.
@@ -46,4 +65,5 @@ func (s *Session) AddToolResult(toolCallID, content string) {
 		Content:    content,
 		ToolCallID: toolCallID,
 	})
+	s.persist("tool", content, toolCallID)
 }

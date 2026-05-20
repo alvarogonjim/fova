@@ -1,10 +1,10 @@
 // Package domain holds the core data types shared across Proteus.
-// v0.1 implements only the minimal subset needed by the tool registry.
 package domain
 
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"strings"
 	"time"
@@ -13,9 +13,52 @@ import (
 	"github.com/google/uuid"
 )
 
-// Identifiers.
+// --- Identifiers ---
+
 type DesignID string
+type PlanID string
 type JobID string
+type SessionID string
+type ProjectID string
+type ExperimentID string
+
+// --- Application areas ---
+
+type Application string
+
+const (
+	AppBinder   Application = "binder"
+	AppAntibody Application = "antibody"
+	AppEnzyme   Application = "enzyme"
+	AppRedesign Application = "redesign"
+)
+
+// --- Tool / job kinds ---
+
+type JobKind string
+
+const (
+	JobCompute JobKind = "compute"
+	JobLab     JobKind = "lab"
+	JobSetup   JobKind = "setup" // install / uninstall / modal deploy
+)
+
+type JobStatus string
+
+const (
+	JobQueued    JobStatus = "queued"
+	JobRunning   JobStatus = "running"
+	JobSucceeded JobStatus = "succeeded"
+	JobFailed    JobStatus = "failed"
+	JobCancelled JobStatus = "cancelled"
+)
+
+// --- Sequence and structure ---
+
+// Sequence is one or more amino-acid chains keyed by chain ID.
+type Sequence struct {
+	Chains map[string]string `json:"chains"`
+}
 
 // validResidues lists the 20 standard amino-acid one-letter codes.
 const validResidues = "ACDEFGHIKLMNPQRSTVWY"
@@ -33,11 +76,6 @@ func ValidAA(s string) bool {
 	return true
 }
 
-// Sequence is one or more amino-acid chains keyed by chain ID.
-type Sequence struct {
-	Chains map[string]string `json:"chains"`
-}
-
 // Validate checks every chain holds a valid amino-acid sequence.
 func (s Sequence) Validate() error {
 	if len(s.Chains) == 0 {
@@ -50,6 +88,49 @@ func (s Sequence) Validate() error {
 	}
 	return nil
 }
+
+type ResidueRef struct {
+	Chain    string `json:"chain"`
+	Position int    `json:"position"`
+	AA       string `json:"aa,omitempty"`
+}
+
+type PDBReference struct {
+	PDBID    string       `json:"pdb_id,omitempty"`
+	FilePath string       `json:"file_path,omitempty"`
+	URL      string       `json:"url,omitempty"`
+	Chain    string       `json:"chain,omitempty"`
+	Epitope  []ResidueRef `json:"epitope,omitempty"`
+}
+
+// --- Design ---
+
+type Design struct {
+	ID            DesignID           `json:"id"`
+	ProjectID     ProjectID          `json:"project_id"`
+	PlanID        PlanID             `json:"plan_id"`
+	Created       time.Time          `json:"created"`
+	Origin        DesignOrigin       `json:"origin"`
+	Application   Application        `json:"application"`
+	Sequence      Sequence           `json:"sequence"`
+	StructureFile string             `json:"structure_file,omitempty"`
+	Scores        map[string]float64 `json:"scores"`
+	LabResults    []ExperimentResult `json:"lab_results,omitempty"`
+	Provenance    []ToolCallRef      `json:"provenance"`
+	Tags          []string           `json:"tags,omitempty"`
+	Notes         string             `json:"notes,omitempty"`
+}
+
+type DesignOrigin string
+
+const (
+	OriginBindCraft   DesignOrigin = "bindcraft"
+	OriginRFDiffMPNN  DesignOrigin = "rfdiff_mpnn"
+	OriginRFAntibody  DesignOrigin = "rfantibody"
+	OriginChai2       DesignOrigin = "chai2"
+	OriginRFDiff2MPNN DesignOrigin = "rfdiff2_ligandmpnn"
+	OriginManual      DesignOrigin = "manual"
+)
 
 // ToolCallRef records the provenance of one tool invocation.
 type ToolCallRef struct {
@@ -72,13 +153,128 @@ func NewToolCallRef(tool string, input []byte) ToolCallRef {
 	}
 }
 
-// Design is a designed or predicted protein. v0.1 populates only the fields
-// produced by fold.esmfold; the full SPECS §4 struct arrives with v0.2.
-type Design struct {
-	ID            DesignID           `json:"id"`
-	Created       time.Time          `json:"created"`
-	Sequence      Sequence           `json:"sequence"`
-	StructureFile string             `json:"structure_file,omitempty"`
-	Scores        map[string]float64 `json:"scores"`
-	Provenance    []ToolCallRef      `json:"provenance"`
+// --- Scoring ---
+
+type FilterConfig struct {
+	MinPLDDT         float64 `json:"min_plddt,omitempty"`
+	MinPLDDTMin      float64 `json:"min_plddt_min,omitempty"`
+	MinIPSAE         float64 `json:"min_ipsae,omitempty"`
+	MaxPAEInterface  float64 `json:"max_pae_interface,omitempty"`
+	MinIPTM          float64 `json:"min_iptm,omitempty"`
+	MinPDockQ        float64 `json:"min_pdockq,omitempty"`
+	MaxRMSDtoModel   float64 `json:"max_rmsd_to_model,omitempty"`
+	MaxMotifRMSD     float64 `json:"max_motif_rmsd,omitempty"`
+	MinRosettaScore  float64 `json:"min_rosetta_score,omitempty"`
+	MaxESMPerplexity float64 `json:"max_esm_perplexity,omitempty"`
+}
+
+type DesignScore struct {
+	DesignID DesignID           `json:"design_id"`
+	Metrics  map[string]float64 `json:"metrics"`
+}
+
+// --- Plan ---
+
+type DesignPlan struct {
+	ID             PlanID       `json:"id"`
+	ProjectID      ProjectID    `json:"project_id"`
+	Created        time.Time    `json:"created"`
+	Target         PDBReference `json:"target"`
+	Application    Application  `json:"application"`
+	Method         string       `json:"method"`
+	FallbackMethod string       `json:"fallback_method,omitempty"`
+	Filters        FilterConfig `json:"filters"`
+	ShortlistSize  int          `json:"shortlist_size"`
+	ComputeBackend string       `json:"compute_backend"`
+	EstimatedCost  float64      `json:"estimated_cost_usd"`
+	EstimatedTime  string       `json:"estimated_time"`
+	Rationale      string       `json:"rationale"`
+	EvidencePapers []PaperRef   `json:"evidence_papers,omitempty"`
+	Approved       bool         `json:"approved"`
+	ApprovedAt     *time.Time   `json:"approved_at,omitempty"`
+}
+
+type PaperRef struct {
+	DOI   string `json:"doi,omitempty"`
+	PMCID string `json:"pmcid,omitempty"`
+	Title string `json:"title"`
+	Year  int    `json:"year"`
+	URL   string `json:"url,omitempty"`
+}
+
+// --- Job ---
+
+type Job struct {
+	ID              JobID      `json:"id"`
+	Kind            JobKind    `json:"kind"`
+	Tool            string     `json:"tool"`
+	Status          JobStatus  `json:"status"`
+	Created         time.Time  `json:"created"`
+	Started         *time.Time `json:"started,omitempty"`
+	Finished        *time.Time `json:"finished,omitempty"`
+	Progress        float64    `json:"progress"`
+	Backend         string     `json:"backend"`
+	CostUSD         float64    `json:"cost_usd"`
+	Input           []byte     `json:"input"`
+	Output          []byte     `json:"output,omitempty"`
+	Error           string     `json:"error,omitempty"`
+	ProducedDesigns []DesignID `json:"produced_designs,omitempty"`
+}
+
+// --- Experiment (wet-lab) ---
+
+type Experiment struct {
+	ID          ExperimentID       `json:"id"`
+	ProjectID   ProjectID          `json:"project_id"`
+	Backend     string             `json:"backend"`
+	ExternalID  string             `json:"external_id"`
+	AssayType   string             `json:"assay_type"`
+	TargetID    string             `json:"target_id"`
+	TargetName  string             `json:"target_name"`
+	Designs     []DesignID         `json:"designs"`
+	SubmittedAt time.Time          `json:"submitted_at"`
+	Status      string             `json:"status"`
+	CostUSD     float64            `json:"cost_usd"`
+	Results     []ExperimentResult `json:"results,omitempty"`
+}
+
+type ExperimentResult struct {
+	DesignID        DesignID `json:"design_id"`
+	Kd              *float64 `json:"kd,omitempty"`
+	KdUnits         string   `json:"kd_units,omitempty"`
+	Kon             *float64 `json:"kon,omitempty"`
+	Koff            *float64 `json:"koff,omitempty"`
+	BindingStrength string   `json:"binding_strength,omitempty"`
+	RSquared        *float64 `json:"r_squared,omitempty"`
+	NReplicates     int      `json:"n_replicates,omitempty"`
+	IsControl       bool     `json:"is_control"`
+}
+
+// --- Session and messages ---
+
+type Session struct {
+	ID        SessionID `json:"id"`
+	ProjectID ProjectID `json:"project_id"`
+	Created   time.Time `json:"created"`
+	Updated   time.Time `json:"updated"`
+	Model     string    `json:"model"`
+	Provider  string    `json:"provider"`
+}
+
+type Message struct {
+	ID         string     `json:"id"`
+	SessionID  SessionID  `json:"session_id"`
+	Role       string     `json:"role"`
+	Content    string     `json:"content"`
+	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
+	ToolCallID string     `json:"tool_call_id,omitempty"`
+	Created    time.Time  `json:"created"`
+	Tokens     int        `json:"tokens"`
+	CostUSD    float64    `json:"cost_usd"`
+}
+
+type ToolCall struct {
+	ID    string          `json:"id"`
+	Name  string          `json:"name"`
+	Input json.RawMessage `json:"input"`
 }

@@ -1,0 +1,163 @@
+# Install recipes for the local (uv-managed) protein-design tools.
+# Placeholders: ${PROTEUS_HOME} is the Proteus home dir; {{ field }} refers to
+# this recipe's own fields (repo, git_ref, python, venv_dir, install_dir).
+# install_dir defaults to ${PROTEUS_HOME}/tools/<name> when omitted; git_ref
+# defaults to "main".
+
+[tools.ipsae]
+display_name = "ipSAE"
+version      = "1.0.0"
+python       = "3.11"
+repo         = "https://github.com/DunbrackLab/IPSAE"
+venv_dir     = "${PROTEUS_HOME}/tools/ipsae/.venv"
+requires_gpu = false
+disk_gb      = 0.1
+install_steps = [
+  "git clone {{ repo }} .",
+  "uv venv --python {{ python }} {{ venv_dir }}",
+  "uv pip install --python {{ venv_dir }}/bin/python numpy biopython",
+]
+run_command = "{{ venv_dir }}/bin/python {{ install_dir }}/ipsae.py {{ scores_json }} {{ structure_file }} {{ pae_cutoff }} {{ plddt_cutoff }}"
+
+[tools.proteinmpnn]
+display_name = "ProteinMPNN"
+version      = "1.0.1"
+python       = "3.10"
+repo         = "https://github.com/dauparas/ProteinMPNN"
+venv_dir     = "${PROTEUS_HOME}/tools/proteinmpnn/.venv"
+requires_gpu = true
+disk_gb      = 0.5
+install_steps = [
+  "git clone {{ repo }} .",
+  "uv venv --python {{ python }} {{ venv_dir }}",
+  "uv pip install --python {{ venv_dir }}/bin/python --torch-backend=auto torch==2.4.1",
+  "uv pip install --python {{ venv_dir }}/bin/python numpy",
+]
+run_command = "{{ venv_dir }}/bin/python {{ install_dir }}/protein_mpnn_run.py @{{ args_file }}"
+
+[tools.rfdiffusion]
+display_name = "RFdiffusion"
+version      = "1.1.0"
+python       = "3.10"
+repo         = "https://github.com/RosettaCommons/RFdiffusion"
+venv_dir     = "${PROTEUS_HOME}/tools/rfdiffusion/.venv"
+requires_gpu = true
+disk_gb      = 5.2
+extra_data   = ["rfdiffusion_weights"]
+install_steps = [
+  "git clone {{ repo }} .",
+  "uv venv --python {{ python }} {{ venv_dir }}",
+  "uv pip install --python {{ venv_dir }}/bin/python --torch-backend=auto torch==2.4.1",
+  "uv pip install --python {{ venv_dir }}/bin/python -e .",
+  "uv pip install --python {{ venv_dir }}/bin/python -e env/SE3Transformer",
+]
+run_command = "{{ venv_dir }}/bin/python {{ install_dir }}/scripts/run_inference.py @{{ args_file }}"
+
+[tools.bindcraft]
+display_name = "BindCraft"
+version      = "1.5.0"
+python       = "3.10"
+repo         = "https://github.com/martinpacesa/BindCraft"
+venv_dir     = "${PROTEUS_HOME}/tools/bindcraft/.venv"
+requires_gpu = true
+disk_gb      = 8.5
+extra_data   = ["alphafold_params"]
+install_steps = [
+  "git clone {{ repo }} .",
+  "uv venv --python {{ python }} {{ venv_dir }}",
+  "uv pip install --python {{ venv_dir }}/bin/python --torch-backend=auto torch==2.4.1",
+  "uv pip install --python {{ venv_dir }}/bin/python -r requirements.txt",
+  "uv pip install --python {{ venv_dir }}/bin/python git+https://github.com/sokrypton/ColabDesign.git",
+  "uv pip install --python {{ venv_dir }}/bin/python pyrosetta-installer",
+  "{{ venv_dir }}/bin/python -c 'import pyrosetta_installer; pyrosetta_installer.install_pyrosetta(serialization=True)'",
+]
+run_command = "{{ venv_dir }}/bin/python {{ install_dir }}/bindcraft.py --settings {{ input_json }}"
+
+[tools.ligandmpnn]
+display_name = "LigandMPNN"
+version      = "1.0.0"
+python       = "3.10"
+repo         = "https://github.com/dauparas/LigandMPNN"
+venv_dir     = "${PROTEUS_HOME}/tools/ligandmpnn/.venv"
+requires_gpu = true
+disk_gb      = 1.2
+install_steps = [
+  "git clone {{ repo }} .",
+  "uv venv --python {{ python }} {{ venv_dir }}",
+  "uv pip install --python {{ venv_dir }}/bin/python --torch-backend=auto torch==2.4.1",
+  "uv pip install --python {{ venv_dir }}/bin/python -r requirements.txt",
+]
+run_command = "{{ venv_dir }}/bin/python {{ install_dir }}/run.py @{{ args_file }}"
+
+[tools.rfantibody]
+display_name = "RFantibody"
+version      = "1.0.0"
+python       = "3.10"
+repo         = "https://github.com/RosettaCommons/RFantibody"
+venv_dir     = "${PROTEUS_HOME}/tools/rfantibody/.venv"
+requires_gpu = true
+disk_gb      = 6.0
+install_steps = [
+  "git clone {{ repo }} .",
+  "uv venv --python {{ python }} {{ venv_dir }}",
+  "uv pip install --python {{ venv_dir }}/bin/python --torch-backend=auto torch==2.4.1",
+  "uv pip install --python {{ venv_dir }}/bin/python -r requirements.txt",
+]
+run_command = "{{ venv_dir }}/bin/python {{ install_dir }}/scripts/rfantibody.py @{{ args_file }}"
+
+[tools.rfdiffusion2]
+display_name = "RFdiffusion2"
+version      = "1.0.0"
+python       = "3.10"
+repo         = "https://github.com/RosettaCommons/RFdiffusion2"
+venv_dir     = "${PROTEUS_HOME}/tools/rfdiffusion2/.venv"
+requires_gpu = true
+disk_gb      = 6.5
+install_steps = [
+  "git clone {{ repo }} .",
+  "uv venv --python {{ python }} {{ venv_dir }}",
+  "uv pip install --python {{ venv_dir }}/bin/python --torch-backend=auto torch==2.4.1",
+  "uv pip install --python {{ venv_dir }}/bin/python -e .",
+]
+run_command = "{{ venv_dir }}/bin/python {{ install_dir }}/scripts/run.py @{{ args_file }}"
+
+[tools.boltz2]
+display_name = "Boltz-2"
+version      = "1.0.0"
+python       = "3.11"
+venv_dir     = "${PROTEUS_HOME}/tools/boltz2/.venv"
+requires_gpu = true
+disk_gb      = 12.0
+install_steps = [
+  "uv venv --python {{ python }} {{ venv_dir }}",
+  "uv pip install --python {{ venv_dir }}/bin/python --torch-backend=auto boltz",
+]
+run_command = "{{ venv_dir }}/bin/boltz predict {{ input_yaml }} --out_dir {{ out_dir }}"
+
+[tools.chai1]
+display_name = "Chai-1"
+version      = "1.0.0"
+python       = "3.11"
+venv_dir     = "${PROTEUS_HOME}/tools/chai1/.venv"
+requires_gpu = true
+disk_gb      = 8.0
+install_steps = [
+  "uv venv --python {{ python }} {{ venv_dir }}",
+  "uv pip install --python {{ venv_dir }}/bin/python --torch-backend=auto chai_lab",
+]
+run_command = "{{ venv_dir }}/bin/python -m chai_lab.main fold {{ input_fasta }} {{ out_dir }}"
+
+[data.alphafold_params]
+display_name = "AlphaFold2 weights"
+url          = "https://storage.googleapis.com/alphafold/alphafold_params_2022-12-06.tar"
+extract_to   = "${PROTEUS_HOME}/data/alphafold_params"
+size_gb      = 5.3
+
+[data.rfdiffusion_weights]
+display_name = "RFdiffusion weights"
+urls         = [
+  "http://files.ipd.uw.edu/pub/RFdiffusion/6f5902ac237024bdd0c176cb93063dc4/Base_ckpt.pt",
+  "http://files.ipd.uw.edu/pub/RFdiffusion/e29311f6f1bf1af907f9ef9f44b8328b/Complex_base_ckpt.pt",
+]
+target_dir   = "${PROTEUS_HOME}/data/rfdiffusion_weights"
+size_gb      = 4.0

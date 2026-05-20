@@ -3,11 +3,19 @@ package tui
 import (
 	"context"
 	"errors"
+	"io"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
+	"github.com/google/uuid"
 
 	"github.com/alvarogonjim/proteus/internal/agent"
+	"github.com/alvarogonjim/proteus/internal/backends/local"
+	"github.com/alvarogonjim/proteus/internal/domain"
+	jobmgr "github.com/alvarogonjim/proteus/internal/jobs"
 	"github.com/alvarogonjim/proteus/internal/llm"
+	"github.com/alvarogonjim/proteus/internal/store"
 	"github.com/alvarogonjim/proteus/internal/tools"
 )
 
@@ -20,6 +28,22 @@ const (
 	overlayPicker
 )
 
+// panelFocus is which pane Tab-cycling currently targets (used for the
+// narrow-terminal single-pane layout).
+type panelFocus int
+
+const (
+	focusChat panelFocus = iota
+	focusJobs
+	focusDesigns
+
+	// numPanelFocus is the number of Tab-cyclable panes.
+	numPanelFocus panelFocus = focusDesigns + 1
+)
+
+// refreshMsg triggers a reload of the jobs and designs panels from the store.
+type refreshMsg struct{}
+
 // Model is the root Bubble Tea model.
 type Model struct {
 	width, height int
@@ -29,10 +53,24 @@ type Model struct {
 	status statusBarModel
 	cmdbar commandBarModel
 
+	jobs    jobsModel
+	designs designsModel
+	focus   panelFocus
+
 	registry     *tools.Registry
 	models       *llm.ModelRegistry
 	systemPrompt string
-	session      *agent.Session // one session for the whole TUI lifetime
+	session      *agent.Session   // one session for the whole TUI lifetime
+	store        *store.Store     // nil → persistence disabled
+	sessionID    domain.SessionID // current persisted session
+
+	jobMgr      *jobmgr.Manager // async job manager (install / deploy / design jobs)
+	localReg    *local.Registry // installable-tool registry
+	proteusHome string          // $PROTEUS_HOME, used for setup log-file paths
+
+	// installFn runs a tool install, writing progress to log. Defaults to the
+	// real local installer; tests override it.
+	installFn func(ctx context.Context, name string, log io.Writer) error
 
 	bus       chan tea.Msg // agent → TUI
 	confirmCh chan bool    // TUI → agent (modal result)
@@ -45,29 +83,92 @@ type Model struct {
 	picker  *pickerModel
 }
 
-// New builds the root model.
-func New(reg *tools.Registry, models *llm.ModelRegistry, systemPrompt string) *Model {
+// Deps are the dependencies the root model needs. Store, Jobs, and Local may
+// be nil to disable persistence / job submission / setup commands respectively.
+type Deps struct {
+	Registry     *tools.Registry
+	Models       *llm.ModelRegistry
+	SystemPrompt string
+	Store        *store.Store
+	Jobs         *jobmgr.Manager
+	Local        *local.Registry
+	ProteusHome  string
+}
+
+// New builds the root model from its dependencies.
+func New(d Deps) *Model {
 	th := NewTheme()
 	m := &Model{
 		theme:        th,
 		chat:         newChatModel(th, 80, 20),
 		status:       newStatusBarModel(th),
 		cmdbar:       newCommandBarModel(th, 80),
-		registry:     reg,
-		models:       models,
-		systemPrompt: systemPrompt,
-		session:      agent.NewSession(systemPrompt),
+		registry:     d.Registry,
+		models:       d.Models,
+		systemPrompt: d.SystemPrompt,
+		session:      agent.NewSession(d.SystemPrompt),
+		store:        d.Store,
+		jobMgr:       d.Jobs,
+		localReg:     d.Local,
+		proteusHome:  d.ProteusHome,
 		bus:          make(chan tea.Msg, 256),
 		confirmCh:    make(chan bool, 1),
 	}
-	m.status.model = models.ActiveModel()
-	m.status.provider = models.ActiveProviderName()
+	m.jobs = newJobsModel(th)
+	m.designs = newDesignsModel(th)
+	m.status.model = d.Models.ActiveModel()
+	m.status.provider = d.Models.ActiveProviderName()
+	if d.Local != nil {
+		m.installFn = local.NewInstaller(d.Local).InstallLogged
+	}
+	m.beginPersistedSession()
 	return m
+}
+
+// beginPersistedSession creates a fresh session row in the store (if a store
+// is configured) and attaches a sink so the session's messages are persisted.
+func (m *Model) beginPersistedSession() {
+	if m.store == nil {
+		return
+	}
+	now := time.Now().UTC()
+	m.sessionID = domain.SessionID(uuid.NewString())
+	sess := domain.Session{
+		ID:        m.sessionID,
+		ProjectID: store.DefaultProjectID,
+		Created:   now,
+		Updated:   now,
+		Model:     m.models.ActiveModel(),
+		Provider:  m.models.ActiveProviderName(),
+	}
+	if err := m.store.InsertSession(sess); err != nil {
+		m.sessionID = "" // persistence unavailable; degrade gracefully
+		return
+	}
+	m.session.SetSink(storeSink{st: m.store, sessionID: m.sessionID})
 }
 
 // Init starts listening on the agent bus.
 func (m *Model) Init() tea.Cmd {
-	return m.waitForBus()
+	return tea.Batch(m.waitForBus(), m.scheduleRefresh())
+}
+
+// scheduleRefresh returns a command that fires a refreshMsg after one second.
+func (m *Model) scheduleRefresh() tea.Cmd {
+	return tea.Tick(time.Second, func(time.Time) tea.Msg { return refreshMsg{} })
+}
+
+// reloadPanels repopulates the jobs and designs panels from the store.
+func (m *Model) reloadPanels() {
+	if m.store == nil {
+		return
+	}
+	if jobs, err := m.store.ListJobs(store.DefaultProjectID); err == nil {
+		m.jobs.setJobs(jobs)
+	}
+	if designs, err := m.store.ListDesigns(store.DefaultProjectID); err == nil {
+		m.designs.setDesigns(designs)
+	}
 }
 
 // waitForBus returns a command that delivers the next bus message.
@@ -86,6 +187,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.KeyMsg:
 		return m.handleKey(msg)
+
+	case refreshMsg:
+		m.reloadPanels()
+		return m, m.scheduleRefresh()
 
 	// --- agent bus messages ---
 	case agent.TextDeltaMsg:
@@ -166,6 +271,9 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 
 	switch msg.Type {
+	case tea.KeyTab:
+		m.focus = (m.focus + 1) % numPanelFocus
+		return m, nil
 	case tea.KeyCtrlD:
 		return m, tea.Quit
 	case tea.KeyCtrlC:
@@ -239,6 +347,7 @@ func (m *Model) runSlashCommand(cmd, arg string) (tea.Model, tea.Cmd) {
 	case "clear":
 		m.chat = newChatModel(m.theme, m.chatWidth(), m.chatHeight())
 		m.session = agent.NewSession(m.systemPrompt)
+		m.beginPersistedSession()
 		return m, nil
 	case "model":
 		if arg != "" {
@@ -250,6 +359,16 @@ func (m *Model) runSlashCommand(cmd, arg string) (tea.Model, tea.Cmd) {
 	case "provider":
 		m.openProviderPicker()
 		return m, nil
+	case "doctor":
+		return m.cmdDoctor()
+	case "tools":
+		return m.cmdTools()
+	case "install":
+		return m.cmdInstall(arg)
+	case "uninstall":
+		return m.cmdUninstall(arg)
+	case "modal":
+		return m.cmdModalDeploy(arg)
 	case "jobs", "designs", "plan", "lab", "export", "cost", "project", "skills":
 		m.chat.appendAgentDeltaBlock("/" + cmd + " arrives in a later Proteus milestone.")
 		return m, nil
@@ -304,8 +423,23 @@ func (m *Model) View() string {
 	if m.width == 0 {
 		return "starting proteus…"
 	}
+	var body string
+	if m.width >= 100 {
+		right := lipgloss.JoinVertical(lipgloss.Left,
+			m.jobs.View(), "", m.designs.View())
+		body = lipgloss.JoinHorizontal(lipgloss.Top, m.chat.View(), "  ", right)
+	} else {
+		switch m.focus {
+		case focusJobs:
+			body = m.jobs.View()
+		case focusDesigns:
+			body = m.designs.View()
+		default:
+			body = m.chat.View()
+		}
+	}
 	base := m.status.View() + "\n" +
-		m.chat.View() + "\n" +
+		body + "\n" +
 		m.theme.CommandBar.Render(m.cmdbar.hints) + "\n" +
 		m.cmdbar.ta.View()
 
@@ -322,7 +456,17 @@ func (m *Model) View() string {
 func (m *Model) layout() {
 	m.status.width = m.width
 	m.cmdbar.setWidth(m.width)
-	m.chat.resize(m.chatWidth(), m.chatHeight())
+	panelW := 0
+	if m.width >= 100 {
+		panelW = 38
+	}
+	m.jobs.setWidth(panelW)
+	m.designs.setWidth(panelW)
+	chatW := m.width
+	if panelW > 0 {
+		chatW = m.width - panelW - 2 // 2 spaces of gap
+	}
+	m.chat.resize(chatW, m.chatHeight())
 }
 
 func (m *Model) chatWidth() int { return m.width }
@@ -337,6 +481,7 @@ func (m *Model) chatHeight() int {
 	return h
 }
 
-const helpText = "Proteus v0.1 — type a message to talk to the agent.\n" +
-	"Slash commands: /model /provider /clear /help /quit.\n" +
+const helpText = "Proteus v0.2 — type a message to talk to the agent.\n" +
+	"Session: /model /provider /clear /help /quit.\n" +
+	"Setup: /install /uninstall /tools /doctor /modal deploy.\n" +
 	"Ctrl+C cancels the running turn · Ctrl+D quits."

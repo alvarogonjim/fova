@@ -40,7 +40,6 @@ type JobKind string
 const (
 	JobCompute JobKind = "compute"
 	JobLab     JobKind = "lab"
-	JobSetup   JobKind = "setup" // install / uninstall / modal deploy
 )
 
 type JobStatus string
@@ -200,6 +199,21 @@ type PaperRef struct {
 	Title string `json:"title"`
 	Year  int    `json:"year"`
 	URL   string `json:"url,omitempty"`
+}
+
+// --- Corpus ---
+
+// CorpusPaper is one paper in a project's per-project literature corpus.
+type CorpusPaper struct {
+	ID        string    `json:"id"` // DOI or PMCID — the corpus key
+	ProjectID ProjectID `json:"project_id"`
+	Title     string    `json:"title"`
+	Authors   string    `json:"authors,omitempty"`
+	Year      int       `json:"year,omitempty"`
+	Source    string    `json:"source"`
+	FullText  string    `json:"full_text,omitempty"`
+	Metadata  string    `json:"metadata"`
+	Added     time.Time `json:"added"`
 }
 
 // --- Job ---

@@ -58,7 +58,7 @@ func (r Report) String() string {
 		if t.Installed {
 			fmt.Fprintf(&b, "  ok  %-14s %s\n", t.Name, t.Version)
 		} else {
-			fmt.Fprintf(&b, "  --  %-14s not installed (run: /install %s)\n",
+			fmt.Fprintf(&b, "  --  %-14s not installed (run: proteus install %s)\n",
 				t.Name, t.Name)
 		}
 	}

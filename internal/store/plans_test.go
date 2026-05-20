@@ -27,6 +27,31 @@ func TestPlanInsertGet(t *testing.T) {
 	}
 }
 
+func TestSetPlanApproved(t *testing.T) {
+	st := openTestStore(t)
+	p := domain.DesignPlan{
+		ID: "p_appr", ProjectID: DefaultProjectID,
+		Created:     time.Date(2026, 5, 16, 12, 0, 0, 0, time.UTC),
+		Application: domain.AppBinder, Method: "design.bindcraft",
+	}
+	if err := st.InsertPlan(p); err != nil {
+		t.Fatalf("InsertPlan: %v", err)
+	}
+	if err := st.SetPlanApproved("p_appr"); err != nil {
+		t.Fatalf("SetPlanApproved: %v", err)
+	}
+	got, err := st.GetPlan("p_appr")
+	if err != nil {
+		t.Fatalf("GetPlan: %v", err)
+	}
+	if !got.Approved {
+		t.Error("plan should be approved after SetPlanApproved")
+	}
+	if got.ApprovedAt == nil {
+		t.Error("ApprovedAt should be non-nil after SetPlanApproved")
+	}
+}
+
 func TestLatestPlan(t *testing.T) {
 	st := openTestStore(t)
 	if _, ok, err := st.LatestPlan(DefaultProjectID); err != nil || ok {

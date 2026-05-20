@@ -7,7 +7,7 @@ import (
 )
 
 // slashCommandHints is shown in the command bar (SPECS §10.2 / §10.3).
-const slashCommandHints = " /install  /tools  /doctor  /modal  /model  /provider  /clear  /help  /quit "
+const slashCommandHints = " /model  /provider  /plan  /clear  /help  /quit "
 
 // parseSlashCommand splits an input line. If it starts with "/", it returns
 // the command word, the remaining argument, and true.

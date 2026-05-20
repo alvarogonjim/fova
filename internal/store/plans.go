@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"time"
 
 	"github.com/alvarogonjim/proteus/internal/domain"
 )
@@ -39,6 +40,27 @@ func (s *Store) GetPlan(id domain.PlanID) (domain.DesignPlan, error) {
 		return domain.DesignPlan{}, err
 	}
 	return p, nil
+}
+
+// SetPlanApproved marks a plan as approved, stamping the approval time. It
+// updates both the approved column and the re-marshalled body JSON.
+func (s *Store) SetPlanApproved(id domain.PlanID) error {
+	p, err := s.GetPlan(id)
+	if err != nil {
+		return err
+	}
+	now := time.Now().UTC()
+	p.Approved = true
+	p.ApprovedAt = &now
+	body, err := json.Marshal(p)
+	if err != nil {
+		return err
+	}
+	_, err = s.db.Exec(
+		`UPDATE plans SET approved=1, body=? WHERE id=?`,
+		string(body), string(id),
+	)
+	return err
 }
 
 // LatestPlan returns the most recently created plan for a project. The bool is

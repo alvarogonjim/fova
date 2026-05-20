@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -67,12 +66,6 @@ func (i *Installer) DryRun(name string) ([]string, error) {
 // A failure leaves the partial install directory in place and names the step
 // that failed. Re-install after wiping with Remove (or `--force`).
 func (i *Installer) Install(ctx context.Context, name string) error {
-	return i.InstallLogged(ctx, name, io.Discard)
-}
-
-// InstallLogged behaves like Install, additionally writing each install step's
-// command line and combined output to log as the step completes.
-func (i *Installer) InstallLogged(ctx context.Context, name string, log io.Writer) error {
 	rec, ok := i.registry.Tool(name)
 	if !ok {
 		return fmt.Errorf("unknown tool %q", name)
@@ -84,9 +77,7 @@ func (i *Installer) InstallLogged(ctx context.Context, name string, log io.Write
 		return fmt.Errorf("create install dir: %w", err)
 	}
 	for idx, step := range rec.InstallSteps {
-		fmt.Fprintf(log, "$ %s\n", step)
 		out, err := i.run(ctx, rec.InstallDir, step)
-		fmt.Fprintf(log, "%s\n", out)
 		if err != nil {
 			return fmt.Errorf("%s install step %d (%q) failed: %w\n%s",
 				name, idx+1, step, err, out)

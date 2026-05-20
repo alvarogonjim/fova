@@ -16,11 +16,7 @@ import (
 )
 
 func newTestApp() *Model {
-	return New(Deps{
-		Registry:     tools.NewRegistry(),
-		Models:       llm.NewModelRegistry(),
-		SystemPrompt: agent.SystemPrompt,
-	})
+	return New(tools.NewRegistry(), llm.NewModelRegistry(), agent.SystemPrompt, nil)
 }
 
 func TestAppPersistsSessionAndMessages(t *testing.T) {
@@ -30,12 +26,7 @@ func TestAppPersistsSessionAndMessages(t *testing.T) {
 	}
 	defer st.Close()
 
-	m := New(Deps{
-		Registry:     tools.NewRegistry(),
-		Models:       llm.NewModelRegistry(),
-		SystemPrompt: agent.SystemPrompt,
-		Store:        st,
-	})
+	m := New(tools.NewRegistry(), llm.NewModelRegistry(), agent.SystemPrompt, st)
 	if m.sessionID == "" {
 		t.Fatal("New with a store must create a session row")
 	}
@@ -133,12 +124,7 @@ func TestAppRefreshLoadsPanelsFromStore(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	m := New(Deps{
-		Registry:     tools.NewRegistry(),
-		Models:       llm.NewModelRegistry(),
-		SystemPrompt: agent.SystemPrompt,
-		Store:        st,
-	})
+	m := New(tools.NewRegistry(), llm.NewModelRegistry(), agent.SystemPrompt, st)
 	m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
 	// A refresh tick reloads the panels from the store.
 	m.Update(refreshMsg{})
@@ -166,22 +152,86 @@ func TestAppWideLayoutShowsPanels(t *testing.T) {
 	}
 }
 
-func TestRunSlashCommandRoutesSetupCommands(t *testing.T) {
-	// Each setup command must reach its handler — not the "later milestone"
-	// stub or the unknown-command default.
-	for _, cmd := range []string{"doctor", "tools", "install", "uninstall", "modal"} {
-		m := newSetupTestModel(t)
-		before := len(m.chat.entries)
-		m.runSlashCommand(cmd, "")
-		if len(m.chat.entries) <= before {
-			t.Errorf("/%s produced no chat output — not routed?", cmd)
-			continue
-		}
-		last := m.chat.entries[len(m.chat.entries)-1].text
-		if strings.Contains(last, "later Proteus milestone") ||
-			strings.Contains(last, "unknown command") {
-			t.Errorf("/%s hit the stub/unknown path: %q", cmd, last)
-		}
+func TestAppPlanCommandNoStore(t *testing.T) {
+	m := newTestApp() // store is nil
+	m.runSlashCommand("plan", "")
+	out := m.chat.renderEntries()
+	if !contains(out, "No design plan yet") {
+		t.Fatalf("/plan without a plan should post the no-plan block:\n%s", out)
+	}
+}
+
+func TestAppPlanCommandShowsPersistedPlan(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "workspace.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	if err := st.InsertPlan(domain.DesignPlan{
+		ID: "p_view", ProjectID: store.DefaultProjectID,
+		Application: domain.AppBinder, Method: "design.bindcraft",
+		Target: domain.PDBReference{PDBID: "6VXX", Chain: "A"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	m := New(tools.NewRegistry(), llm.NewModelRegistry(), agent.SystemPrompt, st)
+	m.runSlashCommand("plan", "")
+	out := m.chat.renderEntries()
+	if !contains(out, "p_view") || !contains(out, "design.bindcraft") {
+		t.Fatalf("/plan should post the persisted plan block:\n%s", out)
+	}
+}
+
+func TestAppPlanApprove(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "workspace.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	if err := st.InsertPlan(domain.DesignPlan{
+		ID: "p_appr", ProjectID: store.DefaultProjectID,
+		Application: domain.AppBinder, Method: "design.bindcraft",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	m := New(tools.NewRegistry(), llm.NewModelRegistry(), agent.SystemPrompt, st)
+	m.runSlashCommand("plan", "approve")
+	out := m.chat.renderEntries()
+	if !contains(out, "p_appr approved") {
+		t.Fatalf("/plan approve should confirm approval:\n%s", out)
+	}
+	got, err := st.GetPlan("p_appr")
+	if err != nil || !got.Approved {
+		t.Fatalf("plan not marked approved in store: approved=%v err=%v", got.Approved, err)
+	}
+}
+
+func TestAppPlanCancel(t *testing.T) {
+	m := newTestApp()
+	m.runSlashCommand("plan", "cancel")
+	out := m.chat.renderEntries()
+	if !contains(out, "plan cancelled") {
+		t.Fatalf("/plan cancel should post a cancellation message:\n%s", out)
+	}
+}
+
+func TestAppPlanUnknownArg(t *testing.T) {
+	m := newTestApp()
+	m.runSlashCommand("plan", "bogus")
+	out := m.chat.renderEntries()
+	if !contains(out, "unknown /plan argument") {
+		t.Fatalf("unknown /plan argument should post an error:\n%s", out)
+	}
+}
+
+func TestAppOtherSlashStubsRemain(t *testing.T) {
+	m := newTestApp()
+	m.runSlashCommand("jobs", "")
+	out := m.chat.renderEntries()
+	if !contains(out, "later Proteus milestone") {
+		t.Fatalf("/jobs should still be a stub:\n%s", out)
 	}
 }
 

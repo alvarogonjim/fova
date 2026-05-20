@@ -3,7 +3,6 @@ package tui
 import (
 	"context"
 	"errors"
-	"io"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -11,9 +10,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/alvarogonjim/proteus/internal/agent"
-	"github.com/alvarogonjim/proteus/internal/backends/local"
 	"github.com/alvarogonjim/proteus/internal/domain"
-	jobmgr "github.com/alvarogonjim/proteus/internal/jobs"
 	"github.com/alvarogonjim/proteus/internal/llm"
 	"github.com/alvarogonjim/proteus/internal/store"
 	"github.com/alvarogonjim/proteus/internal/tools"
@@ -64,14 +61,6 @@ type Model struct {
 	store        *store.Store     // nil → persistence disabled
 	sessionID    domain.SessionID // current persisted session
 
-	jobMgr      *jobmgr.Manager // async job manager (install / deploy / design jobs)
-	localReg    *local.Registry // installable-tool registry
-	proteusHome string          // $PROTEUS_HOME, used for setup log-file paths
-
-	// installFn runs a tool install, writing progress to log. Defaults to the
-	// real local installer; tests override it.
-	installFn func(ctx context.Context, name string, log io.Writer) error
-
 	bus       chan tea.Msg // agent → TUI
 	confirmCh chan bool    // TUI → agent (modal result)
 
@@ -83,44 +72,26 @@ type Model struct {
 	picker  *pickerModel
 }
 
-// Deps are the dependencies the root model needs. Store, Jobs, and Local may
-// be nil to disable persistence / job submission / setup commands respectively.
-type Deps struct {
-	Registry     *tools.Registry
-	Models       *llm.ModelRegistry
-	SystemPrompt string
-	Store        *store.Store
-	Jobs         *jobmgr.Manager
-	Local        *local.Registry
-	ProteusHome  string
-}
-
-// New builds the root model from its dependencies.
-func New(d Deps) *Model {
+// New builds the root model. st may be nil (persistence disabled).
+func New(reg *tools.Registry, models *llm.ModelRegistry, systemPrompt string, st *store.Store) *Model {
 	th := NewTheme()
 	m := &Model{
 		theme:        th,
 		chat:         newChatModel(th, 80, 20),
 		status:       newStatusBarModel(th),
 		cmdbar:       newCommandBarModel(th, 80),
-		registry:     d.Registry,
-		models:       d.Models,
-		systemPrompt: d.SystemPrompt,
-		session:      agent.NewSession(d.SystemPrompt),
-		store:        d.Store,
-		jobMgr:       d.Jobs,
-		localReg:     d.Local,
-		proteusHome:  d.ProteusHome,
+		registry:     reg,
+		models:       models,
+		systemPrompt: systemPrompt,
+		session:      agent.NewSession(systemPrompt),
+		store:        st,
 		bus:          make(chan tea.Msg, 256),
 		confirmCh:    make(chan bool, 1),
 	}
 	m.jobs = newJobsModel(th)
 	m.designs = newDesignsModel(th)
-	m.status.model = d.Models.ActiveModel()
-	m.status.provider = d.Models.ActiveProviderName()
-	if d.Local != nil {
-		m.installFn = local.NewInstaller(d.Local).InstallLogged
-	}
+	m.status.model = models.ActiveModel()
+	m.status.provider = models.ActiveProviderName()
 	m.beginPersistedSession()
 	return m
 }
@@ -359,21 +330,64 @@ func (m *Model) runSlashCommand(cmd, arg string) (tea.Model, tea.Cmd) {
 	case "provider":
 		m.openProviderPicker()
 		return m, nil
-	case "doctor":
-		return m.cmdDoctor()
-	case "tools":
-		return m.cmdTools()
-	case "install":
-		return m.cmdInstall(arg)
-	case "uninstall":
-		return m.cmdUninstall(arg)
-	case "modal":
-		return m.cmdModalDeploy(arg)
-	case "jobs", "designs", "plan", "lab", "export", "cost", "project", "skills":
+	case "plan":
+		return m.runPlanCommand(arg)
+	case "jobs", "designs", "lab", "export", "cost", "project", "skills":
 		m.chat.appendAgentDeltaBlock("/" + cmd + " arrives in a later Proteus milestone.")
 		return m, nil
 	default:
 		m.chat.appendError("unknown command: /" + cmd)
+		return m, nil
+	}
+}
+
+// runPlanCommand handles /plan and its sub-arguments.
+func (m *Model) runPlanCommand(arg string) (tea.Model, tea.Cmd) {
+	switch arg {
+	case "":
+		if m.store == nil {
+			m.chat.appendAgentDeltaBlock(renderNoPlan())
+			return m, nil
+		}
+		p, ok, err := m.store.LatestPlan(store.DefaultProjectID)
+		if err != nil {
+			m.chat.appendError("could not load the design plan: " + err.Error())
+			return m, nil
+		}
+		if !ok {
+			m.chat.appendAgentDeltaBlock(renderNoPlan())
+			return m, nil
+		}
+		m.chat.appendAgentDeltaBlock(renderPlan(p))
+		return m, nil
+
+	case "approve":
+		if m.store == nil {
+			m.chat.appendAgentDeltaBlock("No design plan to approve — ask the agent to plan from a target first.")
+			return m, nil
+		}
+		p, ok, err := m.store.LatestPlan(store.DefaultProjectID)
+		if err != nil {
+			m.chat.appendError("could not load the design plan: " + err.Error())
+			return m, nil
+		}
+		if !ok {
+			m.chat.appendAgentDeltaBlock("No design plan to approve — ask the agent to plan from a target first.")
+			return m, nil
+		}
+		if err := m.store.SetPlanApproved(p.ID); err != nil {
+			m.chat.appendError("could not approve the design plan: " + err.Error())
+			return m, nil
+		}
+		m.chat.appendAgentDeltaBlock("plan " + string(p.ID) + " approved")
+		return m, nil
+
+	case "cancel":
+		m.chat.appendAgentDeltaBlock("plan cancelled — ask the agent to plan from a target again")
+		return m, nil
+
+	default:
+		m.chat.appendError("unknown /plan argument; use /plan, /plan approve, or /plan cancel")
 		return m, nil
 	}
 }
@@ -482,6 +496,6 @@ func (m *Model) chatHeight() int {
 }
 
 const helpText = "Proteus v0.2 — type a message to talk to the agent.\n" +
-	"Session: /model /provider /clear /help /quit.\n" +
-	"Setup: /install /uninstall /tools /doctor /modal deploy.\n" +
+	"Slash commands: /model /provider /plan /clear /help /quit.\n" +
+	"/plan shows the latest design plan; /plan approve and /plan cancel act on it.\n" +
 	"Ctrl+C cancels the running turn · Ctrl+D quits."

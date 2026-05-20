@@ -11,7 +11,6 @@ import (
 
 	"github.com/alvarogonjim/proteus/internal/agent"
 	"github.com/alvarogonjim/proteus/internal/backends"
-	"github.com/alvarogonjim/proteus/internal/backends/local"
 	jobmgr "github.com/alvarogonjim/proteus/internal/jobs"
 	"github.com/alvarogonjim/proteus/internal/llm"
 	"github.com/alvarogonjim/proteus/internal/skills"
@@ -57,6 +56,11 @@ func newRootCmd() *cobra.Command {
 			fmt.Fprintf(cmd.OutOrStdout(), "proteus %s\n", version.String())
 		},
 	})
+	root.AddCommand(newInstallCmd())
+	root.AddCommand(newUninstallCmd())
+	root.AddCommand(newListCmd())
+	root.AddCommand(newDoctorCmd())
+	root.AddCommand(newModalCmd())
 	return root
 }
 
@@ -76,25 +80,10 @@ func runTUI() error {
 		return err
 	}
 
-	mgr := jobmgr.NewManager(st, nil)
-	registry := buildRegistry(workspace, st, mgr)
-
-	home := proteusHome()
-	localReg, err := local.LoadRegistry(home)
-	if err != nil {
-		return err
-	}
+	registry := buildRegistry(workspace, st)
 
 	models := llm.NewModelRegistry()
-	app := tui.New(tui.Deps{
-		Registry:     registry,
-		Models:       models,
-		SystemPrompt: agent.SystemPrompt,
-		Store:        st,
-		Jobs:         mgr,
-		Local:        localReg,
-		ProteusHome:  home,
-	})
+	app := tui.New(registry, models, agent.SystemPrompt, st)
 
 	p := tea.NewProgram(app, tea.WithAltScreen())
 	_, err = p.Run()
@@ -102,7 +91,7 @@ func runTUI() error {
 }
 
 // buildRegistry assembles the tool registry for a TUI session.
-func buildRegistry(workspace string, st *store.Store, mgr *jobmgr.Manager) *tools.Registry {
+func buildRegistry(workspace string, st *store.Store) *tools.Registry {
 	registry := tools.NewRegistry()
 	for _, t := range tools.NewFSTools(workspace) {
 		registry.Register(t)
@@ -112,6 +101,7 @@ func buildRegistry(workspace string, st *store.Store, mgr *jobmgr.Manager) *tool
 	registry.Register(loader.ListTool())
 	registry.Register(loader.ReadTool())
 
+	mgr := jobmgr.NewManager(st, nil)
 	registry.Register(jobstools.NewListTool(mgr))
 	registry.Register(jobstools.NewStatusTool(mgr))
 	registry.Register(jobstools.NewCancelTool(mgr))

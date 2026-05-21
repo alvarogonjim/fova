@@ -770,3 +770,17 @@ func TestRenderStructureRendererErrorAppendsError(t *testing.T) {
 		t.Errorf("chat does not surface the renderer error; view = %q", m.chat.renderEntries())
 	}
 }
+
+func TestClearKeepsPanelsVisible(t *testing.T) {
+	m := newTestApp()
+	m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	m.focus = focusJobs
+	m.runSlashCommand("clear", "")
+	wantChatW := 120 - 38 - 2 // full width minus the panel column and gap
+	if m.chat.width != wantChatW {
+		t.Errorf("after /clear chat width = %d, want %d (panels pushed off-screen)", m.chat.width, wantChatW)
+	}
+	if m.focus != focusChat {
+		t.Error("/clear should return focus to the chat")
+	}
+}

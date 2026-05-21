@@ -725,6 +725,8 @@ func (m *Model) runSlashCommand(cmd, arg string) (tea.Model, tea.Cmd) {
 		m.chat = newChatModel(m.theme, m.chatWidth(), m.chatHeight())
 		m.session = agent.NewSession(m.systemPrompt)
 		m.beginPersistedSession()
+		m.focus = focusChat // reset focus to the chat
+		m.layout()          // re-size the chat for the panel column
 		return m, nil
 	case "model":
 		if arg != "" {

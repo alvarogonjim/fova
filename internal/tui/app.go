@@ -26,6 +26,7 @@ import (
 	"github.com/alvarogonjim/fova/internal/store"
 	"github.com/alvarogonjim/fova/internal/tools"
 	"github.com/alvarogonjim/fova/internal/tools/lab"
+	"github.com/alvarogonjim/fova/internal/tools/plan"
 	"github.com/alvarogonjim/fova/internal/version"
 )
 
@@ -779,7 +780,15 @@ func (m *Model) runPlanCommand(arg string) (tea.Model, tea.Cmd) {
 			m.chat.appendAgentDeltaBlock(renderNoPlan())
 			return m, nil
 		}
-		m.chat.appendSlashOutput(renderPlan(p))
+		// For a BoltzGen plan, re-run design.boltzgen_check so /plan shows a
+		// live validation result that reflects any edits to the spec file.
+		var check *plan.BoltzGenCheckResult
+		if p.MethodConfig != nil {
+			if res, ran := m.runBoltzGenCheck(p.MethodConfig.SpecPath); ran {
+				check = &res
+			}
+		}
+		m.chat.appendSlashOutput(renderPlanWithCheck(p, workspaceFromHome(m.fovaHome), check))
 		return m, nil
 
 	case "approve":
@@ -795,6 +804,22 @@ func (m *Model) runPlanCommand(arg string) (tea.Model, tea.Cmd) {
 		if !ok {
 			m.chat.appendAgentDeltaBlock("No design plan to approve — ask the agent to plan from a target first.")
 			return m, nil
+		}
+		// BoltzGen re-check: the spec is a plain workspace file the user may
+		// have edited since plan.create validated it. Re-run
+		// design.boltzgen_check; an invalid spec holds the approval so a run
+		// never starts on a broken spec.
+		if p.MethodConfig != nil {
+			if res, ran := m.runBoltzGenCheck(p.MethodConfig.SpecPath); ran && !res.Valid {
+				errs := strings.Join(res.Errors, "; ")
+				if errs == "" {
+					errs = "(no detail reported)"
+				}
+				m.chat.appendError("plan not approved — the BoltzGen spec " +
+					p.MethodConfig.SpecPath + " failed design.boltzgen_check. " +
+					"Fix it and run /plan approve again. Errors: " + errs)
+				return m, nil
+			}
 		}
 		if err := m.store.SetPlanApproved(p.ID); err != nil {
 			m.chat.appendError("could not approve the design plan: " + err.Error())
@@ -821,6 +846,36 @@ func (m *Model) runPlanCommand(arg string) (tea.Model, tea.Cmd) {
 		m.chat.appendError("unknown /plan argument; use /plan, /plan approve, or /plan cancel")
 		return m, nil
 	}
+}
+
+// runBoltzGenCheck invokes the design.boltzgen_check tool through the tools
+// registry on the workspace-relative spec path. ran is false when the check
+// could not run — no registry, the check tool is not registered, or it
+// returned an error/unparsable result — so callers fall back to rendering /
+// approving without a check result, mirroring plan.create's nil-registry
+// behaviour. The decoupling holds: the tool is reached only by its registered
+// name.
+func (m *Model) runBoltzGenCheck(specPath string) (plan.BoltzGenCheckResult, bool) {
+	if m.registry == nil {
+		return plan.BoltzGenCheckResult{}, false
+	}
+	tool, ok := m.registry.Get("design.boltzgen_check")
+	if !ok {
+		return plan.BoltzGenCheckResult{}, false
+	}
+	in, err := json.Marshal(map[string]string{"spec_path": specPath})
+	if err != nil {
+		return plan.BoltzGenCheckResult{}, false
+	}
+	out, err := tool.Execute(context.Background(), in)
+	if err != nil {
+		return plan.BoltzGenCheckResult{}, false
+	}
+	var res plan.BoltzGenCheckResult
+	if err := json.Unmarshal(out.Output, &res); err != nil {
+		return plan.BoltzGenCheckResult{}, false
+	}
+	return res, true
 }
 
 // cmdAuth handles /auth <provider> <token>. Only "adaptyv" is supported; the

@@ -29,13 +29,30 @@ type InstallChecker interface {
 	Status(name string) local.ToolStatus
 }
 
-// ToolRegistry reports whether an agent tool is registered. plan.create uses
-// it to reject a method whose design.* tool has no executable implementation
-// — a method blessed in compat.go and installed locally but never wired into
-// the registry (the design.boltzgen gap, 2026-05-21). *tools.Registry
-// satisfies this; tests can inject a fake.
+// ToolRegistry reports whether an agent tool is registered, and lets
+// plan.create reach a registered tool to invoke it. plan.create uses it to
+// reject a method whose design.* tool has no executable implementation — a
+// method blessed in compat.go and installed locally but never wired into the
+// registry (the design.boltzgen gap, 2026-05-21) — and to run
+// design.boltzgen_check on a BoltzGen plan's spec. *tools.Registry satisfies
+// this; tests can inject a fake.
 type ToolRegistry interface {
 	Get(name string) (tools.Tool, bool)
+}
+
+// boltzGenCheckToolName is the registered name of the spec-validation tool.
+// plan.create and /plan approve invoke it by name through the registry so
+// this package stays decoupled from the check tool's own package — only the
+// JSON contract below is shared.
+const boltzGenCheckToolName = "design.boltzgen_check"
+
+// BoltzGenCheckResult is the pinned JSON contract returned in the
+// design.boltzgen_check tool's Result.Output. plan.create rejects a BoltzGen
+// plan whose spec is not Valid; /plan renders the result for review.
+type BoltzGenCheckResult struct {
+	Valid             bool     `json:"valid"`
+	Errors            []string `json:"errors,omitempty"`
+	VisualizationPath string   `json:"visualization_path,omitempty"`
 }
 
 // CreateTool implements plan.create: build a DesignPlan from a target and
@@ -124,6 +141,54 @@ func (*CreateTool) InputSchema() map[string]any {
 				"type":        "string",
 				"description": "The compute backend the plan should run on.",
 			},
+			"method_spec_path": map[string]any{
+				"type": "string",
+				"description": "Workspace-relative path to the design specification " +
+					"YAML. REQUIRED when method resolves to BoltzGen — author the " +
+					"spec first (see the boltzgen-spec skill) and validate it with " +
+					"design.boltzgen_check. plan.create re-runs the check and " +
+					"rejects the plan if the spec is invalid. Ignored for other " +
+					"methods.",
+			},
+			"method_params": map[string]any{
+				"type": "object",
+				"description": "Method-specific run configuration. For BoltzGen " +
+					"these are the BoltzGenParams run flags folded into the plan " +
+					"for /plan review and /plan approve. Ignored for other methods.",
+				"properties": map[string]any{
+					"protocol": map[string]any{
+						"type": "string",
+						"enum": []any{
+							"protein-anything", "peptide-anything",
+							"protein-small_molecule", "antibody-anything",
+							"nanobody-anything", "protein-redesign",
+						},
+						"description": "BoltzGen protocol; default protein-anything.",
+					},
+					"num_designs":          map[string]any{"type": "integer"},
+					"budget":               map[string]any{"type": "integer"},
+					"diffusion_batch_size": map[string]any{"type": "integer"},
+					"steps": map[string]any{
+						"type": "array",
+						"items": map[string]any{
+							"type": "string",
+							"enum": []any{
+								"design", "inverse_folding", "design_folding",
+								"folding", "affinity", "analysis", "filtering",
+							},
+						},
+					},
+					"alpha":                      map[string]any{"type": "number"},
+					"filter_biased":              map[string]any{"type": "boolean"},
+					"additional_filters":         map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+					"refolding_rmsd_threshold":   map[string]any{"type": "number"},
+					"inverse_fold_num_sequences": map[string]any{"type": "integer"},
+					"inverse_fold_avoid":         map[string]any{"type": "string"},
+					"step_scale":                 map[string]any{"type": "number"},
+					"noise_scale":                map[string]any{"type": "number"},
+					"reuse":                      map[string]any{"type": "boolean"},
+				},
+			},
 			"estimated_cost_usd": map[string]any{
 				"type":        "number",
 				"description": "Estimated total cost in USD.",
@@ -168,7 +233,7 @@ func (*CreateTool) RequiresConfirmation(json.RawMessage) bool       { return fal
 func (*CreateTool) EstimatedCostUSD(json.RawMessage) float64        { return 0 }
 func (*CreateTool) EstimatedDuration(json.RawMessage) time.Duration { return 100 * time.Millisecond }
 
-func (t *CreateTool) Execute(_ context.Context, input json.RawMessage) (tools.Result, error) {
+func (t *CreateTool) Execute(ctx context.Context, input json.RawMessage) (tools.Result, error) {
 	var p domain.DesignPlan
 	if err := json.Unmarshal(input, &p); err != nil {
 		return tools.Result{}, fmt.Errorf("plan.create: invalid input: %w", err)
@@ -215,6 +280,16 @@ func (t *CreateTool) Execute(_ context.Context, input json.RawMessage) (tools.Re
 	}
 	if err := validateShortlist(p.ShortlistSize); err != nil {
 		return tools.Result{}, err
+	}
+
+	// BoltzGen folds a design specification YAML + run params into the plan.
+	// For a BoltzGen method, method_spec_path is required; the spec is then
+	// validated via design.boltzgen_check (consistent with the install +
+	// registration guards above — an invalid spec rejects the plan).
+	if method == MethodBoltzGen {
+		if err := t.applyBoltzGenMethodConfig(ctx, input, &p); err != nil {
+			return tools.Result{}, err
+		}
 	}
 
 	// Ground every evidence entry in the corpus. The Citation field is
@@ -432,6 +507,79 @@ func (t *CreateTool) checkRegistered(m Method) error {
 			m, name, name)
 	}
 	return nil
+}
+
+// applyBoltzGenMethodConfig parses the optional method_spec_path +
+// method_params inputs into DesignPlan.MethodConfig and gates the plan on a
+// design.boltzgen_check of the spec. method_spec_path is required for a
+// BoltzGen plan; the spec must pass the check or the plan is rejected.
+func (t *CreateTool) applyBoltzGenMethodConfig(ctx context.Context, input json.RawMessage, p *domain.DesignPlan) error {
+	var envelope struct {
+		SpecPath string                 `json:"method_spec_path"`
+		Params   *domain.BoltzGenParams `json:"method_params"`
+	}
+	if err := json.Unmarshal(input, &envelope); err != nil {
+		return fmt.Errorf("plan.create: invalid method_params: %w", err)
+	}
+	specPath := strings.TrimSpace(envelope.SpecPath)
+	if specPath == "" {
+		return fmt.Errorf(
+			"plan.create: method BoltzGen requires method_spec_path — author " +
+				"the design specification YAML first (see the boltzgen-spec " +
+				"skill), validate it with design.boltzgen_check, then pass its " +
+				"workspace-relative path as method_spec_path")
+	}
+
+	mc := &domain.MethodConfig{SpecPath: specPath, BoltzGen: envelope.Params}
+
+	// Check gate: validate the spec via the design.boltzgen_check tool. A nil
+	// registry or an unregistered check tool skips the gate (the nil-registry
+	// path used by the install + registration guards above).
+	res, ran, err := t.runBoltzGenCheck(ctx, specPath)
+	if err != nil {
+		return err
+	}
+	if ran && !res.Valid {
+		errs := strings.Join(res.Errors, "; ")
+		if errs == "" {
+			errs = "(no detail reported)"
+		}
+		return fmt.Errorf(
+			"plan.create: BoltzGen spec %q failed design.boltzgen_check — fix "+
+				"the spec and retry. Errors: %s", specPath, errs)
+	}
+
+	p.MethodConfig = mc
+	return nil
+}
+
+// runBoltzGenCheck invokes the design.boltzgen_check tool through the registry
+// and decodes its pinned JSON result. ran is false (with a nil error) when the
+// check could not run — a nil registry or no registered check tool — so the
+// caller skips the gate, matching the install/registration guards' behaviour.
+func (t *CreateTool) runBoltzGenCheck(ctx context.Context, specPath string) (res BoltzGenCheckResult, ran bool, err error) {
+	if t.registry == nil {
+		return BoltzGenCheckResult{}, false, nil
+	}
+	tool, ok := t.registry.Get(boltzGenCheckToolName)
+	if !ok {
+		return BoltzGenCheckResult{}, false, nil
+	}
+	in, merr := json.Marshal(map[string]string{"spec_path": specPath})
+	if merr != nil {
+		return BoltzGenCheckResult{}, false, fmt.Errorf("plan.create: marshal boltzgen check input: %w", merr)
+	}
+	out, eerr := tool.Execute(ctx, in)
+	if eerr != nil {
+		return BoltzGenCheckResult{}, false, fmt.Errorf(
+			"plan.create: design.boltzgen_check failed for spec %q: %w", specPath, eerr)
+	}
+	if uerr := json.Unmarshal(out.Output, &res); uerr != nil {
+		return BoltzGenCheckResult{}, false, fmt.Errorf(
+			"plan.create: design.boltzgen_check returned an unparsable result for spec %q: %w",
+			specPath, uerr)
+	}
+	return res, true, nil
 }
 
 // validateFilters bounds-checks every populated field in FilterConfig and

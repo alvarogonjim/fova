@@ -15,9 +15,11 @@ import (
 func init() { registerAdapter(boltz2Adapter{}) }
 
 // boltz2Adapter wires fold.boltz2 to the container-mode Boltz-2 image: it
-// turns the agent's {sequences, save_as} request into a Boltz-format YAML,
-// runs `boltz predict` inside the tool image with the host weights cache
-// bind-mounted at /models, and returns the produced PDB(s) in the
+// compiles the agent's typed multi-entity request (protein/dna/rna/ligand
+// entities, MSA choice, model parameters) into a Boltz-2 v1 input YAML, stages
+// any precomputed MSA files into the workdir, runs `boltz predict` inside the
+// tool image with the install-time weights cache bind-mounted at /models, and
+// returns the produced structures — with their confidence scores — in the
 // {"designs":[...]} envelope shared with the design adapters.
 type boltz2Adapter struct{}
 
@@ -218,14 +220,25 @@ func parseBoltz2Output(outDir string) ([]designOut, error) {
 	return designs, nil
 }
 
-// Invoke writes the YAML, runs `boltz predict` inside the tool image, and
-// parses the produced PDB(s) into the {"designs":[...]} envelope. The image's
-// ENTRYPOINT is ["boltz", "predict"], so Cmd starts with the YAML path.
+// boltz2EntityMSAIsPath reports whether an entity's MSA field names a
+// precomputed MSA file (anything other than the two reserved keywords or the
+// unset empty string).
+func boltz2EntityMSAIsPath(msa string) bool {
+	return msa != "" && msa != "empty" && msa != "server"
+}
+
+// Invoke compiles the typed request into a Boltz-2 v1 YAML, stages any
+// precomputed MSA files into the workdir, runs `boltz predict` inside the tool
+// image, and parses the produced structures (with confidence scores) into the
+// {"designs":[...]} envelope. The image's ENTRYPOINT is ["boltz", "predict"],
+// so Cmd starts with the YAML path.
 func (boltz2Adapter) Invoke(ctx context.Context, env AdapterEnv, request []byte) ([]byte, error) {
 	var req boltz2Request
 	if err := json.Unmarshal(request, &req); err != nil {
 		return nil, fmt.Errorf("fold.boltz2: invalid request: %w", err)
 	}
+	// The tool's preflight is the primary input guard; this is the
+	// backend-side backstop against a malformed request reaching the runtime.
 	if len(req.Entities) == 0 {
 		return nil, fmt.Errorf("fold.boltz2: at least one entity is required")
 	}
@@ -234,6 +247,26 @@ func (boltz2Adapter) Invoke(ctx context.Context, env AdapterEnv, request []byte)
 	}
 	if env.Recipe.ImageTag == "" {
 		return nil, fmt.Errorf("fold.boltz2: container image is not configured (run /install boltz2)")
+	}
+
+	// Stage any precomputed MSA files into the workdir, rewriting each
+	// entity's MSA to the staged base name so the YAML references a path
+	// resolvable inside the container. This must precede YAML emission.
+	useMSAServer := false
+	for i := range req.Entities {
+		e := &req.Entities[i]
+		if e.MSA == "server" {
+			useMSAServer = true
+			continue
+		}
+		if !boltz2EntityMSAIsPath(e.MSA) {
+			continue
+		}
+		base := filepath.Base(e.MSA)
+		if err := copyFile(e.MSA, filepath.Join(env.WorkDir, base)); err != nil {
+			return nil, fmt.Errorf("fold.boltz2: stage MSA file %q: %w", e.MSA, err)
+		}
+		e.MSA = base
 	}
 
 	inputYAML := filepath.Join(env.WorkDir, "in.yaml")
@@ -256,28 +289,42 @@ func (boltz2Adapter) Invoke(ctx context.Context, env AdapterEnv, request []byte)
 			env.Recipe.ImageTag)
 	}
 
-	mounts := []Mount{{HostPath: env.WorkDir, ContainerPath: "/work"}}
-	// The weights cache is a bind-mount source; Boltz-2 downloads its weights
-	// into it at runtime, so an empty directory is the correct pre-state.
-	// Create it if absent rather than failing.
+	// Boltz-2 weights (~6 GB) are fetched at /install time into this cache —
+	// unlike BoltzGen's runtime HuggingFace download. A missing cache means
+	// install did not complete, so validate it exists (os.Stat) rather than
+	// creating it (spec §2).
 	modelsCache := ModelsRoot(env.Registry.Home(), "boltz2")
-	if err := os.MkdirAll(modelsCache, 0o755); err != nil {
-		return nil, fmt.Errorf("fold.boltz2: create weights cache %s: %w", modelsCache, err)
+	if info, err := os.Stat(modelsCache); err != nil || !info.IsDir() {
+		return nil, fmt.Errorf(
+			"fold.boltz2: weights cache %s missing — run /install boltz2",
+			modelsCache)
 	}
-	mounts = append(mounts, Mount{HostPath: modelsCache, ContainerPath: "/models"})
 
 	// ENTRYPOINT is ["boltz", "predict"]; Cmd carries the YAML and flags.
 	// --no_kernels is required on sm_121 (GB10) per upstream issue #663.
 	// --override prevents Boltz from skipping the run when /work/out exists
 	// (the workdir is fresh per call, but rerunning a cached subdir would
 	// be a silent no-op without it).
+	outputFormat := req.OutputFormat
+	if outputFormat == "" {
+		outputFormat = "pdb"
+	}
 	cmd := []string{
 		"/work/in.yaml",
 		"--out_dir", "/work/out",
 		"--cache", "/models",
-		"--output_format", "pdb",
+		"--output_format", outputFormat,
 		"--no_kernels",
 		"--override",
+	}
+	cmd = append(cmd, boltz2Args(req)...)
+	if useMSAServer {
+		cmd = append(cmd, "--use_msa_server")
+	}
+
+	mounts := []Mount{
+		{HostPath: env.WorkDir, ContainerPath: "/work"},
+		{HostPath: modelsCache, ContainerPath: "/models"},
 	}
 	if _, err := rt.RunContainer(ctx, ContainerRunArgs{
 		Image:   env.Recipe.ImageTag,
@@ -296,7 +343,7 @@ func (boltz2Adapter) Invoke(ctx context.Context, env AdapterEnv, request []byte)
 		return nil, err
 	}
 
-	// Optional: copy the first structure to the workspace-side path the caller
+	// Optional: copy the top structure to the workspace-side path the caller
 	// requested. The temp WorkDir is removed when RunDesign returns, so without
 	// this hop the structure_file path would dangle.
 	if dst := strings.TrimSpace(req.SaveAs); dst != "" {

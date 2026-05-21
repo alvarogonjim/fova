@@ -152,7 +152,7 @@ type Deps struct {
 	Jobs               *jobmgr.Manager
 	Local              *local.Registry
 	FovaHome           string
-	ConfigDir          string       // <ConfigDir>, used by /theme writeback; "" falls back to config.ConfigDir()
+	ConfigDir          string       // <ConfigDir>, used by /theme writeback; "" falls back to assets.Dir()
 	WebhookPort        int          // Adaptyv webhook receiver port; 0 disables it
 	WebhookURL         string       // Adaptyv callback URL (config-derived)
 	BudgetLimitUSD     float64      // [budget].session_soft_limit_usd; 0 = no limit

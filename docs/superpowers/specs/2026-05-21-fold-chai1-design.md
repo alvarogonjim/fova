@@ -171,8 +171,10 @@ once chai1 is bespoke, `foldJobTool` has no users — this spec **deletes
   - `sequence` — `string`; required for `protein`/`dna`/`rna`
   - `smiles` — `string`; required for `ligand`
   - `glycan` — `string` (Chai-1 glycan notation); required for `glycan`
-  - `msa` — `string`: `default` (ESM embeddings — Chai-1's default) | `server`
-    | a workspace path to a `.aligned.pqt` MSA. `protein` only.
+- `msa` — `string`, optional, **request-level**: `default` (ESM embeddings —
+  Chai-1's default, no MSA) | `server` (ColabFold MSA server) | a workspace
+  path to a directory of precomputed `.aligned.pqt` files. Chai-1's MSA inputs
+  (`use_msa_server` / `msa_directory`) are job-wide, not per-entity.
 - `restraints` (array, optional). Each restraint:
   - `connection_type` — enum `contact` | `pocket` | `covalent` (required)
   - `chain_a` (required), `res_a` (optional — `219` or `219@CA`)
@@ -215,8 +217,8 @@ typed restraint to a row, leaves optional cells blank. The adapter passes
 **CLI mapping.** A table-driven `chai1Args(req)` maps the model-parameter
 fields to flags (mirrors BoltzGen's `boltzGenArgs` / `boltz2Args`): an unset
 pointer omits the flag. fova fixes the infrastructure flags from §2 and
-derives `--use-msa-server` (any entity `msa: server`), `--msa-directory` (a
-staged precomputed MSA), `--use-templates-server` / `--template-hits-path`
+derives `--use-msa-server` (request `msa` is `server`), `--msa-directory`
+(request `msa` is a path), `--use-templates-server` / `--template-hits-path`
 (from `templates`), `--constraint-path` (when restraints exist).
 
 **File staging.** Precomputed MSA directories and `template_hits_path` files

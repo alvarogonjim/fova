@@ -1,6 +1,7 @@
 package fold
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
 )
@@ -70,3 +71,28 @@ func TestPreflightBoltz2(t *testing.T) {
 }
 
 func ptr[T any](v T) *T { return &v }
+
+func TestBoltz2ExecuteRejectsBadInput(t *testing.T) {
+	tool := NewBoltz2(t.TempDir(), nil, nil)
+	// Invalid: no entities. Must error WITHOUT panicking on the nil manager —
+	// preflight rejects it before any job submit.
+	_, err := tool.Execute(context.Background(), json.RawMessage(`{"entities":[]}`))
+	if err == nil {
+		t.Fatal("expected a preflight error for empty entities")
+	}
+}
+
+func TestBoltz2ExecuteSubmitsJob(t *testing.T) {
+	// newFoldTestDeps is the existing helper in foldjob_test.go — it returns a
+	// real *jobs.Manager (SQLite store under t.TempDir()) and a stubBackend.
+	mgr, backend := newFoldTestDeps(t, `{"designs":[]}`)
+	tool := NewBoltz2(t.TempDir(), mgr, backend)
+	res, err := tool.Execute(context.Background(),
+		json.RawMessage(`{"entities":[{"type":"protein","id":"A","sequence":"MKQ"}]}`))
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if res.JobID == "" {
+		t.Error("Execute must return a job id")
+	}
+}

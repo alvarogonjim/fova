@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"strings"
 	"time"
 
 	"github.com/alvarogonjim/fova/internal/backends"
+	"github.com/alvarogonjim/fova/internal/domain"
 	"github.com/alvarogonjim/fova/internal/jobs"
 	"github.com/alvarogonjim/fova/internal/tools"
 )
@@ -233,7 +235,68 @@ func (*boltz2Tool) RequiresConfirmation(json.RawMessage) bool       { return tru
 func (*boltz2Tool) EstimatedCostUSD(json.RawMessage) float64        { return 0.25 }
 func (*boltz2Tool) EstimatedDuration(json.RawMessage) time.Duration { return 3 * time.Minute }
 
-// Execute is implemented in Task A3.
-func (t *boltz2Tool) Execute(_ context.Context, _ json.RawMessage) (tools.Result, error) {
-	return tools.Result{}, nil
+// isMSAFile reports whether an entity's MSA value names a workspace file —
+// i.e. it is neither empty, the "empty" mode, nor the "server" mode.
+func isMSAFile(msa string) bool {
+	return msa != "" && msa != "empty" && msa != "server"
+}
+
+// Execute validates the request in preflight, resolves every workspace path
+// against the workspace root, and submits a background compute job. The job
+// runs the backend and returns its raw output; nothing is persisted (this is
+// a structure predictor, not a design generator).
+func (t *boltz2Tool) Execute(_ context.Context, input json.RawMessage) (tools.Result, error) {
+	var req boltz2Request
+	if err := json.Unmarshal(input, &req); err != nil {
+		return tools.Result{}, fmt.Errorf("invalid fold.boltz2 request: %w", err)
+	}
+	if err := preflightBoltz2(req); err != nil {
+		return tools.Result{}, err
+	}
+	// Resolve workspace paths. An empty workspaceRoot short-circuits — mirrors
+	// designTool, and covers tests that do not set one.
+	if t.workspaceRoot != "" {
+		for i := range req.Entities {
+			if isMSAFile(req.Entities[i].MSA) {
+				abs, err := tools.ResolveWorkspacePath(t.workspaceRoot, req.Entities[i].MSA)
+				if err != nil {
+					return tools.Result{}, fmt.Errorf("fold.boltz2: %w", err)
+				}
+				req.Entities[i].MSA = abs
+			}
+		}
+		if req.SaveAs != "" {
+			abs, err := tools.ResolveWorkspacePath(t.workspaceRoot, req.SaveAs)
+			if err != nil {
+				return tools.Result{}, fmt.Errorf("fold.boltz2: %w", err)
+			}
+			req.SaveAs = abs
+		}
+	}
+	resolved, err := json.Marshal(req)
+	if err != nil {
+		return tools.Result{}, fmt.Errorf("fold.boltz2: %w", err)
+	}
+	jobID, err := t.mgr.Submit(jobs.Spec{
+		Kind:    domain.JobCompute,
+		Tool:    "fold.boltz2",
+		Backend: t.backend.Name(),
+		Input:   resolved,
+		Run: func(ctx context.Context, progress func(float64), log io.Writer) ([]byte, error) {
+			out, err := t.backend.Run(ctx, "fold.boltz2", resolved, log, progress)
+			if err != nil {
+				return nil, err
+			}
+			progress(1)
+			return out, nil
+		},
+	})
+	if err != nil {
+		return tools.Result{}, err
+	}
+	return tools.Result{
+		JobID:      jobID,
+		Display:    "started fold.boltz2 job " + string(jobID) + " — poll jobs.result for the predicted structure",
+		Provenance: domain.NewToolCallRef("fold.boltz2", input),
+	}, nil
 }

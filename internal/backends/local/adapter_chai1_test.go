@@ -339,10 +339,20 @@ func TestChai1Args(t *testing.T) {
 	}
 }
 
-func TestParseChai1Output(t *testing.T) {
+func TestParseChai1OutputWithScores(t *testing.T) {
 	outDir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(outDir, "pred.model_0.cif"),
+	if err := os.WriteFile(filepath.Join(outDir, "pred.model_idx_0.cif"),
 		[]byte("data_pred\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	npz := makeNPZ(t, map[string][]byte{
+		"aggregate_score":         makeNPY("()", []float64{0.77}),
+		"ptm":                     makeNPY("()", []float64{0.81}),
+		"iptm":                    makeNPY("()", []float64{0.66}),
+		"per_chain_ptm":           makeNPY("(2,)", []float64{0.9, 0.7}),
+		"has_inter_chain_clashes": makeNPY("()", []float64{0}),
+	})
+	if err := os.Rename(npz, filepath.Join(outDir, "scores.model_idx_0.npz")); err != nil {
 		t.Fatal(err)
 	}
 	designs, err := parseChai1Output(outDir)
@@ -352,8 +362,27 @@ func TestParseChai1Output(t *testing.T) {
 	if len(designs) != 1 {
 		t.Fatalf("want 1 design, got %d", len(designs))
 	}
-	if !strings.HasSuffix(designs[0].StructureFile, ".cif") {
-		t.Errorf("structure_file = %q, want a .cif", designs[0].StructureFile)
+	s := designs[0].Scores
+	if s["aggregate_score"] != 0.77 || s["ptm"] != 0.81 || s["iptm"] != 0.66 {
+		t.Errorf("scalar scores wrong: %v", s)
+	}
+	if s["chain_0_ptm"] != 0.9 || s["chain_1_ptm"] != 0.7 {
+		t.Errorf("per_chain_ptm not flattened: %v", s)
+	}
+}
+
+func TestParseChai1OutputNoScores(t *testing.T) {
+	outDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(outDir, "pred.model_idx_0.cif"),
+		[]byte("data_pred\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	designs, err := parseChai1Output(outDir)
+	if err != nil {
+		t.Fatalf("a prediction without a scores .npz must not error: %v", err)
+	}
+	if len(designs) != 1 || len(designs[0].Scores) != 0 {
+		t.Errorf("want 1 design with empty scores, got %+v", designs)
 	}
 }
 

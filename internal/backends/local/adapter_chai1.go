@@ -148,9 +148,31 @@ func chai1Args(req chai1Request) []string {
 	return args
 }
 
-// parseChai1Output collects every CIF and PDB under outDir, returning one
-// designOut per file. Chai-1 emits CIFs by default; we accept both to keep
-// the parser tolerant of an upstream flag flip.
+// chai1ScoresFromNPZ maps a decoded scores.model_idx_N.npz to fova's score
+// keys (THE CONTRACT "Score keys"): the scalar members aggregate_score / ptm /
+// iptm / has_inter_chain_clashes are taken as Data[0]; the 1-D per_chain_ptm
+// member is flattened to chain_<i>_ptm. 2-D members and keys not in the table
+// are ignored.
+func chai1ScoresFromNPZ(npz map[string]npzValue) map[string]float64 {
+	scores := map[string]float64{}
+	for _, key := range []string{"aggregate_score", "ptm", "iptm", "has_inter_chain_clashes"} {
+		if v, ok := npz[key]; ok && len(v.Shape) == 0 && len(v.Data) > 0 {
+			scores[key] = v.Data[0]
+		}
+	}
+	if v, ok := npz["per_chain_ptm"]; ok && len(v.Shape) == 1 {
+		for i, d := range v.Data {
+			scores[fmt.Sprintf("chain_%d_ptm", i)] = d
+		}
+	}
+	return scores
+}
+
+// parseChai1Output collects every pred.model_idx_*.cif (and .pdb) under outDir,
+// sorted by name, and returns one designOut per file. Each structure's Scores
+// are read from its sibling scores.model_idx_N.npz — the `pred.` prefix is
+// swapped for `scores.` and the extension for `.npz`. A missing or unreadable
+// .npz yields an empty Scores map and no error.
 func parseChai1Output(outDir string) ([]designOut, error) {
 	var files []string
 	err := filepath.Walk(outDir, func(p string, info os.FileInfo, err error) error {
@@ -160,8 +182,10 @@ func parseChai1Output(outDir string) ([]designOut, error) {
 		if info.IsDir() {
 			return nil
 		}
-		low := strings.ToLower(p)
-		if strings.HasSuffix(low, ".cif") || strings.HasSuffix(low, ".pdb") {
+		base := filepath.Base(p)
+		low := strings.ToLower(base)
+		if strings.HasPrefix(low, "pred.model_idx_") &&
+			(strings.HasSuffix(low, ".cif") || strings.HasSuffix(low, ".pdb")) {
 			files = append(files, p)
 		}
 		return nil
@@ -172,14 +196,24 @@ func parseChai1Output(outDir string) ([]designOut, error) {
 	sort.Strings(files)
 	var designs []designOut
 	for _, p := range files {
+		scores := map[string]float64{}
+		base := filepath.Base(p)
+		ext := filepath.Ext(base)
+		stem := strings.TrimSuffix(base, ext)
+		// pred.model_idx_N → scores.model_idx_N.npz
+		scoresName := strings.Replace(stem, "pred.", "scores.", 1) + ".npz"
+		scoresPath := filepath.Join(filepath.Dir(p), scoresName)
+		if npz, err := readNPZ(scoresPath); err == nil {
+			scores = chai1ScoresFromNPZ(npz)
+		}
 		designs = append(designs, designOut{
 			Sequence:      map[string]string{},
 			StructureFile: p,
-			Scores:        map[string]float64{},
+			Scores:        scores,
 		})
 	}
 	if len(designs) == 0 {
-		return nil, fmt.Errorf("fold.chai1: no CIF/PDB files found under %s", outDir)
+		return nil, fmt.Errorf("fold.chai1: no pred.model_idx_*.cif files found under %s", outDir)
 	}
 	return designs, nil
 }

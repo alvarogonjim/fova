@@ -42,8 +42,8 @@ const (
 	overlayKeys
 )
 
-// panelFocus is which pane Tab-cycling currently targets (used for the
-// narrow-terminal single-pane layout).
+// panelFocus is which pane the Tab focus ring currently targets — the chat
+// or one of the three side panels.
 type panelFocus int
 
 const (

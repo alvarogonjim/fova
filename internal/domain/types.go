@@ -191,8 +191,40 @@ type DesignPlan struct {
 	EstimatedTime  string          `json:"estimated_time"`
 	Rationale      string          `json:"rationale"`
 	Evidence       []EvidenceEntry `json:"evidence,omitempty"`
+	MethodConfig   *MethodConfig   `json:"method_config,omitempty"`
 	Approved       bool            `json:"approved"`
 	ApprovedAt     *time.Time      `json:"approved_at,omitempty"`
+}
+
+// BoltzGenParams is the agent-facing BoltzGen run configuration. Every field
+// maps to a `boltzgen run` CLI flag; fova owns the infra flags separately.
+//
+// Pointers (*float64, *bool) distinguish "unset" (omit the flag, use
+// BoltzGen's default) from a real zero value. It lives in internal/domain so
+// DesignPlan.MethodConfig can reference it without an import cycle;
+// internal/tools/design uses it via a package alias.
+type BoltzGenParams struct {
+	Protocol                string   `json:"protocol"`    // --protocol, enum, default "protein-anything"
+	NumDesigns              int      `json:"num_designs"` // --num_designs
+	Budget                  int      `json:"budget"`      // --budget
+	DiffusionBatchSize      int      `json:"diffusion_batch_size,omitempty"`
+	Steps                   []string `json:"steps,omitempty"`         // --steps
+	Alpha                   *float64 `json:"alpha,omitempty"`         // --alpha
+	FilterBiased            *bool    `json:"filter_biased,omitempty"` // --filter_biased
+	AdditionalFilters       []string `json:"additional_filters,omitempty"`
+	RefoldingRMSDThreshold  *float64 `json:"refolding_rmsd_threshold,omitempty"`
+	InverseFoldNumSequences int      `json:"inverse_fold_num_sequences,omitempty"`
+	InverseFoldAvoid        string   `json:"inverse_fold_avoid,omitempty"`
+	StepScale               *float64 `json:"step_scale,omitempty"`
+	NoiseScale              *float64 `json:"noise_scale,omitempty"`
+	Reuse                   bool     `json:"reuse,omitempty"`
+}
+
+// MethodConfig carries method-specific run configuration on a DesignPlan.
+// Populated only for methods that need it (currently BoltzGen).
+type MethodConfig struct {
+	SpecPath string          `json:"spec_path,omitempty"` // workspace-relative spec YAML
+	BoltzGen *BoltzGenParams `json:"boltzgen,omitempty"`  // run params
 }
 
 // EvidenceEntry is one literature reference attached to a DesignPlan. Every

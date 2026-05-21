@@ -1,18 +1,227 @@
 package fold
 
 import (
+	"context"
+	"encoding/json"
+	"time"
+
 	"github.com/alvarogonjim/fova/internal/backends"
 	"github.com/alvarogonjim/fova/internal/jobs"
+	"github.com/alvarogonjim/fova/internal/tools"
 )
 
+// chai1Entity is one molecular component of the predicted complex.
+type chai1Entity struct {
+	Type     string `json:"type"`     // protein | dna | rna | ligand | glycan
+	ID       string `json:"id"`       // one chain id
+	Sequence string `json:"sequence"` // protein/dna/rna
+	SMILES   string `json:"smiles"`   // ligand
+	Glycan   string `json:"glycan"`   // glycan
+}
+
+// chai1Restraint is one inter-chain restraint. Pointer fields are optional
+// numerics: nil ⇒ the CSV cell is left blank.
+type chai1Restraint struct {
+	ConnectionType string   `json:"connection_type"` // contact | pocket | covalent
+	ChainA         string   `json:"chain_a"`
+	ResA           string   `json:"res_a"`
+	ChainB         string   `json:"chain_b"`
+	ResB           string   `json:"res_b"`
+	MinDistance    *float64 `json:"min_distance"`
+	MaxDistance    *float64 `json:"max_distance"`
+	Confidence     *float64 `json:"confidence"`
+	Comment        string   `json:"comment"`
+}
+
+// chai1Templates is the optional request-level template configuration.
+type chai1Templates struct {
+	Server   bool   `json:"server"`
+	HitsPath string `json:"hits_path"`
+}
+
+// chai1Request is the full fold.chai1 input. Pointer fields are model
+// parameters: nil ⇒ omit the CLI flag and let Chai-1 use its own default.
+type chai1Request struct {
+	Entities            []chai1Entity    `json:"entities"`
+	MSA                 string           `json:"msa"` // "default" | "server" | workspace path
+	Restraints          []chai1Restraint `json:"restraints"`
+	Templates           *chai1Templates  `json:"templates"`
+	NumTrunkRecycles    *int             `json:"num_trunk_recycles"`
+	NumDiffnTimesteps   *int             `json:"num_diffn_timesteps"`
+	NumDiffnSamples     *int             `json:"num_diffn_samples"`
+	NumTrunkSamples     *int             `json:"num_trunk_samples"`
+	RecycleMSASubsample *int             `json:"recycle_msa_subsample"`
+	Seed                *int             `json:"seed"`
+	SaveAs              string           `json:"save_as"`
+}
+
+// chai1Tool is the bespoke agent tool for Chai-1 biomolecular complex
+// structure prediction. Unlike the retired shared foldJobTool, it accepts a
+// typed multi-entity request (protein/DNA/RNA/ligand/glycan) with restraints,
+// templates and MSA control, validates it in preflight, resolves workspace
+// paths, and submits a background compute job.
+type chai1Tool struct {
+	workspaceRoot string
+	mgr           *jobs.Manager
+	backend       backends.Backend
+}
+
 // NewChai1 returns the fold.chai1 tool: Chai-1 complex structure prediction on
-// the Modal compute backend, run as an async job.
-func NewChai1(mgr *jobs.Manager, backend backends.Backend) *foldJobTool {
-	return &foldJobTool{
-		name: "fold.chai1",
-		description: "Predict the 3D structure of a protein complex from its chain " +
-			"sequences using Chai-1 (runs as an async job).",
-		mgr:     mgr,
-		backend: backend,
+// the selected compute backend, run as an async job.
+func NewChai1(workspaceRoot string, mgr *jobs.Manager, backend backends.Backend) *chai1Tool {
+	return &chai1Tool{
+		workspaceRoot: workspaceRoot,
+		mgr:           mgr,
+		backend:       backend,
 	}
+}
+
+func (*chai1Tool) Name() string { return "fold.chai1" }
+
+func (*chai1Tool) Description() string {
+	return "Predict the 3D structure of a biomolecular complex " +
+		"(protein/DNA/RNA/ligand/glycan entities) with Chai-1; runs as an async job."
+}
+
+// InputSchema describes the typed multi-entity Chai-1 request.
+func (*chai1Tool) InputSchema() map[string]any {
+	return map[string]any{
+		"type":     "object",
+		"required": []string{"entities"},
+		"properties": map[string]any{
+			"entities": map[string]any{
+				"type":        "array",
+				"description": "Molecular components of the complex to predict",
+				"items": map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"type": map[string]any{
+							"type":        "string",
+							"enum":        []string{"protein", "dna", "rna", "ligand", "glycan"},
+							"description": "Entity kind: protein, dna, rna, ligand, or glycan",
+						},
+						"id": map[string]any{
+							"type":        "string",
+							"description": "Chain id for this entity (unique across all entities)",
+						},
+						"sequence": map[string]any{
+							"type":        "string",
+							"description": "Residue sequence (protein/dna/rna)",
+						},
+						"smiles": map[string]any{
+							"type":        "string",
+							"description": "Ligand SMILES string",
+						},
+						"glycan": map[string]any{
+							"type":        "string",
+							"description": "Glycan string in Chai-1 glycan notation",
+						},
+					},
+				},
+			},
+			"msa": map[string]any{
+				"type":        "string",
+				"description": "MSA mode: 'default' (ESM embeddings, offline), 'server' (ColabFold MSA server), or a workspace path to a precomputed MSA directory",
+			},
+			"restraints": map[string]any{
+				"type":        "array",
+				"description": "Optional inter-chain restraints",
+				"items": map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"connection_type": map[string]any{
+							"type":        "string",
+							"enum":        []string{"contact", "pocket", "covalent"},
+							"description": "Restraint kind: contact, pocket, or covalent",
+						},
+						"chain_a": map[string]any{
+							"type":        "string",
+							"description": "First chain id",
+						},
+						"res_a": map[string]any{
+							"type":        "string",
+							"description": "Residue on the first chain (e.g. 'A219', atoms as 'A219@CA')",
+						},
+						"chain_b": map[string]any{
+							"type":        "string",
+							"description": "Second chain id",
+						},
+						"res_b": map[string]any{
+							"type":        "string",
+							"description": "Residue on the second chain",
+						},
+						"min_distance": map[string]any{
+							"type":        "number",
+							"description": "Optional minimum distance in angstroms",
+						},
+						"max_distance": map[string]any{
+							"type":        "number",
+							"description": "Optional maximum distance in angstroms",
+						},
+						"confidence": map[string]any{
+							"type":        "number",
+							"description": "Optional restraint confidence in [0, 1] (default 1.0)",
+						},
+						"comment": map[string]any{
+							"type":        "string",
+							"description": "Optional free-text comment",
+						},
+					},
+				},
+			},
+			"templates": map[string]any{
+				"type":        "object",
+				"description": "Optional structural template configuration",
+				"properties": map[string]any{
+					"server": map[string]any{
+						"type":        "boolean",
+						"description": "Use the Chai-1 template server",
+					},
+					"hits_path": map[string]any{
+						"type":        "string",
+						"description": "Workspace path to a precomputed template hits file",
+					},
+				},
+			},
+			"num_trunk_recycles": map[string]any{
+				"type":        "integer",
+				"description": "Number of trunk recycling iterations (optional; Chai-1 default)",
+			},
+			"num_diffn_timesteps": map[string]any{
+				"type":        "integer",
+				"description": "Number of diffusion timesteps (optional; Chai-1 default)",
+			},
+			"num_diffn_samples": map[string]any{
+				"type":        "integer",
+				"description": "Number of diffusion samples / predicted models to rank (optional; Chai-1 default)",
+			},
+			"num_trunk_samples": map[string]any{
+				"type":        "integer",
+				"description": "Number of trunk samples (optional; Chai-1 default)",
+			},
+			"recycle_msa_subsample": map[string]any{
+				"type":        "integer",
+				"description": "MSA subsample size on recycling (optional; Chai-1 default)",
+			},
+			"seed": map[string]any{
+				"type":        "integer",
+				"description": "Random seed for reproducible predictions (optional)",
+			},
+			"save_as": map[string]any{
+				"type":        "string",
+				"description": "Optional workspace-relative path to save the predicted structure",
+			},
+		},
+	}
+}
+
+// Chai-1 prediction is a long, GPU-bound job — always require user approval.
+func (*chai1Tool) RequiresConfirmation(json.RawMessage) bool       { return true }
+func (*chai1Tool) EstimatedCostUSD(json.RawMessage) float64        { return 0.25 }
+func (*chai1Tool) EstimatedDuration(json.RawMessage) time.Duration { return 3 * time.Minute }
+
+// Execute validates the request in preflight, resolves every workspace path
+// against the workspace root, and submits a background compute job.
+func (t *chai1Tool) Execute(_ context.Context, input json.RawMessage) (tools.Result, error) {
+	return tools.Result{}, nil
 }

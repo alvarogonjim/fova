@@ -2,7 +2,9 @@ package knowledge
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -798,6 +800,12 @@ func (c *Corpus) readCorpus(paperID string, result resultFn) (tools.Result, erro
 	}
 	p, err := c.st.GetCorpusPaper(paperID)
 	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return tools.Result{}, fmt.Errorf(
+				"knowledge.corpus_read: paper %q is not in this project's corpus — "+
+					"use a paper_id from a knowledge.corpus_search or knowledge.corpus_grep "+
+					"result, or add it first with knowledge.corpus_add", paperID)
+		}
 		return tools.Result{}, err
 	}
 	return result(

@@ -800,8 +800,18 @@ func (m *Model) runPlanCommand(arg string) (tea.Model, tea.Cmd) {
 			m.chat.appendError("could not approve the design plan: " + err.Error())
 			return m, nil
 		}
-		m.chat.appendAgentDeltaBlock("plan " + string(p.ID) + " approved")
-		return m, nil
+		m.chat.appendAgentDeltaBlock("plan " + string(p.ID) + " approved — submitting the design job")
+		if m.running {
+			// A turn is already in flight; don't start a second one. The
+			// approved plan is persisted and the agent can act on it next.
+			return m, nil
+		}
+		// Hand control back to the agent: an approved plan must trigger the
+		// design job(s). Without this the approval is inert — the flag is
+		// set but nothing consumes it.
+		return m.startTurn("The design plan " + string(p.ID) + " is approved. " +
+			"Submit the design job(s) for it now — use the plan's method, " +
+			"target, chain, and parameters.")
 
 	case "cancel":
 		m.chat.appendAgentDeltaBlock("plan cancelled — ask the agent to plan from a target again")

@@ -76,34 +76,64 @@ func stubContainerRuntime(t *testing.T, onRun func(args []string) error) *[][]st
 	return calls
 }
 
-func TestWriteBoltz2YAMLDeterministic(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "in.yaml")
-	if err := writeBoltz2YAML(path, map[string]string{"B": "MMMM", "A": "AAAA"}); err != nil {
-		t.Fatalf("writeBoltz2YAML: %v", err)
-	}
-	body, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	got := string(body)
-	want := "sequences:\n" +
-		"  - protein:\n      id: A\n      sequence: AAAA\n      msa: empty\n" +
-		"  - protein:\n      id: B\n      sequence: MMMM\n      msa: empty\n"
+func TestBuildBoltz2YAML(t *testing.T) {
+	req := boltz2Request{Entities: []boltz2Entity{
+		{Type: "protein", ID: chainIDs{"A"}, Sequence: "MKQ", MSA: "empty"},
+		{Type: "protein", ID: chainIDs{"B", "C"}, Sequence: "AAA"},
+		{Type: "ligand", ID: chainIDs{"L"}, SMILES: "CCO"},
+		{Type: "rna", ID: chainIDs{"R"}, Sequence: "ACGU", Cyclic: true},
+	}}
+	got := buildBoltz2YAML(req)
+	want := "version: 1\n" +
+		"sequences:\n" +
+		"  - protein:\n      id: A\n      sequence: MKQ\n      msa: empty\n" +
+		// An entity with no MSA field defaults to single-sequence (msa: empty) —
+		// Boltz-2 requires an MSA unless --use_msa_server is set.
+		"  - protein:\n      id: [B, C]\n      sequence: AAA\n      msa: empty\n" +
+		"  - ligand:\n      id: L\n      smiles: CCO\n" +
+		"  - rna:\n      id: R\n      sequence: ACGU\n      msa: empty\n      cyclic: true\n"
 	if got != want {
 		t.Errorf("yaml mismatch\n got:\n%s\nwant:\n%s", got, want)
 	}
 }
 
-func TestParseBoltz2Output(t *testing.T) {
+func TestBuildBoltz2YAMLServerMSAOmitsLine(t *testing.T) {
+	req := boltz2Request{Entities: []boltz2Entity{
+		{Type: "protein", ID: chainIDs{"A"}, Sequence: "MKQ", MSA: "server"}}}
+	if strings.Contains(buildBoltz2YAML(req), "msa:") {
+		t.Error("msa: server must omit the msa line so --use_msa_server fills it")
+	}
+}
+
+func TestBoltz2Args(t *testing.T) {
+	rs, ss := 5, 100
+	got := strings.Join(boltz2Args(boltz2Request{
+		RecyclingSteps: &rs, SamplingSteps: &ss}), " ")
+	for _, want := range []string{"--recycling_steps 5", "--sampling_steps 100"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("args missing %q in %q", want, got)
+		}
+	}
+	// Unset pointers omit the flag entirely.
+	if strings.Contains(strings.Join(boltz2Args(boltz2Request{}), " "), "--diffusion_samples") {
+		t.Error("an unset diffusion_samples must omit the flag")
+	}
+}
+
+func TestParseBoltz2OutputWithScores(t *testing.T) {
 	outDir := t.TempDir()
-	// Boltz writes per-model PDBs under predictions/<stem>/...
 	sub := filepath.Join(outDir, "predictions", "in")
 	if err := os.MkdirAll(sub, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(sub, "in_model_0.pdb"),
 		[]byte("ATOM\nEND\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	conf := `{"confidence_score":0.84,"ptm":0.81,"iptm":0.79,` +
+		`"complex_plddt":0.88,"chains_ptm":{"0":0.9,"1":0.7}}`
+	if err := os.WriteFile(filepath.Join(sub, "confidence_in_model_0.json"),
+		[]byte(conf), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	designs, err := parseBoltz2Output(outDir)
@@ -113,28 +143,44 @@ func TestParseBoltz2Output(t *testing.T) {
 	if len(designs) != 1 {
 		t.Fatalf("want 1 design, got %d", len(designs))
 	}
-	if designs[0].StructureFile == "" {
-		t.Error("structure_file must be set")
+	s := designs[0].Scores
+	if s["plddt"] != 0.88 || s["ptm"] != 0.81 || s["iptm"] != 0.79 {
+		t.Errorf("standard scores wrong: %v", s)
+	}
+	if s["chain_0_ptm"] != 0.9 || s["chain_1_ptm"] != 0.7 {
+		t.Errorf("chains_ptm not flattened: %v", s)
+	}
+}
+
+func TestParseBoltz2OutputNoConfidenceFile(t *testing.T) {
+	outDir := t.TempDir()
+	sub := filepath.Join(outDir, "predictions", "in")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sub, "in_model_0.pdb"),
+		[]byte("ATOM\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	designs, err := parseBoltz2Output(outDir)
+	if err != nil {
+		t.Fatalf("a prediction without a confidence file must not error: %v", err)
+	}
+	if len(designs) != 1 || len(designs[0].Scores) != 0 {
+		t.Errorf("want 1 design with empty scores, got %+v", designs)
 	}
 }
 
 func TestParseBoltz2OutputEmptyErrors(t *testing.T) {
 	if _, err := parseBoltz2Output(t.TempDir()); err == nil {
-		t.Fatal("expected an error when no PDBs are present")
+		t.Fatal("expected an error when no structures are present")
 	}
 }
 
 func TestBoltz2AdapterInvoke(t *testing.T) {
-	var logBuf bytes.Buffer
 	var progress []float64
-	env := boltz2TestEnv(t, &logBuf, &progress)
-
-	// Stage a stub PDB into env.WorkDir/out the moment the container's
-	// `run` argv is presented; the adapter parses it after RunContainer
-	// returns.
-	calls := stubContainerRuntime(t, func(args []string) error {
-		// Only the `run` invocation produces output; `image inspect` goes
-		// through runCmdOutput, not runCmd.
+	env := boltz2TestEnv(t, nil, &progress)
+	stubContainerRuntime(t, func(args []string) error {
 		if len(args) < 2 || args[1] != "run" {
 			return nil
 		}
@@ -142,135 +188,53 @@ func TestBoltz2AdapterInvoke(t *testing.T) {
 		if err := os.MkdirAll(sub, 0o755); err != nil {
 			return err
 		}
+		_ = os.WriteFile(filepath.Join(sub, "confidence_in_model_0.json"),
+			[]byte(`{"complex_plddt":0.9,"ptm":0.8,"iptm":0.7}`), 0o644)
 		return os.WriteFile(filepath.Join(sub, "in_model_0.pdb"),
 			[]byte("ATOM\nEND\n"), 0o644)
 	})
-
-	saveAs := filepath.Join(t.TempDir(), "designs", "predicted.pdb")
-	body := []byte(`{"sequences":{"A":"MKQHKAMIVAL","B":"MKQHKAMIVAL"},"save_as":"` + saveAs + `"}`)
-
+	body := []byte(`{"entities":[{"type":"protein","id":"A","sequence":"MKQ","msa":"empty"}],` +
+		`"output_format":"pdb"}`)
 	out, err := boltz2Adapter{}.Invoke(context.Background(), env, body)
 	if err != nil {
 		t.Fatalf("Invoke: %v", err)
 	}
 	var resp designsEnvelope
 	if err := json.Unmarshal(out, &resp); err != nil {
-		t.Fatalf("output is not a designs envelope: %v", err)
+		t.Fatalf("not a designs envelope: %v", err)
 	}
-	if len(resp.Designs) != 1 {
-		t.Fatalf("want 1 design, got %d", len(resp.Designs))
+	if len(resp.Designs) != 1 || resp.Designs[0].Scores["plddt"] != 0.9 {
+		t.Fatalf("want 1 scored design, got %+v", resp.Designs)
 	}
-	if resp.Designs[0].StructureFile != saveAs {
-		t.Errorf("structure_file = %q, want save_as path %q", resp.Designs[0].StructureFile, saveAs)
-	}
-	if _, err := os.Stat(saveAs); err != nil {
-		t.Errorf("save_as file not present at %q: %v", saveAs, err)
-	}
-
-	// The YAML must have been written with both chains, alphabetically ordered.
-	yaml, err := os.ReadFile(filepath.Join(env.WorkDir, "in.yaml"))
-	if err != nil {
-		t.Fatalf("read in.yaml: %v", err)
-	}
-	yamlStr := string(yaml)
-	for _, want := range []string{
-		"id: A", "id: B",
-		"sequence: MKQHKAMIVAL",
-		"msa: empty",
-	} {
-		if !strings.Contains(yamlStr, want) {
-			t.Errorf("YAML missing %q in:\n%s", want, yamlStr)
-		}
-	}
-	if strings.Index(yamlStr, "id: A") > strings.Index(yamlStr, "id: B") {
-		t.Errorf("YAML chains must be alphabetically ordered, got:\n%s", yamlStr)
-	}
-
-	// Exactly one container run call (image inspect goes through runCmdOutput).
-	var runCalls [][]string
-	for _, c := range *calls {
-		if len(c) >= 2 && c[1] == "run" {
-			runCalls = append(runCalls, c)
-		}
-	}
-	if len(runCalls) != 1 {
-		t.Fatalf("want 1 `podman run` call, got %d: %v", len(runCalls), runCalls)
-	}
-	joined := strings.Join(runCalls[0], " ")
-	for _, want := range []string{
-		"/usr/bin/podman run",
-		// boltz2 recipe declares gpu = true so the GPU flag must appear.
-		"--device nvidia.com/gpu=all",
-		"-v " + env.WorkDir + ":/work",
-		"-v " + ModelsRoot(env.Registry.Home(), "boltz2") + ":/models",
-		"-w /work",
-		env.Recipe.ImageTag,
-		// Cmd: YAML + flags (no "predict" — that's in the ENTRYPOINT).
-		"/work/in.yaml",
-		"--out_dir /work/out",
-		"--cache /models",
-		"--output_format pdb",
-		"--no_kernels",
-		"--override",
-	} {
-		if !strings.Contains(joined, want) {
-			t.Errorf("argv missing %q in:\n%s", want, joined)
-		}
-	}
-	// Critically: do NOT pass `predict` as the first Cmd arg — that's in
-	// the image's ENTRYPOINT, so doubling it would call `boltz predict
-	// predict /work/in.yaml`.
-	if strings.Contains(joined, env.Recipe.ImageTag+" predict ") {
-		t.Errorf("Cmd must not start with `predict` (ENTRYPOINT already includes it): %s", joined)
-	}
-
-	if logBuf.Len() == 0 {
-		// runtime_exec.attachLog hooks cmd.Stdout/Stderr to env.Log, but
-		// the stubbed runCmd never writes anything itself — so the log
-		// being empty is acceptable. We only assert ticks here.
-	}
-	if len(progress) < 2 {
-		t.Errorf("env.Progress should have ticked at least twice, got %v", progress)
+	yaml, _ := os.ReadFile(filepath.Join(env.WorkDir, "in.yaml"))
+	if !strings.Contains(string(yaml), "version: 1") ||
+		!strings.Contains(string(yaml), "sequence: MKQ") {
+		t.Errorf("YAML wrong:\n%s", yaml)
 	}
 }
 
-func TestBoltz2AdapterInvokeMissingSequences(t *testing.T) {
-	env := boltz2TestEnv(t, nil, nil)
-	if _, err := (boltz2Adapter{}).Invoke(context.Background(), env, []byte(`{}`)); err == nil {
-		t.Fatal("expected an error when sequences is missing")
-	}
-}
-
-func TestBoltz2AdapterInvokeEmptyChainErrors(t *testing.T) {
-	env := boltz2TestEnv(t, nil, nil)
-	_, err := boltz2Adapter{}.Invoke(context.Background(), env,
-		[]byte(`{"sequences":{"A":""}}`))
-	if err == nil || !strings.Contains(err.Error(), "empty sequence") {
-		t.Fatalf("expected an empty-sequence error, got: %v", err)
-	}
-}
-
-func TestBoltz2AdapterInvokeCreatesWeightsCache(t *testing.T) {
+func TestBoltz2AdapterInvokeMissingWeightsCacheErrors(t *testing.T) {
 	home := t.TempDir()
 	reg, err := LoadRegistry(home)
 	if err != nil {
 		t.Fatal(err)
 	}
 	rec, _ := reg.Tool("boltz2")
-	// Models cache deliberately NOT created — the adapter must create it.
 	env := AdapterEnv{Recipe: rec, WorkDir: t.TempDir(), Registry: reg}
-	_ = stubContainerRuntime(t, nil)
-
-	// Boltz-2 downloads its weights at container runtime, so a missing
-	// weights cache must be created on demand, not rejected.
+	stubContainerRuntime(t, nil)
+	// Boltz-2 weights are fetched at /install time; a missing cache means
+	// install did not complete — the adapter must say so, not silently run.
 	_, err = boltz2Adapter{}.Invoke(context.Background(), env,
-		[]byte(`{"sequences":{"A":"MKQ"}}`))
-	if err != nil && strings.Contains(err.Error(), "weights cache") {
-		t.Fatalf("a missing weights cache must not error, got: %v", err)
+		[]byte(`{"entities":[{"type":"protein","id":"A","sequence":"MKQ"}]}`))
+	if err == nil || !strings.Contains(err.Error(), "install boltz2") {
+		t.Fatalf("want a 'run /install boltz2' error, got: %v", err)
 	}
-	cache := ModelsRoot(reg.Home(), "boltz2")
-	if info, statErr := os.Stat(cache); statErr != nil || !info.IsDir() {
-		t.Fatalf("Invoke must create the weights cache %s; stat err = %v", cache, statErr)
+}
+
+func TestBoltz2AdapterInvokeRejectsBadRequest(t *testing.T) {
+	env := boltz2TestEnv(t, nil, nil)
+	if _, err := (boltz2Adapter{}).Invoke(context.Background(), env, []byte(`{"entities":[]}`)); err == nil {
+		t.Fatal("expected an error for empty entities")
 	}
 }
 

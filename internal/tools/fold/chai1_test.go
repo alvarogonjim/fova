@@ -1,6 +1,7 @@
 package fold
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
 )
@@ -73,3 +74,23 @@ func TestPreflightChai1(t *testing.T) {
 }
 
 func ptrInt(v int) *int { return &v }
+
+func TestChai1ExecuteRejectsBadInput(t *testing.T) {
+	tool := NewChai1(t.TempDir(), nil, nil)
+	if _, err := tool.Execute(context.Background(), json.RawMessage(`{"entities":[]}`)); err == nil {
+		t.Fatal("expected a preflight error for empty entities")
+	}
+}
+
+func TestChai1ExecuteSubmitsJob(t *testing.T) {
+	mgr, backend := newFoldTestDeps(t, `{"designs":[]}`)
+	tool := NewChai1(t.TempDir(), mgr, backend)
+	res, err := tool.Execute(context.Background(),
+		json.RawMessage(`{"entities":[{"type":"protein","id":"A","sequence":"MKQ"}]}`))
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if res.JobID == "" {
+		t.Error("Execute must return a job id")
+	}
+}

@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"strings"
 	"time"
 
 	"github.com/alvarogonjim/fova/internal/backends"
+	"github.com/alvarogonjim/fova/internal/domain"
 	"github.com/alvarogonjim/fova/internal/jobs"
 	"github.com/alvarogonjim/fova/internal/tools"
 )
@@ -333,8 +335,73 @@ func (*chai1Tool) RequiresConfirmation(json.RawMessage) bool       { return true
 func (*chai1Tool) EstimatedCostUSD(json.RawMessage) float64        { return 0.25 }
 func (*chai1Tool) EstimatedDuration(json.RawMessage) time.Duration { return 3 * time.Minute }
 
+// isMSAPath reports whether an MSA value names a workspace path — i.e. it is
+// neither empty, the "default" mode, nor the "server" mode.
+func isMSAPath(msa string) bool {
+	return msa != "" && msa != "default" && msa != "server"
+}
+
 // Execute validates the request in preflight, resolves every workspace path
-// against the workspace root, and submits a background compute job.
+// against the workspace root, and submits a background compute job. The job
+// runs the backend and returns its raw output; nothing is persisted (this is
+// a structure predictor, not a design generator).
 func (t *chai1Tool) Execute(_ context.Context, input json.RawMessage) (tools.Result, error) {
-	return tools.Result{}, nil
+	var req chai1Request
+	if err := json.Unmarshal(input, &req); err != nil {
+		return tools.Result{}, fmt.Errorf("invalid fold.chai1 request: %w", err)
+	}
+	if err := preflightChai1(req); err != nil {
+		return tools.Result{}, err
+	}
+	// Resolve workspace paths. An empty workspaceRoot short-circuits — mirrors
+	// boltz2Tool, and covers tests that do not set one.
+	if t.workspaceRoot != "" {
+		if isMSAPath(req.MSA) {
+			abs, err := tools.ResolveWorkspacePath(t.workspaceRoot, req.MSA)
+			if err != nil {
+				return tools.Result{}, fmt.Errorf("fold.chai1: %w", err)
+			}
+			req.MSA = abs
+		}
+		if req.Templates != nil && req.Templates.HitsPath != "" {
+			abs, err := tools.ResolveWorkspacePath(t.workspaceRoot, req.Templates.HitsPath)
+			if err != nil {
+				return tools.Result{}, fmt.Errorf("fold.chai1: %w", err)
+			}
+			req.Templates.HitsPath = abs
+		}
+		if req.SaveAs != "" {
+			abs, err := tools.ResolveWorkspacePath(t.workspaceRoot, req.SaveAs)
+			if err != nil {
+				return tools.Result{}, fmt.Errorf("fold.chai1: %w", err)
+			}
+			req.SaveAs = abs
+		}
+	}
+	resolved, err := json.Marshal(req)
+	if err != nil {
+		return tools.Result{}, fmt.Errorf("fold.chai1: %w", err)
+	}
+	jobID, err := t.mgr.Submit(jobs.Spec{
+		Kind:    domain.JobCompute,
+		Tool:    "fold.chai1",
+		Backend: t.backend.Name(),
+		Input:   resolved,
+		Run: func(ctx context.Context, progress func(float64), log io.Writer) ([]byte, error) {
+			out, err := t.backend.Run(ctx, "fold.chai1", resolved, log, progress)
+			if err != nil {
+				return nil, err
+			}
+			progress(1)
+			return out, nil
+		},
+	})
+	if err != nil {
+		return tools.Result{}, err
+	}
+	return tools.Result{
+		JobID:      jobID,
+		Display:    "started fold.chai1 job " + string(jobID) + " — poll jobs.result for the predicted structure",
+		Provenance: domain.NewToolCallRef("fold.chai1", input),
+	}, nil
 }

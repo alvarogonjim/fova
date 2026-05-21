@@ -142,14 +142,14 @@ func (boltz2Adapter) Invoke(ctx context.Context, env AdapterEnv, request []byte)
 	}
 
 	mounts := []Mount{{HostPath: env.WorkDir, ContainerPath: "/work"}}
+	// The weights cache is a bind-mount source; Boltz-2 downloads its weights
+	// into it at runtime, so an empty directory is the correct pre-state.
+	// Create it if absent rather than failing.
 	modelsCache := ModelsRoot(env.Registry.Home(), "boltz2")
-	if info, err := os.Stat(modelsCache); err == nil && info.IsDir() {
-		mounts = append(mounts, Mount{HostPath: modelsCache, ContainerPath: "/models"})
-	} else {
-		return nil, fmt.Errorf(
-			"fold.boltz2: weights cache %s missing — run /install boltz2",
-			modelsCache)
+	if err := os.MkdirAll(modelsCache, 0o755); err != nil {
+		return nil, fmt.Errorf("fold.boltz2: create weights cache %s: %w", modelsCache, err)
 	}
+	mounts = append(mounts, Mount{HostPath: modelsCache, ContainerPath: "/models"})
 
 	// ENTRYPOINT is ["boltz", "predict"]; Cmd carries the YAML and flags.
 	// --no_kernels is required on sm_121 (GB10) per upstream issue #663.

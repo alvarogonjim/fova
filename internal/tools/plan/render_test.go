@@ -1,6 +1,8 @@
 package plan
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -90,6 +92,102 @@ func TestRenderPlanNoEvidence(t *testing.T) {
 	out := RenderPlan(p)
 	if strings.Contains(out, "Evidence:") {
 		t.Errorf("Evidence label should be hidden when there are no papers:\n%s", out)
+	}
+}
+
+// boltzGenTestPlan builds a BoltzGen plan whose MethodConfig points at a spec
+// written into workspaceRoot/spec.yaml.
+func boltzGenTestPlan(t *testing.T, workspaceRoot string) domain.DesignPlan {
+	t.Helper()
+	specBody := "version: 1\nentities:\n  - protein:\n      id: A\n      sequence: 80..140\n" +
+		"  - protein:\n      id: B\n      sequence: MKT..\nconstraints:\n  total_len:\n    min: 90\n"
+	if err := os.WriteFile(filepath.Join(workspaceRoot, "spec.yaml"), []byte(specBody), 0o644); err != nil {
+		t.Fatalf("write spec: %v", err)
+	}
+	return domain.DesignPlan{
+		ID:          "p_bg",
+		Application: domain.AppBinder,
+		Method:      "BoltzGen",
+		MethodConfig: &domain.MethodConfig{
+			SpecPath: "spec.yaml",
+			BoltzGen: &domain.BoltzGenParams{
+				Protocol:   "protein-anything",
+				NumDesigns: 5000,
+				Budget:     20,
+				Steps:      []string{"design", "folding"},
+			},
+		},
+	}
+}
+
+// TestRenderPlanBoltzGenSection: a plan with a MethodConfig renders the
+// BoltzGen block — protocol, num designs, budget, the spec absolute path, and
+// a preview of the spec file.
+func TestRenderPlanBoltzGenSection(t *testing.T) {
+	root := t.TempDir()
+	p := boltzGenTestPlan(t, root)
+
+	out := RenderPlanWithOpts(p, RenderPlanOpts{WorkspaceRoot: root})
+
+	for _, want := range []string{
+		"BoltzGen design specification",
+		"protein-anything",
+		"5000",                           // num designs
+		"20",                             // budget
+		"design, folding",                // steps
+		filepath.Join(root, "spec.yaml"), // absolute spec path
+		"Spec preview:",
+		"entities:", // a line from the spec
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("BoltzGen section missing %q in:\n%s", want, out)
+		}
+	}
+}
+
+// TestRenderPlanBoltzGenCheckValid: a valid check result renders the tick and
+// the visualization path.
+func TestRenderPlanBoltzGenCheckValid(t *testing.T) {
+	root := t.TempDir()
+	p := boltzGenTestPlan(t, root)
+
+	out := RenderPlanWithOpts(p, RenderPlanOpts{
+		WorkspaceRoot: root,
+		Check:         &BoltzGenCheckResult{Valid: true, VisualizationPath: "out/viz.cif"},
+	})
+	if !strings.Contains(out, "✓ valid") {
+		t.Errorf("a valid check should render a tick:\n%s", out)
+	}
+	if !strings.Contains(out, "out/viz.cif") {
+		t.Errorf("a valid check should render the visualization path:\n%s", out)
+	}
+}
+
+// TestRenderPlanBoltzGenCheckInvalid: an invalid check result renders the
+// errors.
+func TestRenderPlanBoltzGenCheckInvalid(t *testing.T) {
+	root := t.TempDir()
+	p := boltzGenTestPlan(t, root)
+
+	out := RenderPlanWithOpts(p, RenderPlanOpts{
+		WorkspaceRoot: root,
+		Check:         &BoltzGenCheckResult{Valid: false, Errors: []string{"unknown chain Z"}},
+	})
+	if !strings.Contains(out, "unknown chain Z") {
+		t.Errorf("an invalid check should render its errors:\n%s", out)
+	}
+	if !strings.Contains(out, "invalid") {
+		t.Errorf("an invalid check should be marked invalid:\n%s", out)
+	}
+}
+
+// TestRenderPlanNoBoltzGenSectionWithoutMethodConfig: a plain plan has no
+// BoltzGen block.
+func TestRenderPlanNoBoltzGenSectionWithoutMethodConfig(t *testing.T) {
+	p := domain.DesignPlan{ID: "p_x", Application: domain.AppBinder, Method: "BindCraft"}
+	out := RenderPlan(p)
+	if strings.Contains(out, "BoltzGen design specification") {
+		t.Errorf("a plan with no MethodConfig must not render the BoltzGen section:\n%s", out)
 	}
 }
 

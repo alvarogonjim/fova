@@ -1,0 +1,9 @@
+# Minimal self-contained BoltzGen specification — used by the container
+# smoke test (`boltzgen check`). It exercises install + spec parsing only:
+# a single designed protein chain with a length range and no `file:` target
+# entity, so no external structure file is needed. The full GPU run is
+# user-validated on the GB10.
+entities:
+  - protein:
+      id: A
+      sequence: 80..140

@@ -206,6 +206,8 @@ func buildRegistry(workspace string, st *store.Store, mgr *jobmgr.Manager, model
 		backend, _ = backends.Select("local", fovaHome())
 	}
 	registry.Register(designtools.NewBindCraftTool(workspace, mgr, backend, st))
+	registry.Register(designtools.NewBoltzGenTool(workspace, mgr, backend, st))
+	registry.Register(designtools.NewBoltzGenCheckTool(workspace, backend))
 	registry.Register(designtools.NewRFdiffusionTool(workspace, mgr, backend, st))
 	registry.Register(designtools.NewProteinMPNNTool(workspace, mgr, backend, st))
 	registry.Register(designtools.NewRFAntibodyTool(workspace, mgr, backend, st))
@@ -260,7 +262,9 @@ func buildRegistry(workspace string, st *store.Store, mgr *jobmgr.Manager, model
 	if token := os.Getenv("PAPERCLIP_TOKEN"); token != "" {
 		registry.Register(knowledge.NewPaperclip(token, cfg.Knowledge.PaperclipBaseURL))
 	}
-	registry.Register(plantool.NewPlanCreateTool(st, installer))
+	planCreate := plantool.NewPlanCreateTool(st, installer)
+	planCreate.SetRegistry(registry)
+	registry.Register(planCreate)
 
 	registry.Register(viztools.NewMetricPlot(workspace, results))
 	registry.Register(viztools.NewContactMap(workspace))

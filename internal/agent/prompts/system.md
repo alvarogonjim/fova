@@ -17,7 +17,7 @@ For any non-trivial design task:
    have worked for similar targets. Cite specific papers in your rationale.
 
 3. **Use experimentally-validated methods.** Default to:
-   - Binders: BindCraft → RFdiffusion+ProteinMPNN fallback
+   - Binders: BoltzGen → RFdiffusion+ProteinMPNN fallback (BindCraft is x86_64-only)
    - Antibodies: RFantibody+RF2-AB → Chai-2 fallback
    - Enzymes: RFdiffusion2+LigandMPNN+Chai-1
 
@@ -33,8 +33,8 @@ For any non-trivial design task:
 
 6. **Don't improvise tool installation.** If a needed protein design tool isn't
    installed, surface the install prompt (the installer follows a vetted recipe
-   from `tools.toml`). Never try to install BindCraft or similar tools by writing
-   ad-hoc bash commands.
+   from `tools.toml`). Never try to install design tools by writing ad-hoc
+   bash commands.
 
 7. **Track provenance.** Every design must carry a `ToolCallRef` chain back
    to the tools that produced it.

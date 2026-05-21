@@ -204,13 +204,13 @@ type DesignPlan struct {
 // DesignPlan.MethodConfig can reference it without an import cycle;
 // internal/tools/design uses it via a package alias.
 type BoltzGenParams struct {
-	Protocol                string   `json:"protocol"`                   // --protocol, enum, default "protein-anything"
-	NumDesigns              int      `json:"num_designs"`                // --num_designs
-	Budget                  int      `json:"budget"`                     // --budget
+	Protocol                string   `json:"protocol"`    // --protocol, enum, default "protein-anything"
+	NumDesigns              int      `json:"num_designs"` // --num_designs
+	Budget                  int      `json:"budget"`      // --budget
 	DiffusionBatchSize      int      `json:"diffusion_batch_size,omitempty"`
-	Steps                   []string `json:"steps,omitempty"`            // --steps
-	Alpha                   *float64 `json:"alpha,omitempty"`            // --alpha
-	FilterBiased            *bool    `json:"filter_biased,omitempty"`    // --filter_biased
+	Steps                   []string `json:"steps,omitempty"`         // --steps
+	Alpha                   *float64 `json:"alpha,omitempty"`         // --alpha
+	FilterBiased            *bool    `json:"filter_biased,omitempty"` // --filter_biased
 	AdditionalFilters       []string `json:"additional_filters,omitempty"`
 	RefoldingRMSDThreshold  *float64 `json:"refolding_rmsd_threshold,omitempty"`
 	InverseFoldNumSequences int      `json:"inverse_fold_num_sequences,omitempty"`

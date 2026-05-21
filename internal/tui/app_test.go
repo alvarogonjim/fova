@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -315,6 +316,131 @@ func TestAppPlanCancel(t *testing.T) {
 	out := m.chat.renderEntries()
 	if !contains(out, "plan cancelled") {
 		t.Fatalf("/plan cancel should post a cancellation message:\n%s", out)
+	}
+}
+
+// --- Task 7: BoltzGen /plan rendering + /plan approve re-check ---
+
+// fakeCheckTool is a tools.Tool stub standing in for design.boltzgen_check.
+// Its Execute returns the canned JSON contract the /plan view and /plan
+// approve re-check decode.
+type fakeCheckTool struct {
+	name   string
+	output string
+}
+
+func (f *fakeCheckTool) Name() string                            { return f.name }
+func (f *fakeCheckTool) Description() string                     { return "fake " + f.name }
+func (f *fakeCheckTool) InputSchema() map[string]any             { return map[string]any{"type": "object"} }
+func (*fakeCheckTool) RequiresConfirmation(json.RawMessage) bool { return false }
+func (*fakeCheckTool) EstimatedCostUSD(json.RawMessage) float64  { return 0 }
+func (*fakeCheckTool) EstimatedDuration(json.RawMessage) time.Duration {
+	return 0
+}
+func (f *fakeCheckTool) Execute(_ context.Context, _ json.RawMessage) (tools.Result, error) {
+	return tools.Result{Output: json.RawMessage(f.output)}, nil
+}
+
+// newBoltzGenTestApp builds a TUI Model with a store holding a BoltzGen plan
+// (spec written into the workspace) and a registry carrying the given check
+// tool. checkOutput is the canned design.boltzgen_check JSON.
+func newBoltzGenTestApp(t *testing.T, checkOutput string) (*Model, *store.Store) {
+	t.Helper()
+	home := t.TempDir()
+	workspace := filepath.Join(home, "projects", "default")
+	if err := os.MkdirAll(workspace, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	spec := "version: 1\nentities:\n  - protein:\n      id: A\n      sequence: 80..140\n"
+	if err := os.WriteFile(filepath.Join(workspace, "spec.yaml"), []byte(spec), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	st, err := store.Open(filepath.Join(workspace, "workspace.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	if err := st.InsertPlan(domain.DesignPlan{
+		ID: "p_bg", ProjectID: store.DefaultProjectID,
+		Application: domain.AppBinder, Method: "BoltzGen",
+		Target: domain.PDBReference{PDBID: "6VXX", Chain: "A"},
+		MethodConfig: &domain.MethodConfig{
+			SpecPath: "spec.yaml",
+			BoltzGen: &domain.BoltzGenParams{
+				Protocol: "protein-anything", NumDesigns: 5000, Budget: 20,
+			},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	reg := tools.NewRegistry()
+	if checkOutput != "" {
+		reg.Register(&fakeCheckTool{name: "design.boltzgen_check", output: checkOutput})
+	}
+	m := New(Deps{
+		Registry:     reg,
+		Models:       llm.NewModelRegistry(config.DefaultCatalog()),
+		SystemPrompt: agent.SystemPrompt,
+		Store:        st,
+		FovaHome:     home,
+	})
+	return m, st
+}
+
+// TestAppPlanShowsBoltzGenSection: /plan on a BoltzGen plan renders the
+// method-config section, the spec absolute path, and the check result.
+func TestAppPlanShowsBoltzGenSection(t *testing.T) {
+	m, _ := newBoltzGenTestApp(t, `{"valid": true, "visualization_path": "out/viz.cif"}`)
+	m.runSlashCommand("plan", "")
+	out := m.chat.renderEntries()
+
+	for _, want := range []string{
+		"BoltzGen design specification",
+		"protein-anything",
+		"spec.yaml", // the spec path
+		"entities:", // a preview line
+		"valid",     // the check verdict
+	} {
+		if !contains(out, want) {
+			t.Errorf("/plan BoltzGen view missing %q in:\n%s", want, out)
+		}
+	}
+}
+
+// TestAppPlanApproveBoltzGenValidSpec: /plan approve on a BoltzGen plan whose
+// spec passes the re-check approves the plan and starts the design turn.
+func TestAppPlanApproveBoltzGenValidSpec(t *testing.T) {
+	m, st := newBoltzGenTestApp(t, `{"valid": true}`)
+	m.runSlashCommand("plan", "approve")
+	out := m.chat.renderEntries()
+	if !contains(out, "p_bg approved") {
+		t.Fatalf("a valid-spec BoltzGen plan should be approved:\n%s", out)
+	}
+	got, err := st.GetPlan("p_bg")
+	if err != nil || !got.Approved {
+		t.Fatalf("plan not marked approved: approved=%v err=%v", got.Approved, err)
+	}
+}
+
+// TestAppPlanApproveBoltzGenInvalidSpec: /plan approve on a BoltzGen plan
+// whose spec fails the re-check holds the approval and surfaces the errors —
+// catching edits the user made to the spec after plan.create.
+func TestAppPlanApproveBoltzGenInvalidSpec(t *testing.T) {
+	m, st := newBoltzGenTestApp(t, `{"valid": false, "errors": ["chain B missing"]}`)
+	m.runSlashCommand("plan", "approve")
+	out := m.chat.renderEntries()
+	if !contains(out, "chain B missing") {
+		t.Errorf("re-check failure should surface the errors:\n%s", out)
+	}
+	if contains(out, "p_bg approved") {
+		t.Errorf("a failed re-check must not approve the plan:\n%s", out)
+	}
+	got, err := st.GetPlan("p_bg")
+	if err != nil {
+		t.Fatalf("GetPlan: %v", err)
+	}
+	if got.Approved {
+		t.Error("a BoltzGen plan with an invalid spec must not be marked approved")
 	}
 }
 

@@ -478,17 +478,26 @@ func TestPlanCreateRejectsIncompatibleApplicationMethod(t *testing.T) {
 }
 
 // TestPlanCreateAcceptsCompatibleApplicationMethod is the positive control:
-// every (application, method) pair listed in compat must round-trip.
+// every (application, method) pair listed in compat must round-trip. BoltzGen
+// also needs a method_spec_path — the spec gate is exercised separately in
+// TestPlanCreateBoltzGen* below — so this control passes it the minimum
+// required field.
 func TestPlanCreateAcceptsCompatibleApplicationMethod(t *testing.T) {
 	for app, methods := range compat {
 		for _, m := range methods {
 			t.Run(string(app)+"/"+string(m), func(t *testing.T) {
 				st := newTestStore(t)
 				tool := NewPlanCreateTool(st, newFakeInstaller(toolForMethod(m)))
+				extra := ""
+				if m == MethodBoltzGen {
+					// BoltzGen requires a spec path; with no registry wired the
+					// design.boltzgen_check gate is skipped (nil-registry path).
+					extra = `, "method_spec_path": "specs/binder.yaml"`
+				}
 				input := json.RawMessage(`{
 					"target": {"pdb_id": "1ABC"},
 					"application": "` + string(app) + `",
-					"method": "` + string(m) + `"
+					"method": "` + string(m) + `"` + extra + `
 				}`)
 				if _, err := tool.Execute(context.Background(), input); err != nil {
 					t.Fatalf("Execute: %v", err)
@@ -540,5 +549,171 @@ func TestDesignToolForMethodIsTotal(t *testing.T) {
 		if got := designToolForMethod(m); got == "" {
 			t.Errorf("designToolForMethod(%q) is empty — add it to compat.go", m)
 		}
+	}
+}
+
+// --- Task 7: BoltzGen spec + params folded into the plan ---
+
+// fakeTool is a minimal tools.Tool whose Execute returns a canned Result. The
+// BoltzGen plan tests inject it as the design.boltzgen_check tool so the
+// check gate runs against a fixed {valid,...} contract — no container needed.
+type fakeTool struct {
+	name      string
+	output    json.RawMessage
+	execErr   error
+	gotInputs []json.RawMessage
+}
+
+func (f *fakeTool) Name() string                            { return f.name }
+func (f *fakeTool) Description() string                     { return "fake " + f.name }
+func (f *fakeTool) InputSchema() map[string]any             { return map[string]any{"type": "object"} }
+func (*fakeTool) RequiresConfirmation(json.RawMessage) bool { return false }
+func (*fakeTool) EstimatedCostUSD(json.RawMessage) float64  { return 0 }
+func (*fakeTool) EstimatedDuration(json.RawMessage) time.Duration {
+	return 0
+}
+func (f *fakeTool) Execute(_ context.Context, in json.RawMessage) (tools.Result, error) {
+	f.gotInputs = append(f.gotInputs, in)
+	if f.execErr != nil {
+		return tools.Result{}, f.execErr
+	}
+	return tools.Result{Output: f.output}, nil
+}
+
+// toolRegistry is a ToolRegistry stub that returns real tools.Tool values —
+// unlike fakeRegistry, which only reports presence. plan.create needs a tool
+// it can actually Execute for the design.boltzgen_check gate.
+type toolRegistry map[string]tools.Tool
+
+func (r toolRegistry) Get(name string) (tools.Tool, bool) {
+	t, ok := r[name]
+	return t, ok
+}
+
+// boltzGenPlanInput builds a BoltzGen plan.create input with the given spec
+// path. The design.boltzgen tool must be registered for checkRegistered to
+// pass, so callers that want the spec gate to fire register both tools.
+func boltzGenPlanInput(specPath string) json.RawMessage {
+	return json.RawMessage(`{
+		"target": {"pdb_id": "1ABC", "chain": "A"},
+		"application": "binder",
+		"method": "BoltzGen",
+		"method_spec_path": "` + specPath + `",
+		"method_params": {"protocol": "protein-anything", "num_designs": 100, "budget": 10}
+	}`)
+}
+
+// TestPlanCreateBoltzGenRequiresSpecPath: a BoltzGen plan with no
+// method_spec_path is rejected before anything is persisted.
+func TestPlanCreateBoltzGenRequiresSpecPath(t *testing.T) {
+	st := newTestStore(t)
+	tool := NewPlanCreateTool(st, newFakeInstaller("boltzgen"))
+	input := json.RawMessage(`{
+		"target": {"pdb_id": "1ABC"},
+		"application": "binder",
+		"method": "BoltzGen"
+	}`)
+	_, err := tool.Execute(context.Background(), input)
+	if err == nil {
+		t.Fatal("expected an error for a BoltzGen plan with no method_spec_path")
+	}
+	if !strings.Contains(err.Error(), "method_spec_path") {
+		t.Errorf("error %q should name method_spec_path", err.Error())
+	}
+}
+
+// TestPlanCreateBoltzGenValidSpecPopulatesMethodConfig: a BoltzGen plan with a
+// spec the check tool reports as valid persists with a populated MethodConfig.
+func TestPlanCreateBoltzGenValidSpecPopulatesMethodConfig(t *testing.T) {
+	st := newTestStore(t)
+	tool := NewPlanCreateTool(st, newFakeInstaller("boltzgen"))
+	check := &fakeTool{
+		name:   "design.boltzgen_check",
+		output: json.RawMessage(`{"valid": true, "visualization_path": "out/spec_viz.cif"}`),
+	}
+	tool.SetRegistry(toolRegistry{
+		"design.boltzgen":       &fakeTool{name: "design.boltzgen"},
+		"design.boltzgen_check": check,
+	})
+
+	res, err := tool.Execute(context.Background(), boltzGenPlanInput("specs/binder.yaml"))
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if len(check.gotInputs) != 1 {
+		t.Fatalf("design.boltzgen_check should have been invoked once, got %d", len(check.gotInputs))
+	}
+	if !strings.Contains(string(check.gotInputs[0]), "specs/binder.yaml") {
+		t.Errorf("check input %q should carry the spec path", check.gotInputs[0])
+	}
+
+	var got domain.DesignPlan
+	if err := json.Unmarshal(res.Output, &got); err != nil {
+		t.Fatalf("unmarshal output: %v", err)
+	}
+	if got.MethodConfig == nil {
+		t.Fatal("MethodConfig must be populated for a BoltzGen plan")
+	}
+	if got.MethodConfig.SpecPath != "specs/binder.yaml" {
+		t.Errorf("SpecPath = %q, want specs/binder.yaml", got.MethodConfig.SpecPath)
+	}
+	if got.MethodConfig.BoltzGen == nil {
+		t.Fatal("MethodConfig.BoltzGen must carry the run params")
+	}
+	if got.MethodConfig.BoltzGen.NumDesigns != 100 || got.MethodConfig.BoltzGen.Budget != 10 {
+		t.Errorf("BoltzGen params not round-tripped: %+v", got.MethodConfig.BoltzGen)
+	}
+}
+
+// TestPlanCreateBoltzGenInvalidSpecRejected: when the check tool reports the
+// spec as invalid, plan.create rejects the plan with the check errors and
+// persists nothing.
+func TestPlanCreateBoltzGenInvalidSpecRejected(t *testing.T) {
+	st := newTestStore(t)
+	tool := NewPlanCreateTool(st, newFakeInstaller("boltzgen"))
+	tool.SetRegistry(toolRegistry{
+		"design.boltzgen": &fakeTool{name: "design.boltzgen"},
+		"design.boltzgen_check": &fakeTool{
+			name:   "design.boltzgen_check",
+			output: json.RawMessage(`{"valid": false, "errors": ["chain B not found", "bad residue index"]}`),
+		},
+	})
+
+	_, err := tool.Execute(context.Background(), boltzGenPlanInput("specs/bad.yaml"))
+	if err == nil {
+		t.Fatal("expected an error for a BoltzGen plan with an invalid spec")
+	}
+	msg := err.Error()
+	for _, want := range []string{"chain B not found", "bad residue index", "design.boltzgen_check"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("error %q should contain %q", msg, want)
+		}
+	}
+	if _, ok, _ := st.LatestPlan(store.DefaultProjectID); ok {
+		t.Error("an invalid-spec plan must not be persisted")
+	}
+}
+
+// TestPlanCreateBoltzGenSkipsGateWhenCheckToolAbsent: when the check tool is
+// not registered, the spec gate is skipped (the nil-registry path the install
+// and registration guards already take) — the plan still persists with its
+// MethodConfig.
+func TestPlanCreateBoltzGenSkipsGateWhenCheckToolAbsent(t *testing.T) {
+	st := newTestStore(t)
+	tool := NewPlanCreateTool(st, newFakeInstaller("boltzgen"))
+	// design.boltzgen is registered (so checkRegistered passes) but
+	// design.boltzgen_check is not — the gate has nothing to call.
+	tool.SetRegistry(toolRegistry{"design.boltzgen": &fakeTool{name: "design.boltzgen"}})
+
+	res, err := tool.Execute(context.Background(), boltzGenPlanInput("specs/binder.yaml"))
+	if err != nil {
+		t.Fatalf("Execute: a missing check tool must skip the gate, not fail: %v", err)
+	}
+	var got domain.DesignPlan
+	if err := json.Unmarshal(res.Output, &got); err != nil {
+		t.Fatalf("unmarshal output: %v", err)
+	}
+	if got.MethodConfig == nil || got.MethodConfig.SpecPath != "specs/binder.yaml" {
+		t.Errorf("MethodConfig should still be populated when the gate is skipped: %+v", got.MethodConfig)
 	}
 }

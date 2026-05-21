@@ -1,12 +1,19 @@
 package plan
 
 import (
+	"bufio"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/alvarogonjim/fova/internal/backends/local"
 	"github.com/alvarogonjim/fova/internal/domain"
 )
+
+// boltzGenSpecPreviewLines caps how many lines of the spec YAML the /plan
+// view shows — enough to recognise the design without flooding the chat.
+const boltzGenSpecPreviewLines = 15
 
 // labelRow writes a single "  Label:       value\n" row with the label column
 // padded to 13 characters (the longest label is "Application:" at 12 chars,
@@ -16,10 +23,36 @@ func labelRow(b *strings.Builder, label, value string) {
 	fmt.Fprintf(b, "  %-13s %s\n", label+":", value)
 }
 
+// RenderPlanOpts carries the context the BoltzGen section needs that is not
+// on the plan itself: the workspace root (to resolve the spec's absolute
+// path) and the most recent design.boltzgen_check result, if one is
+// available. A zero RenderPlanOpts renders the plan without the BoltzGen
+// extras — RenderPlan uses exactly that.
+type RenderPlanOpts struct {
+	// WorkspaceRoot is the absolute path of the active project workspace. The
+	// spec path stored on the plan is workspace-relative; joining it with the
+	// root gives the absolute path the user opens in their editor. Empty falls
+	// back to showing the workspace-relative path.
+	WorkspaceRoot string
+	// Check is the latest design.boltzgen_check result for the plan's spec.
+	// Nil means no check has been run for this render (the section then omits
+	// the result line).
+	Check *BoltzGenCheckResult
+}
+
 // RenderPlan formats a DesignPlan as a labelled multi-line block. Both
 // /plan (TUI view handler) and plan.create (tool Result.Display, once wired)
-// route through this function so the two surfaces never drift apart.
+// route through this function so the two surfaces never drift apart. A
+// BoltzGen plan is rendered without the spec preview / check section — call
+// RenderPlanWithOpts to include those.
 func RenderPlan(p domain.DesignPlan) string {
+	return RenderPlanWithOpts(p, RenderPlanOpts{})
+}
+
+// RenderPlanWithOpts is RenderPlan plus the BoltzGen method-config section
+// (spec path + preview + check result). The /plan TUI view supplies the
+// workspace root and a freshly-run check result via opts.
+func RenderPlanWithOpts(p domain.DesignPlan, opts RenderPlanOpts) string {
 	var b strings.Builder
 
 	status := "pending approval"
@@ -59,7 +92,108 @@ func RenderPlan(p domain.DesignPlan) string {
 		}
 	}
 
+	if p.MethodConfig != nil {
+		renderBoltzGenSection(&b, p.MethodConfig, opts)
+	}
+
 	return strings.TrimRight(b.String(), "\n")
+}
+
+// renderBoltzGenSection appends the BoltzGen method-config block to b: the run
+// params, the spec's absolute path, a short spec preview, and the most recent
+// design.boltzgen_check result. It is emitted for any plan that carries a
+// MethodConfig (currently BoltzGen-only).
+func renderBoltzGenSection(b *strings.Builder, mc *domain.MethodConfig, opts RenderPlanOpts) {
+	b.WriteString("\n  BoltzGen design specification\n")
+
+	if bg := mc.BoltzGen; bg != nil {
+		protocol := bg.Protocol
+		if protocol == "" {
+			protocol = "protein-anything (default)"
+		}
+		labelRow(b, "Protocol", protocol)
+		labelRow(b, "Num designs", fmt.Sprintf("%d", bg.NumDesigns))
+		labelRow(b, "Budget", fmt.Sprintf("%d", bg.Budget))
+		if len(bg.Steps) > 0 {
+			labelRow(b, "Steps", strings.Join(bg.Steps, ", "))
+		}
+	}
+
+	specAbs := boltzGenSpecAbsPath(opts.WorkspaceRoot, mc.SpecPath)
+	labelRow(b, "Spec file", specAbs)
+
+	preview, perr := boltzGenSpecPreview(specAbs)
+	switch {
+	case perr != nil:
+		labelRow(b, "Spec preview", "(could not read: "+perr.Error()+")")
+	case preview != "":
+		b.WriteString("  Spec preview:\n")
+		for _, line := range strings.Split(preview, "\n") {
+			b.WriteString("    " + line + "\n")
+		}
+	}
+
+	if opts.Check != nil {
+		b.WriteString("  Check: " + formatBoltzGenCheck(*opts.Check) + "\n")
+	}
+}
+
+// boltzGenSpecAbsPath joins the workspace-relative spec path with the
+// workspace root so the user sees the absolute path their editor opens. An
+// empty root (the plan.create Display path, where the root is not known)
+// falls back to the relative path.
+func boltzGenSpecAbsPath(root, rel string) string {
+	if root == "" || rel == "" {
+		return rel
+	}
+	if filepath.IsAbs(rel) {
+		return rel
+	}
+	return filepath.Join(root, rel)
+}
+
+// boltzGenSpecPreview reads up to boltzGenSpecPreviewLines lines of the spec
+// file at path. A missing file returns ("", nil) so a plan whose spec has not
+// landed yet still renders — only a genuine read error is surfaced.
+func boltzGenSpecPreview(path string) (string, error) {
+	if path == "" {
+		return "", nil
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", nil
+		}
+		return "", err
+	}
+	defer f.Close()
+
+	var lines []string
+	sc := bufio.NewScanner(f)
+	for sc.Scan() && len(lines) < boltzGenSpecPreviewLines {
+		lines = append(lines, sc.Text())
+	}
+	if err := sc.Err(); err != nil {
+		return "", err
+	}
+	return strings.Join(lines, "\n"), nil
+}
+
+// formatBoltzGenCheck renders a design.boltzgen_check result as a single line:
+// a tick + the visualization path when valid, or the joined errors when not.
+func formatBoltzGenCheck(c BoltzGenCheckResult) string {
+	if c.Valid {
+		s := "✓ valid"
+		if c.VisualizationPath != "" {
+			s += " — visualization: " + c.VisualizationPath
+		}
+		return s
+	}
+	errs := strings.Join(c.Errors, "; ")
+	if errs == "" {
+		errs = "(no detail reported)"
+	}
+	return "✗ invalid — " + errs
 }
 
 // formatTarget renders a PDB reference in a single line.

@@ -4,12 +4,89 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/alvarogonjim/fova/internal/backends"
 	"github.com/alvarogonjim/fova/internal/jobs"
 	"github.com/alvarogonjim/fova/internal/tools"
 )
+
+// Residue alphabets, per entity type, for preflight sequence validation.
+const (
+	aminoAcids = "ACDEFGHIKLMNPQRSTVWY"
+	dnaBases   = "ACGT"
+	rnaBases   = "ACGU"
+)
+
+// preflightBoltz2 validates a request's value shape before any job is
+// submitted. It returns the first violation as a fold.boltz2-prefixed error
+// describing the problem and how to fix it, or nil when the request is valid.
+// MSA path existence is NOT checked here — that needs the workspace root and
+// is deferred to Execute.
+func preflightBoltz2(req boltz2Request) error {
+	if len(req.Entities) < 1 {
+		return fmt.Errorf("fold.boltz2: at least one entity is required in \"entities\"")
+	}
+	seen := map[string]bool{}
+	for i, e := range req.Entities {
+		switch e.Type {
+		case "protein", "dna", "rna":
+			if e.Sequence == "" {
+				return fmt.Errorf("fold.boltz2: entity %d (%s): \"sequence\" must be non-empty", i, e.Type)
+			}
+			seq := strings.ToUpper(e.Sequence)
+			var alphabet string
+			switch e.Type {
+			case "protein":
+				alphabet = aminoAcids
+			case "dna":
+				alphabet = dnaBases
+			case "rna":
+				alphabet = rnaBases
+			}
+			for _, ch := range seq {
+				if !strings.ContainsRune(alphabet, ch) {
+					return fmt.Errorf("fold.boltz2: entity %d (%s): invalid residue %q — sequence must use only %s",
+						i, e.Type, string(ch), alphabet)
+				}
+			}
+		case "ligand":
+			if (e.SMILES == "") == (e.CCD == "") {
+				return fmt.Errorf("fold.boltz2: entity %d (ligand): set exactly one of \"smiles\" or \"ccd\"", i)
+			}
+			if e.MSA != "" || e.Cyclic {
+				return fmt.Errorf("fold.boltz2: entity %d (ligand): \"msa\" and \"cyclic\" apply to protein/dna/rna only", i)
+			}
+		default:
+			return fmt.Errorf("fold.boltz2: entity %d: \"type\" must be protein, dna, rna, or ligand (got %q)", i, e.Type)
+		}
+		for _, id := range e.ID {
+			if seen[id] {
+				return fmt.Errorf("fold.boltz2: chain id %q is used more than once — chain ids must be unique", id)
+			}
+			seen[id] = true
+		}
+	}
+	if req.StepScale != nil && (*req.StepScale < 1 || *req.StepScale > 2) {
+		return fmt.Errorf("fold.boltz2: \"step_scale\" must be in [1, 2] (got %g)", *req.StepScale)
+	}
+	for name, v := range map[string]*int{
+		"recycling_steps":   req.RecyclingSteps,
+		"sampling_steps":    req.SamplingSteps,
+		"diffusion_samples": req.DiffusionSamples,
+	} {
+		if v != nil && *v <= 0 {
+			return fmt.Errorf("fold.boltz2: %q must be greater than 0 (got %d)", name, *v)
+		}
+	}
+	switch req.OutputFormat {
+	case "", "pdb", "mmcif":
+	default:
+		return fmt.Errorf("fold.boltz2: \"output_format\" must be pdb or mmcif (got %q)", req.OutputFormat)
+	}
+	return nil
+}
 
 // chainIDs unmarshals a JSON chain id given either as a string ("A") or a
 // string array (["B","C"]) into a uniform []string.

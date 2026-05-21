@@ -94,10 +94,16 @@ func buildBoltz2YAML(req boltz2Request) string {
 			}
 		default: // protein / dna / rna
 			fmt.Fprintf(&b, "      sequence: %s\n", e.Sequence)
-			// `msa: empty` or a staged path is emitted as given; an unset MSA
-			// ("") omits the line entirely, as does "server" (so
-			// --use_msa_server fills it).
-			if e.MSA != "" && e.MSA != "server" {
+			// Boltz-2 requires an MSA unless --use_msa_server is set, so an
+			// unset MSA ("") defaults to `msa: empty` — single-sequence mode,
+			// fova's default. "server" omits the line so --use_msa_server
+			// fills it; any other value is a staged MSA-file path.
+			switch e.MSA {
+			case "server":
+				// omit — --use_msa_server provides the MSA
+			case "", "empty":
+				b.WriteString("      msa: empty\n")
+			default:
 				fmt.Fprintf(&b, "      msa: %s\n", e.MSA)
 			}
 			if e.Cyclic {

@@ -87,9 +87,11 @@ func TestBuildBoltz2YAML(t *testing.T) {
 	want := "version: 1\n" +
 		"sequences:\n" +
 		"  - protein:\n      id: A\n      sequence: MKQ\n      msa: empty\n" +
-		"  - protein:\n      id: [B, C]\n      sequence: AAA\n" +
+		// An entity with no MSA field defaults to single-sequence (msa: empty) —
+		// Boltz-2 requires an MSA unless --use_msa_server is set.
+		"  - protein:\n      id: [B, C]\n      sequence: AAA\n      msa: empty\n" +
 		"  - ligand:\n      id: L\n      smiles: CCO\n" +
-		"  - rna:\n      id: R\n      sequence: ACGU\n      cyclic: true\n"
+		"  - rna:\n      id: R\n      sequence: ACGU\n      msa: empty\n      cyclic: true\n"
 	if got != want {
 		t.Errorf("yaml mismatch\n got:\n%s\nwant:\n%s", got, want)
 	}

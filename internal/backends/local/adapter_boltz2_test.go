@@ -103,6 +103,21 @@ func TestBuildBoltz2YAMLServerMSAOmitsLine(t *testing.T) {
 	}
 }
 
+func TestBoltz2Args(t *testing.T) {
+	rs, ss := 5, 100
+	got := strings.Join(boltz2Args(boltz2Request{
+		RecyclingSteps: &rs, SamplingSteps: &ss}), " ")
+	for _, want := range []string{"--recycling_steps 5", "--sampling_steps 100"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("args missing %q in %q", want, got)
+		}
+	}
+	// Unset pointers omit the flag entirely.
+	if strings.Contains(strings.Join(boltz2Args(boltz2Request{}), " "), "--diffusion_samples") {
+		t.Error("an unset diffusion_samples must omit the flag")
+	}
+}
+
 func TestParseBoltz2Output(t *testing.T) {
 	outDir := t.TempDir()
 	// Boltz writes per-model PDBs under predictions/<stem>/...

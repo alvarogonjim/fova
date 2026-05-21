@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -103,6 +104,28 @@ func buildBoltz2YAML(req boltz2Request) string {
 		}
 	}
 	return b.String()
+}
+
+// boltz2Args maps the model-parameter fields of a boltz2Request to `boltz
+// predict` CLI flags. A nil pointer omits its flag entirely so Boltz-2 falls
+// back to its own default. Infrastructure flags (--out_dir, --cache,
+// --output_format, --no_kernels, --override, --use_msa_server) are fixed or
+// derived in Invoke, not here.
+func boltz2Args(req boltz2Request) []string {
+	var args []string
+	if req.RecyclingSteps != nil {
+		args = append(args, "--recycling_steps", strconv.Itoa(*req.RecyclingSteps))
+	}
+	if req.SamplingSteps != nil {
+		args = append(args, "--sampling_steps", strconv.Itoa(*req.SamplingSteps))
+	}
+	if req.DiffusionSamples != nil {
+		args = append(args, "--diffusion_samples", strconv.Itoa(*req.DiffusionSamples))
+	}
+	if req.StepScale != nil {
+		args = append(args, "--step_scale", strconv.FormatFloat(*req.StepScale, 'g', -1, 64))
+	}
+	return args
 }
 
 // parseBoltz2Output collects every PDB under outDir (Boltz writes per-input

@@ -79,6 +79,7 @@ type Model struct {
 
 	detail       detailView   // full-screen log view for the Tab-focused job
 	detailID     string       // ID of the job shown in detail ("" = none)
+	detailKind   panelFocus   // which panel the open detail view came from
 	sessionStart time.Time    // jobs created before this aren't blocked into chat
 	sessionCost  float64      // running LLM cost for this TUI session, in USD
 	budgetLimit  float64      // [budget].session_soft_limit_usd; 0 = no limit
@@ -329,6 +330,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case refreshMsg:
 		m.reloadPanels()
 		m.refreshJobLogs()
+		m.refreshDetail()
 		return m, m.scheduleRefresh()
 
 	case spinnerTickMsg:
@@ -467,10 +469,11 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case overlayDetail:
 		switch msg.Type {
-		case tea.KeyTab:
-			m.cycleFocus()
 		case tea.KeyEsc:
-			m.overlay, m.focus, m.detailID = overlayNone, focusChat, ""
+			m.overlay = overlayNone // keep the originating panel focus
+		case tea.KeyTab:
+			m.overlay = overlayNone
+			m.cycleFocus()
 		case tea.KeyCtrlD:
 			return m, tea.Quit
 		case tea.KeyCtrlC:
@@ -506,7 +509,7 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.panelSelectDown()
 			return m, nil
 		case tea.KeyEnter:
-			return m, nil // detail view wired in Task 10
+			return m, m.openDetail()
 		case tea.KeyTab:
 			m.cycleFocus()
 			return m, nil
@@ -1096,26 +1099,83 @@ func (m *Model) refreshJobLogs() {
 		}
 		m.chat.upsertJobLog(string(j.ID), j.Tool, j.Status, j.Started, tailLines(j.LogFile, 6))
 	}
-	if m.overlay == overlayDetail && m.detailID != "" {
-		m.openDetail(m.detailID)
-	}
 }
 
-// openDetail loads job id's complete log into the full-screen view.
-func (m *Model) openDetail(id string) {
-	var job domain.Job
-	for _, j := range m.jobs.jobs {
-		if string(j.ID) == id {
-			job = j
-			break
+// openDetail builds the full-screen detail view for the focused panel's
+// selected row and shows it. It is a no-op when the focused panel is empty or
+// the chat is focused. Returns a tea.Cmd (always nil today) so it slots into
+// the handleKey return contract.
+func (m *Model) openDetail() tea.Cmd {
+	var header, body string
+	switch m.focus {
+	case focusJobs:
+		j, ok := m.jobs.selectedJob()
+		if !ok {
+			return nil
+		}
+		header, body = renderJobDetail(m.theme, j)
+		m.detailID = string(j.ID)
+	case focusDesigns:
+		d, ok := m.designs.selectedDesign()
+		if !ok {
+			return nil
+		}
+		header, body = renderDesignDetail(m.theme, d)
+		m.detailID = string(d.ID)
+	case focusLab:
+		e, ok := m.lab.selectedExperiment()
+		if !ok {
+			return nil
+		}
+		header, body = renderExperimentDetail(m.theme, e)
+		m.detailID = string(e.ID)
+	default:
+		return nil
+	}
+	m.detailKind = m.focus
+	m.detail.setSize(m.width, m.height)
+	m.detail.setContent(header, body)
+	m.overlay = overlayDetail
+	return nil
+}
+
+// refreshDetail rebuilds the open detail overlay from current panel data so a
+// running job's progress and log update live. It closes the overlay if the
+// open item has disappeared.
+func (m *Model) refreshDetail() {
+	if m.overlay != overlayDetail {
+		return
+	}
+	var header, body string
+	found := false
+	switch m.detailKind {
+	case focusJobs:
+		for _, j := range m.jobs.jobs {
+			if string(j.ID) == m.detailID {
+				header, body = renderJobDetail(m.theme, j)
+				found = true
+			}
+		}
+	case focusDesigns:
+		for _, d := range m.designs.designs {
+			if string(d.ID) == m.detailID {
+				header, body = renderDesignDetail(m.theme, d)
+				found = true
+			}
+		}
+	case focusLab:
+		for _, e := range m.lab.experiments {
+			if string(e.ID) == m.detailID {
+				header, body = renderExperimentDetail(m.theme, e)
+				found = true
+			}
 		}
 	}
-	body := readLog(job.LogFile)
-	if strings.TrimSpace(body) == "" {
-		body = "(no output yet)"
+	if !found {
+		m.overlay = overlayNone
+		return
 	}
-	m.detail.setSize(m.width, m.height)
-	m.detail.setContent(glyph(job.Status)+" "+job.Tool+" · "+id, body)
+	m.detail.setContent(header, body)
 }
 
 // cycleFocus advances the Tab focus ring: chat → jobs → designs → lab → chat.

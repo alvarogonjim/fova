@@ -793,6 +793,47 @@ func TestRenderStructureRendererErrorAppendsError(t *testing.T) {
 	}
 }
 
+func TestEnterOpensDetailOverlay(t *testing.T) {
+	m := newTestApp()
+	m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	m.jobs.setJobs([]domain.Job{
+		{ID: "j1", Tool: "design.bindcraft", Status: domain.JobRunning, Created: time.Now()},
+	})
+	m.Update(tea.KeyMsg{Type: tea.KeyTab})   // focus jobs
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter}) // open detail
+	if m.overlay != overlayDetail {
+		t.Fatalf("Enter on a focused panel should open the detail overlay, got %v", m.overlay)
+	}
+	if !strings.Contains(m.View(), "design.bindcraft") {
+		t.Error("the detail overlay should show the selected job")
+	}
+}
+
+func TestDetailOverlayEscClosesKeepsFocus(t *testing.T) {
+	m := newTestApp()
+	m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	m.jobs.setJobs([]domain.Job{{ID: "j1", Tool: "t", Status: domain.JobRunning, Created: time.Now()}})
+	m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if m.overlay != overlayNone {
+		t.Error("Esc should close the detail overlay")
+	}
+	if m.focus != focusJobs {
+		t.Error("Esc should keep the originating panel focus")
+	}
+}
+
+func TestEnterOnEmptyPanelIsNoop(t *testing.T) {
+	m := newTestApp()
+	m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	m.Update(tea.KeyMsg{Type: tea.KeyTab}) // focus jobs (empty)
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if m.overlay != overlayNone {
+		t.Error("Enter on an empty panel must not open an overlay")
+	}
+}
+
 func TestClearKeepsPanelsVisible(t *testing.T) {
 	m := newTestApp()
 	m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})

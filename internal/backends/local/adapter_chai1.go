@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -87,6 +88,36 @@ func buildChai1FASTA(req chai1Request) string {
 		}
 		b.WriteString(body)
 		b.WriteString("\n")
+	}
+	return b.String()
+}
+
+// buildChai1Restraints renders the Chai-1 restraint CSV (`--constraint-path`):
+// a fixed header row then one row per restraint. restraint_id is generated as
+// `restraint_<index>`. The chain/residue/connection_type/comment cells are
+// written verbatim; min/max distance cells are blank when the pointer is nil;
+// confidence is the formatted float when set, `1` when nil. The caller writes
+// the file only when len(rs) > 0.
+func buildChai1Restraints(rs []chai1Restraint) string {
+	var b strings.Builder
+	b.WriteString("restraint_id,chainA,res_idxA,chainB,res_idxB," +
+		"min_distance_angstrom,max_distance_angstrom,connection_type,confidence,comment\n")
+	for i, r := range rs {
+		minCell := ""
+		if r.MinDistance != nil {
+			minCell = strconv.FormatFloat(*r.MinDistance, 'g', -1, 64)
+		}
+		maxCell := ""
+		if r.MaxDistance != nil {
+			maxCell = strconv.FormatFloat(*r.MaxDistance, 'g', -1, 64)
+		}
+		confCell := "1"
+		if r.Confidence != nil {
+			confCell = strconv.FormatFloat(*r.Confidence, 'g', -1, 64)
+		}
+		fmt.Fprintf(&b, "restraint_%d,%s,%s,%s,%s,%s,%s,%s,%s,%s\n",
+			i, r.ChainA, r.ResA, r.ChainB, r.ResB,
+			minCell, maxCell, r.ConnectionType, confCell, r.Comment)
 	}
 	return b.String()
 }

@@ -311,6 +311,20 @@ func TestBuildChai1FASTA(t *testing.T) {
 	}
 }
 
+func TestBuildChai1Restraints(t *testing.T) {
+	maxd := 6.0
+	got := buildChai1Restraints([]chai1Restraint{
+		{ConnectionType: "contact", ChainA: "A", ResA: "A219", ChainB: "L",
+			MaxDistance: &maxd},
+	})
+	want := "restraint_id,chainA,res_idxA,chainB,res_idxB," +
+		"min_distance_angstrom,max_distance_angstrom,connection_type,confidence,comment\n" +
+		"restraint_0,A,A219,L,,,6,contact,1,\n"
+	if got != want {
+		t.Errorf("restraints csv mismatch\n got:\n%s\nwant:\n%s", got, want)
+	}
+}
+
 func TestParseChai1Output(t *testing.T) {
 	outDir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(outDir, "pred.model_0.cif"),

@@ -257,8 +257,9 @@ func TestBoltzGenAdapterInvokeNotInstalled(t *testing.T) {
 	}
 }
 
-func TestBoltzGenAdapterInvokeWeightsMissing(t *testing.T) {
-	// Set up everything but the weights cache directory.
+func TestBoltzGenAdapterInvokeCreatesWeightsCache(t *testing.T) {
+	// BoltzGen downloads its weights at container runtime, so a missing
+	// weights cache must be created on demand, not rejected.
 	home := t.TempDir()
 	reg, err := LoadRegistry(home)
 	if err != nil {
@@ -283,8 +284,12 @@ func TestBoltzGenAdapterInvokeWeightsMissing(t *testing.T) {
 	defer restore()
 	_, err = boltzGenAdapter{}.Invoke(context.Background(), env,
 		[]byte(`{"target":"`+target+`"}`))
-	if err == nil || !strings.Contains(err.Error(), "weights cache") {
-		t.Fatalf("want a 'weights cache' error, got: %v", err)
+	if err != nil && strings.Contains(err.Error(), "weights cache") {
+		t.Fatalf("a missing weights cache must not error, got: %v", err)
+	}
+	cache := ModelsRoot(reg.Home(), "boltzgen")
+	if info, statErr := os.Stat(cache); statErr != nil || !info.IsDir() {
+		t.Fatalf("Invoke must create the weights cache %s; stat err = %v", cache, statErr)
 	}
 }
 

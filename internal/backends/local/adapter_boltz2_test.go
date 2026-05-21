@@ -250,23 +250,27 @@ func TestBoltz2AdapterInvokeEmptyChainErrors(t *testing.T) {
 	}
 }
 
-func TestBoltz2AdapterInvokeWeightsMissing(t *testing.T) {
+func TestBoltz2AdapterInvokeCreatesWeightsCache(t *testing.T) {
 	home := t.TempDir()
 	reg, err := LoadRegistry(home)
 	if err != nil {
 		t.Fatal(err)
 	}
 	rec, _ := reg.Tool("boltz2")
-	// Models cache deliberately NOT created.
+	// Models cache deliberately NOT created — the adapter must create it.
 	env := AdapterEnv{Recipe: rec, WorkDir: t.TempDir(), Registry: reg}
-	// Stub the runtime so Detect succeeds and ImageExists returns true; the
-	// missing weights directory should be the only thing the adapter trips on.
 	_ = stubContainerRuntime(t, nil)
 
+	// Boltz-2 downloads its weights at container runtime, so a missing
+	// weights cache must be created on demand, not rejected.
 	_, err = boltz2Adapter{}.Invoke(context.Background(), env,
 		[]byte(`{"sequences":{"A":"MKQ"}}`))
-	if err == nil || !strings.Contains(err.Error(), "weights cache") {
-		t.Fatalf("want a weights-cache-missing error, got: %v", err)
+	if err != nil && strings.Contains(err.Error(), "weights cache") {
+		t.Fatalf("a missing weights cache must not error, got: %v", err)
+	}
+	cache := ModelsRoot(reg.Home(), "boltz2")
+	if info, statErr := os.Stat(cache); statErr != nil || !info.IsDir() {
+		t.Fatalf("Invoke must create the weights cache %s; stat err = %v", cache, statErr)
 	}
 }
 

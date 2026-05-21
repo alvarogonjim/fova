@@ -111,6 +111,52 @@ work. The items below are real defects surfaced along the way.
   `design.*` tool is not registered, so this gap fails loudly at plan
   time instead of silently at execution.
 
+### 10. design.* `target` advertises "PDB ID" but adapters require a file
+- **Where:** `internal/tools/design/design.go` (schema: `"target"` →
+  "Target PDB ID or file path"); `internal/skills/builtin/design-binder.md`;
+  enforced in `internal/backends/local/adapter_boltzgen.go` and the other
+  design adapters.
+- **Severity:** medium — wastes a design-job submission.
+- **Symptom:** the `target` field is described as "Target PDB ID or file
+  path" and the binder skill says the same, but every design adapter
+  requires a `.pdb`/`.cif` *file* and no tool fetches a PDB ID into one
+  (`knowledge.pdb` returns metadata only). Told a bare ID is fine, the
+  agent passed `target: "4ZQK"`; the adapter rejected it (`target
+  "…/4ZQK" must be a .pdb or .cif file`). It worked only after a manual
+  nudge to pass `4ZQK.pdb`.
+- **Fix — one of:**
+  - Quick: correct the `target` schema description and `design-binder.md`
+    to "workspace path to a `.pdb`/`.cif` file"; stop advertising IDs.
+  - Proper: add a structure-fetch tool (e.g. `fs.fetch_structure`, or let
+    `knowledge.pdb` optionally download coordinates) so a PDB ID genuinely
+    works. Today the agent improvises with `fs.bash curl`, which is
+    fragile (observed `fs.bash` `exit status 127`).
+
+### 11. Runtime-weight container tools can never pass the weights-cache check (HIGH — blocks the pipeline)
+- **Where:** `internal/backends/local/installer.go` (the
+  `if len(rec.Weights) > 0` gate around the weights step); the
+  `os.Stat`-and-fail checks in `adapter_boltzgen.go`, `adapter_boltz2.go`,
+  `adapter_chai1.go`.
+- **Severity:** HIGH — `design.boltzgen` / `fold.boltz2` / `fold.chai1`
+  cannot run, with no user-recoverable path.
+- **Symptom:** `/install boltzgen` builds the image and reports success,
+  but the design job then fails with `weights cache <path> missing — run
+  /install boltzgen`. Re-running `/install` never helps. Root cause: the
+  installer only creates the per-tool weights-cache directory
+  (`ModelsRoot`) when the recipe declares static `[[weights]]`. BoltzGen /
+  Boltz-2 / Chai-1 download their weights from HuggingFace *at container
+  runtime* into the bind-mounted `/models`, so they declare no static
+  weights — the directory is never created. The adapter then hard-fails
+  because the directory is absent and tells the user to "run /install
+  boltzgen", which can never fix it. An unbreakable loop.
+- **Fix (applied on this branch):** the weights cache is a bind-mount
+  source — it must exist before the container runs, and an empty
+  directory is the correct pre-state for a runtime-download tool. The
+  boltzgen / boltz2 / chai1 adapters now `os.MkdirAll` the cache instead
+  of `os.Stat`-and-error. (rfdiffusion-style tools with static
+  `[[weights]]` keep the existence check — for them a missing cache
+  genuinely means weights were not fetched.)
+
 ---
 
 ## Needs investigation

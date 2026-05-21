@@ -116,12 +116,13 @@ func (boltzGenAdapter) Invoke(ctx context.Context, env AdapterEnv, request []byt
 
 	// BoltzGen downloads ~6 GB of weights from HuggingFace on first run via
 	// HF_HOME=/models (set in boltzgen.Containerfile). We bind-mount the
-	// per-tool cache so weights only download once across runs.
+	// per-tool cache so weights only download once across runs. The cache is
+	// a bind-mount source: an empty directory is the correct pre-state, so
+	// create it if absent rather than failing — /install does not pre-fetch
+	// runtime-downloaded weights.
 	modelsCache := ModelsRoot(env.Registry.Home(), "boltzgen")
-	if info, err := os.Stat(modelsCache); err != nil || !info.IsDir() {
-		return nil, fmt.Errorf(
-			"design.boltzgen: weights cache %s missing — run /install boltzgen",
-			modelsCache)
+	if err := os.MkdirAll(modelsCache, 0o755); err != nil {
+		return nil, fmt.Errorf("design.boltzgen: create weights cache %s: %w", modelsCache, err)
 	}
 
 	cmd := []string{

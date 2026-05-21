@@ -1,0 +1,1113 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>fova — design proteins in your terminal</title>
+<meta name="description" content="fova is a terminal agent for de novo protein design. It plans, runs, and ranks design jobs — and ships the survivors to a wet lab — from a single Go binary. Free by default." />
+<meta name="theme-color" content="#0d1f15" />
+<meta name="color-scheme" content="dark" />
+
+<meta property="og:type" content="website" />
+<meta property="og:title" content="fova — design proteins in your terminal" />
+<meta property="og:description" content="A terminal agent for de novo protein design. It plans, runs, ranks — and ships the survivors to a wet lab. Free by default." />
+<meta property="og:url" content="https://github.com/alvarogonjim/fova" />
+<meta name="twitter:card" content="summary_large_image" />
+
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 200 240'%3E%3Crect width='200' height='240' rx='46' fill='%230d1f15'/%3E%3Cpath d='M52 42V202M52 90H150M52 142H112' stroke='%237fc14a' stroke-width='17' stroke-linecap='round'/%3E%3Ccircle cx='150' cy='90' r='16' fill='%23EF9F27'/%3E%3C/svg%3E" />
+
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
+
+<style>
+/* ============================================================
+   fova — landing page
+   Palette mirrors internal/tui/theme.go (DefaultPalette):
+     forest #0d1f15 · sand #d4cfc0 · moss #7fc14a · saffron #EF9F27
+   ============================================================ */
+
+:root{
+  --forest:      #0d1f15;
+  --forest-deep: #091610;
+  --forest-soft: #102619;
+  --panel:       #122a1c;
+  --panel-2:     #16321f;
+  --line:        #1f3d2a;
+  --line-moss:   #2f5a36;
+
+  --sand:        #d4cfc0;
+  --sand-dim:    #a9a899;
+  --muted:       #7c8a78;
+
+  --moss:        #7fc14a;
+  --moss-deep:   #4a7e2a;
+  --saffron:     #ef9f27;
+  --saffron-hi:  #ffb648;
+  --fail:        #f0796a;
+
+  --ease-out:    cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-quart:  cubic-bezier(0.25, 1, 0.5, 1);
+  --ease-inout:  cubic-bezier(0.87, 0, 0.13, 1);
+
+  --shell: clamp(1.4rem, 5vw, 4.5rem);
+  --maxw:  1200px;
+}
+
+*{box-sizing:border-box;margin:0;padding:0}
+html{-webkit-text-size-adjust:100%}
+body{
+  background:var(--forest);
+  color:var(--sand);
+  font-family:"Space Grotesk", system-ui, sans-serif;
+  font-size:clamp(1rem, 0.97rem + 0.2vw, 1.13rem);
+  line-height:1.65;
+  -webkit-font-smoothing:antialiased;
+  overflow-x:hidden;
+}
+body::before{ /* dot-grid texture */
+  content:"";
+  position:fixed; inset:0; z-index:0; pointer-events:none;
+  background-image:radial-gradient(circle, rgba(127,193,74,.05) 1px, transparent 1.2px);
+  background-size:34px 34px;
+  mask-image:linear-gradient(180deg, #000 0%, transparent 62%);
+}
+body::after{ /* atmospheric glows */
+  content:"";
+  position:fixed; inset:0; z-index:0; pointer-events:none;
+  background:
+    radial-gradient(680px 460px at 78% -4%, rgba(127,193,74,.16), transparent 70%),
+    radial-gradient(720px 520px at 8% 8%, rgba(239,159,39,.07), transparent 72%);
+}
+main, .nav, footer{position:relative; z-index:1}
+
+a{color:inherit; text-decoration:none}
+img,svg{display:block}
+::selection{background:var(--saffron); color:var(--forest-deep)}
+:focus-visible{outline:2px solid var(--saffron); outline-offset:3px; border-radius:3px}
+
+.shell{max-width:var(--maxw); margin-inline:auto; padding-inline:var(--shell)}
+.mono{font-family:"JetBrains Mono", ui-monospace, monospace}
+
+.skip{
+  position:absolute; left:-999px; top:0; z-index:99;
+  background:var(--saffron); color:var(--forest-deep);
+  padding:.6rem 1rem; font-weight:600; border-radius:0 0 8px 0;
+}
+.skip:focus{left:0}
+
+/* ---- eyebrow --------------------------------------------------- */
+.eyebrow{
+  font-family:"JetBrains Mono", monospace;
+  font-size:.74rem; letter-spacing:.24em; text-transform:uppercase;
+  color:var(--moss);
+  display:flex; align-items:center; gap:.55rem;
+}
+.eyebrow::before{content:"┌─"; color:var(--moss-deep); letter-spacing:0}
+
+/* ---- buttons --------------------------------------------------- */
+.btn{
+  display:inline-flex; align-items:center; gap:.55rem;
+  font-family:"JetBrains Mono", monospace;
+  font-size:.92rem; font-weight:500;
+  padding:.92rem 1.5rem; border-radius:10px;
+  border:1px solid transparent;
+  transition:transform .45s var(--ease-out), background-color .25s ease,
+             box-shadow .35s ease, color .25s ease, border-color .25s ease;
+  will-change:transform;
+}
+.btn .arr{transition:transform .4s var(--ease-out)}
+.btn:hover .arr{transform:translate(3px,-3px)}
+.btn-primary{
+  background:var(--saffron); color:var(--forest-deep); font-weight:700;
+  box-shadow:0 8px 30px -8px rgba(239,159,39,.5);
+}
+.btn-primary:hover{background:var(--saffron-hi); box-shadow:0 14px 40px -8px rgba(239,159,39,.6)}
+.btn-ghost{
+  background:rgba(127,193,74,.05); color:var(--sand);
+  border-color:var(--line-moss);
+}
+.btn-ghost:hover{border-color:var(--moss); background:rgba(127,193,74,.12); color:#fff}
+.btn-sm{padding:.62rem 1.05rem; font-size:.84rem; border-radius:8px}
+
+/* ============================================================ NAV */
+.nav{
+  position:sticky; top:0; z-index:50;
+  transition:background-color .3s ease, border-color .3s ease, backdrop-filter .3s ease;
+  border-bottom:1px solid transparent;
+}
+.nav.scrolled{
+  background:rgba(9,22,16,.82);
+  backdrop-filter:blur(14px) saturate(1.4);
+  -webkit-backdrop-filter:blur(14px) saturate(1.4);
+  border-bottom-color:var(--line);
+}
+.nav-in{
+  display:flex; align-items:center; justify-content:space-between;
+  padding-block:1rem;
+}
+.brand{display:flex; align-items:center; gap:.6rem; font-weight:700}
+.brand .wm{font-family:"JetBrains Mono", monospace; font-size:1.18rem; letter-spacing:-.02em}
+.brand svg{width:24px; height:29px}
+.nav-links{display:flex; align-items:center; gap:.4rem}
+.nav-links a.lnk{
+  font-family:"JetBrains Mono", monospace; font-size:.86rem;
+  color:var(--sand-dim); padding:.5rem .8rem; border-radius:7px;
+  transition:color .2s ease, background-color .2s ease;
+}
+.nav-links a.lnk:hover{color:var(--moss); background:rgba(127,193,74,.07)}
+.nav-cta{display:flex; align-items:center; gap:.55rem}
+@media (max-width:780px){
+  .nav-links .lnk{display:none}
+}
+
+/* ============================================================ HERO */
+.hero{padding-top:clamp(3rem,7vw,6rem); padding-bottom:clamp(3.5rem,8vw,7rem); position:relative}
+.hero-grid{
+  display:grid; grid-template-columns:1.15fr .85fr; gap:clamp(2rem,5vw,4.5rem);
+  align-items:center;
+}
+@media (max-width:920px){ .hero-grid{grid-template-columns:1fr; gap:2.6rem} }
+
+.pill{
+  display:inline-flex; align-items:center; gap:.5rem;
+  font-family:"JetBrains Mono", monospace; font-size:.76rem;
+  color:var(--sand-dim);
+  border:1px solid var(--line-moss); border-radius:999px;
+  padding:.34rem .85rem; margin-bottom:1.7rem;
+}
+.pill b{color:var(--saffron); font-weight:700}
+.pill .blip{
+  width:7px; height:7px; border-radius:50%; background:var(--moss);
+  box-shadow:0 0 0 0 rgba(127,193,74,.6);
+  animation:blip 2.6s var(--ease-out) infinite;
+}
+@keyframes blip{
+  0%,100%{box-shadow:0 0 0 0 rgba(127,193,74,.55)}
+  50%{box-shadow:0 0 0 6px rgba(127,193,74,0)}
+}
+
+h1.headline{
+  font-size:clamp(2.85rem, 1.6rem + 5.6vw, 6rem);
+  line-height:1.015; letter-spacing:-.035em; font-weight:700;
+  color:#f3efe2;
+}
+h1.headline .moss{color:var(--moss)}
+h1.headline .ul{position:relative; white-space:nowrap}
+h1.headline .ul::after{
+  content:""; position:absolute; left:0; right:0; bottom:.04em; height:.1em;
+  background:var(--saffron); border-radius:99px;
+  transform:scaleX(0); transform-origin:left;
+  animation:ul 1s var(--ease-out) 1.05s forwards;
+}
+@keyframes ul{to{transform:scaleX(1)}}
+
+.lead{
+  margin-top:1.5rem; max-width:34ch;
+  color:var(--sand-dim); font-size:1.1rem;
+}
+.lead b{color:var(--sand); font-weight:600}
+
+.hero-cta{display:flex; flex-wrap:wrap; gap:.8rem; margin-top:2rem}
+.hero-foot{
+  margin-top:1.5rem; font-family:"JetBrains Mono", monospace;
+  font-size:.78rem; color:var(--muted); display:flex; align-items:center; gap:.5rem;
+}
+.hero-foot .dot{color:var(--moss-deep)}
+
+/* hero load choreography */
+.rise{opacity:0; animation:rise .95s var(--ease-out) forwards}
+@keyframes rise{from{opacity:0; transform:translateY(34px)} to{opacity:1; transform:none}}
+.d1{animation-delay:.05s}.d2{animation-delay:.16s}.d3{animation-delay:.27s}
+.d4{animation-delay:.38s}.d5{animation-delay:.5s}.d6{animation-delay:.62s}
+
+/* ---- folded-F mark -------------------------------------------- */
+.mark-wrap{display:flex; justify-content:center; position:relative}
+.mark-wrap::before{
+  content:""; position:absolute; width:78%; aspect-ratio:1; border-radius:50%;
+  background:radial-gradient(circle, rgba(127,193,74,.22), transparent 68%);
+  filter:blur(8px);
+}
+.mark{width:clamp(140px, 17vw, 230px); height:auto; position:relative}
+.mark path{stroke:var(--moss); stroke-width:14; stroke-linecap:round; fill:none}
+.mark .node{fill:var(--saffron)}
+.mark.draw path{stroke-dasharray:1; stroke-dashoffset:1; animation:draw 1s var(--ease-out) forwards}
+.mark.draw .spine{animation-delay:.15s}
+.mark.draw .arm1{animation-delay:.55s}
+.mark.draw .arm2{animation-delay:.72s}
+.mark.draw .node{
+  transform-box:fill-box; transform-origin:center; transform:scale(0);
+  animation:pop .7s var(--ease-out) 1.25s forwards;
+}
+.mark.draw .halo{
+  transform-box:fill-box; transform-origin:center; opacity:0;
+  animation:halo 2.6s ease-out 1.5s infinite;
+}
+@keyframes draw{to{stroke-dashoffset:0}}
+@keyframes pop{0%{transform:scale(0)}62%{transform:scale(1.22)}100%{transform:scale(1)}}
+@keyframes halo{0%{opacity:.5; transform:scale(.5)}70%,100%{opacity:0; transform:scale(2.4)}}
+
+/* ============================================================ TERMINAL */
+.term-shell{position:relative}
+.term-shell::before{
+  content:""; position:absolute; inset:-12% -8% -22% -8%;
+  background:radial-gradient(60% 60% at 70% 30%, rgba(127,193,74,.2), transparent 72%);
+  filter:blur(10px); z-index:-1;
+}
+.term{
+  border:1px solid var(--line-moss); border-radius:13px; overflow:hidden;
+  background:linear-gradient(180deg, #0c2014, #081510);
+  box-shadow:0 40px 80px -32px rgba(0,0,0,.85), inset 0 1px 0 rgba(127,193,74,.08);
+}
+.term-bar{
+  display:flex; align-items:center; gap:.6rem;
+  padding:.7rem 1rem; border-bottom:1px solid var(--line);
+  background:rgba(127,193,74,.04);
+}
+.term-bar svg{width:13px; height:16px}
+.term-title{font-family:"JetBrains Mono", monospace; font-size:.8rem; color:var(--sand)}
+.term-title .dim{color:var(--muted)}
+.term-live{
+  margin-left:auto; display:flex; align-items:center; gap:.4rem;
+  font-family:"JetBrains Mono", monospace; font-size:.72rem; color:var(--muted);
+}
+.term-live i{width:6px; height:6px; border-radius:50%; background:var(--moss); animation:blip 2.6s var(--ease-out) infinite}
+.term-body{
+  font-family:"JetBrains Mono", monospace;
+  font-size:clamp(.72rem, .58rem + .55vw, .86rem);
+  line-height:1.85; padding:1.15rem 1.25rem;
+  min-height:15.4em;
+}
+.t-line{white-space:pre-wrap; word-break:break-word}
+.t-prompt{color:var(--moss); font-weight:700; margin-right:.55rem}
+.t-cmd{color:var(--sand)}
+.t-mark{display:inline-block; width:1.4em; color:var(--moss)}
+.t-mark.ok{color:var(--moss)}
+.t-label{display:inline-block; min-width:9.6em; color:var(--sand)}
+.t-detail{color:var(--muted)}
+.t-detail i{color:var(--saffron); font-style:normal; font-weight:700}
+.t-confirm{color:var(--saffron); margin-top:.15rem}
+.t-arrow{color:var(--saffron); margin-right:.55rem; font-weight:700}
+.t-cursor{
+  display:inline-block; width:.62em; height:1.05em; vertical-align:-.16em;
+  background:var(--saffron); margin-left:.18em;
+  animation:caret 1.05s steps(1) infinite;
+}
+@keyframes caret{50%{opacity:0}}
+
+/* ============================================================ SECTIONS */
+section{position:relative}
+.band{padding-block:clamp(4.5rem, 9vw, 8.5rem)}
+.band-line{border-top:1px solid var(--line)}
+
+[data-reveal]{
+  opacity:0; transform:translateY(30px);
+  transition:opacity 1s var(--ease-out), transform 1s var(--ease-out);
+  transition-delay:var(--d, 0s);
+}
+[data-reveal].is-in{opacity:1; transform:none}
+
+.section-head{max-width:40rem; margin-bottom:clamp(2.5rem,5vw,4rem)}
+.section-head h2{
+  margin-top:1.1rem;
+  font-size:clamp(2rem, 1.2rem + 3.2vw, 3.5rem);
+  line-height:1.06; letter-spacing:-.03em; font-weight:700; color:#f3efe2;
+}
+.section-head p{margin-top:1.1rem; color:var(--sand-dim); max-width:34rem}
+
+/* ---- statement ------------------------------------------------- */
+.statement{padding-block:clamp(4.5rem,9vw,8rem)}
+.statement .big{
+  font-size:clamp(2.3rem, 1.2rem + 4.6vw, 5rem);
+  line-height:1.04; letter-spacing:-.035em; font-weight:700;
+  color:#f3efe2;
+}
+.statement .big .moss{color:var(--moss)}
+.statement .sub{
+  margin-top:1.6rem; max-width:46rem; color:var(--sand-dim); font-size:1.13rem;
+}
+.statement .opt{
+  margin-top:1.7rem; display:flex; flex-wrap:wrap; gap:.6rem;
+}
+.tag{
+  font-family:"JetBrains Mono", monospace; font-size:.78rem;
+  border:1px solid var(--line-moss); border-radius:999px;
+  padding:.4rem .9rem; color:var(--sand-dim);
+}
+.tag.on{color:var(--moss); border-color:var(--moss-deep)}
+.tag.on::before{content:"✓ "; color:var(--moss)}
+.tag.opt-in{color:var(--saffron); border-color:rgba(239,159,39,.4)}
+.tag.opt-in::before{content:"▸ "}
+
+/* ---- pipeline (4 verbs) --------------------------------------- */
+.pipe{
+  display:grid; grid-template-columns:repeat(4,1fr); gap:1.5rem;
+  position:relative;
+}
+.pipe::before{
+  content:""; position:absolute; left:0; right:0; top:2.05rem; height:0;
+  border-top:1px dashed var(--line-moss);
+}
+@media (max-width:860px){
+  .pipe{grid-template-columns:1fr 1fr; gap:1.5rem 1.4rem}
+  .pipe::before{display:none}
+}
+@media (max-width:520px){ .pipe{grid-template-columns:1fr} }
+.step{position:relative}
+.step .node{
+  width:4.1rem; height:4.1rem; border-radius:12px;
+  display:flex; align-items:center; justify-content:center;
+  background:var(--forest); border:1px solid var(--line-moss);
+  font-family:"JetBrains Mono", monospace; font-size:1.3rem; color:var(--saffron);
+  margin-bottom:1.1rem;
+}
+.step .idx{
+  font-family:"JetBrains Mono", monospace; font-size:.72rem;
+  color:var(--moss-deep); letter-spacing:.12em;
+}
+.step h3{margin-top:.35rem; font-size:1.4rem; letter-spacing:-.02em; color:#f0ecdf}
+.step p{margin-top:.55rem; color:var(--sand-dim); font-size:.97rem}
+.step p code{
+  font-family:"JetBrains Mono",monospace; font-size:.86em;
+  color:var(--moss); background:rgba(127,193,74,.08);
+  padding:.05em .35em; border-radius:4px;
+}
+
+/* ---- capability grid ------------------------------------------ */
+.cards{
+  display:grid; grid-template-columns:repeat(3,1fr); gap:1.1rem;
+}
+@media (max-width:880px){ .cards{grid-template-columns:1fr 1fr} }
+@media (max-width:560px){ .cards{grid-template-columns:1fr} }
+.card{
+  border:1px solid var(--line); border-radius:14px;
+  background:linear-gradient(180deg, var(--panel), var(--forest-soft));
+  padding:1.6rem 1.5rem;
+  transition:transform .5s var(--ease-out), border-color .3s ease, box-shadow .4s ease;
+}
+.card:hover{
+  transform:translateY(-5px); border-color:var(--line-moss);
+  box-shadow:0 24px 44px -26px rgba(0,0,0,.8);
+}
+.card .ico{
+  font-family:"JetBrains Mono", monospace; font-size:1.5rem;
+  color:var(--moss); margin-bottom:.95rem; line-height:1;
+}
+.card h3{font-size:1.18rem; letter-spacing:-.01em; color:#f0ecdf}
+.card p{margin-top:.55rem; color:var(--sand-dim); font-size:.96rem}
+.card p .hi{color:var(--saffron); font-weight:600}
+
+/* ---- tools ----------------------------------------------------- */
+.tool-group{margin-top:2.2rem}
+.tool-group:first-child{margin-top:0}
+.tool-group .glab{
+  font-family:"JetBrains Mono", monospace; font-size:.78rem;
+  letter-spacing:.16em; text-transform:uppercase; color:var(--moss);
+  display:flex; align-items:center; gap:.6rem; margin-bottom:1rem;
+}
+.tool-group .glab::before{content:"▸"; color:var(--saffron)}
+.tool-group .glab .ct{color:var(--muted); letter-spacing:.05em}
+.chips{display:flex; flex-wrap:wrap; gap:.6rem}
+.chip{
+  font-family:"JetBrains Mono", monospace; font-size:.85rem;
+  border:1px solid var(--line); border-radius:9px;
+  padding:.55rem .9rem; color:var(--sand);
+  background:rgba(127,193,74,.03);
+  transition:border-color .25s ease, color .25s ease, transform .35s var(--ease-out), background-color .25s ease;
+}
+.chip:hover{
+  border-color:var(--moss); color:var(--moss);
+  background:rgba(127,193,74,.09); transform:translateY(-2px);
+}
+
+/* ---- install --------------------------------------------------- */
+.install-rows{display:grid; grid-template-columns:1fr 1fr; gap:1.1rem}
+@media (max-width:720px){ .install-rows{grid-template-columns:1fr} }
+.codecard{
+  border:1px solid var(--line-moss); border-radius:13px; overflow:hidden;
+  background:var(--forest-deep);
+}
+.codecard .cc-head{
+  display:flex; align-items:center; gap:.5rem;
+  padding:.7rem 1rem; border-bottom:1px solid var(--line);
+  font-family:"JetBrains Mono", monospace; font-size:.78rem; color:var(--moss);
+}
+.codecard .cc-head .ct{color:var(--muted); margin-left:auto}
+.codecard .cc-body{
+  display:flex; align-items:center; gap:1rem;
+  padding:1.05rem 1.1rem;
+}
+.codecard pre{
+  font-family:"JetBrains Mono", monospace; font-size:.86rem;
+  color:var(--sand); overflow-x:auto; flex:1;
+}
+.codecard pre .p{color:var(--moss-deep)}
+.copy{
+  flex:none; cursor:pointer;
+  font-family:"JetBrains Mono", monospace; font-size:.72rem;
+  background:rgba(127,193,74,.08); color:var(--moss);
+  border:1px solid var(--line-moss); border-radius:7px;
+  padding:.42rem .7rem;
+  transition:background-color .2s ease, color .2s ease, border-color .2s ease;
+}
+.copy:hover{background:rgba(127,193,74,.16)}
+.copy.copied{background:var(--moss); color:var(--forest-deep); border-color:var(--moss)}
+.copy .lc::after{content:"copy"}
+.copy.copied .lc::after{content:"✓ done"}
+
+.dl-lead{
+  margin:3rem 0 1.3rem;
+  font-family:"JetBrains Mono", monospace; font-size:.8rem;
+  letter-spacing:.14em; text-transform:uppercase; color:var(--moss);
+  display:flex; align-items:center; gap:.6rem;
+}
+.dl-lead::before{content:"▸"; color:var(--saffron)}
+.platforms{
+  display:grid; grid-template-columns:repeat(5,1fr); gap:.9rem;
+}
+@media (max-width:900px){ .platforms{grid-template-columns:1fr 1fr 1fr} }
+@media (max-width:560px){ .platforms{grid-template-columns:1fr 1fr} }
+.plat{
+  display:flex; flex-direction:column; gap:.15rem;
+  border:1px solid var(--line); border-radius:12px;
+  background:linear-gradient(180deg, var(--panel), var(--forest-soft));
+  padding:1.15rem 1.05rem;
+  transition:transform .45s var(--ease-out), border-color .25s ease, box-shadow .35s ease;
+}
+.plat:hover{
+  transform:translateY(-4px); border-color:var(--saffron);
+  box-shadow:0 22px 38px -24px rgba(0,0,0,.85);
+}
+.plat .os{font-family:"JetBrains Mono",monospace; font-size:.7rem; letter-spacing:.06em; color:var(--moss); text-transform:uppercase}
+.plat .pn{font-size:1.05rem; font-weight:600; color:#f0ecdf; margin-top:.2rem}
+.plat .ar{font-family:"JetBrains Mono",monospace; font-size:.78rem; color:var(--muted)}
+.plat .fmt{
+  margin-top:.7rem; font-family:"JetBrains Mono",monospace; font-size:.72rem;
+  color:var(--sand-dim); display:flex; align-items:center; gap:.4rem;
+}
+.plat .fmt .arr{margin-left:auto; color:var(--saffron); transition:transform .4s var(--ease-out)}
+.plat:hover .fmt .arr{transform:translate(3px,-3px)}
+.verify{
+  margin-top:1.6rem; font-family:"JetBrains Mono",monospace; font-size:.82rem;
+  color:var(--muted);
+}
+.verify b{color:var(--moss); font-weight:500}
+
+/* ---- closer ---------------------------------------------------- */
+.closer{padding-block:clamp(5rem,10vw,9rem); text-align:center; overflow:hidden}
+.closer .ce{justify-content:center}
+.closer .ce::before{content:"▸"}
+.closer h2{
+  margin-top:1.3rem;
+  font-size:clamp(1.9rem, 1.2rem + 3vw, 3.4rem);
+  line-height:1.08; letter-spacing:-.03em; font-weight:700; color:#f3efe2;
+}
+.wordmark{
+  font-family:"JetBrains Mono", monospace; font-weight:700;
+  font-size:clamp(6rem, 26vw, 21rem); line-height:.9; letter-spacing:-.06em;
+  color:var(--moss); margin:.35em 0 .1em;
+  display:flex; align-items:flex-end; justify-content:center; gap:.04em;
+  text-shadow:0 0 70px rgba(127,193,74,.35);
+}
+.wordmark i{
+  width:.13em; height:.13em; border-radius:50%;
+  background:var(--saffron); margin-bottom:.14em;
+  box-shadow:0 0 30px rgba(239,159,39,.7);
+}
+.closer-cta{display:flex; flex-wrap:wrap; gap:.8rem; justify-content:center}
+
+/* ============================================================ FOOTER */
+footer{border-top:1px solid var(--line); padding-block:3.2rem; background:var(--forest-deep)}
+.foot-grid{
+  display:flex; flex-wrap:wrap; gap:2.4rem; justify-content:space-between;
+  align-items:flex-start;
+}
+.foot-brand{max-width:24rem}
+.foot-brand .brand{margin-bottom:.9rem}
+.foot-brand p{color:var(--muted); font-size:.92rem}
+.foot-cols{display:flex; gap:3rem; flex-wrap:wrap}
+.foot-col h4{
+  font-family:"JetBrains Mono",monospace; font-size:.72rem;
+  letter-spacing:.16em; text-transform:uppercase; color:var(--moss); margin-bottom:.8rem;
+}
+.foot-col a{
+  display:block; color:var(--sand-dim); font-size:.92rem; padding:.22rem 0;
+  transition:color .2s ease;
+}
+.foot-col a:hover{color:var(--moss)}
+.foot-base{
+  margin-top:2.6rem; padding-top:1.5rem; border-top:1px solid var(--line);
+  display:flex; flex-wrap:wrap; gap:1rem; justify-content:space-between;
+  font-family:"JetBrains Mono",monospace; font-size:.76rem; color:var(--muted);
+}
+.foot-base .moss{color:var(--moss-deep)}
+
+@media (prefers-reduced-motion:reduce){
+  *{animation-duration:.001ms !important; animation-iteration-count:1 !important;
+    transition-duration:.001ms !important; scroll-behavior:auto !important}
+  .rise,[data-reveal]{opacity:1 !important; transform:none !important}
+  .mark.draw path{stroke-dashoffset:0 !important}
+  .mark.draw .node{transform:scale(1) !important}
+  h1.headline .ul::after{transform:scaleX(1) !important}
+}
+</style>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<!-- ===================================================== NAV -->
+<nav class="nav" aria-label="Primary">
+  <div class="shell nav-in">
+    <a class="brand" href="#top" aria-label="fova — home">
+      <svg viewBox="0 0 200 240" aria-hidden="true">
+        <path d="M52 38V206" stroke="#7fc14a" stroke-width="15" stroke-linecap="round"/>
+        <path d="M52 90H150" stroke="#7fc14a" stroke-width="15" stroke-linecap="round"/>
+        <path d="M52 142H112" stroke="#7fc14a" stroke-width="15" stroke-linecap="round"/>
+        <circle cx="150" cy="90" r="15" fill="#ef9f27"/>
+      </svg>
+      <span class="wm">fova</span>
+    </a>
+    <div class="nav-links">
+      <a class="lnk" href="#loop">Pipeline</a>
+      <a class="lnk" href="#why">Why fova</a>
+      <a class="lnk" href="#tools">Tools</a>
+      <a class="lnk" href="#install">Install</a>
+      <div class="nav-cta">
+        <a class="lnk" href="https://github.com/alvarogonjim/fova" target="_blank" rel="noopener">GitHub&nbsp;↗</a>
+        <a class="btn btn-primary btn-sm" href="#install">Download</a>
+      </div>
+    </div>
+  </div>
+</nav>
+
+<main id="main">
+<span id="top"></span>
+
+<!-- ===================================================== HERO -->
+<header class="hero">
+  <div class="shell hero-grid">
+    <div class="hero-copy">
+      <span class="pill rise d1"><i class="blip" aria-hidden="true"></i> <b>v0.5</b>&nbsp;“fova”&nbsp;·&nbsp;alpha&nbsp;·&nbsp;MIT</span>
+      <h1 class="headline rise d2">
+        Design <span class="moss">proteins</span><br>
+        in your <span class="ul">terminal</span>.
+      </h1>
+      <p class="lead rise d3">
+        fova is a terminal agent for <b>de novo protein design</b>. It plans, runs,
+        and ranks design jobs — and ships the survivors to a wet lab — from a single
+        Go binary.
+      </p>
+      <div class="hero-cta rise d4">
+        <a class="btn btn-primary" href="#install" data-magnetic>Download fova</a>
+        <a class="btn btn-ghost" href="https://github.com/alvarogonjim/fova" target="_blank" rel="noopener" data-magnetic>
+          View on GitHub <span class="arr" aria-hidden="true">↗</span>
+        </a>
+      </div>
+      <p class="hero-foot rise d5">
+        <span class="dot">▸</span> macOS · Linux · Windows
+        <span class="dot">·</span> one static binary, no runtime
+      </p>
+    </div>
+
+    <div class="hero-visual">
+      <div class="mark-wrap rise d3" aria-hidden="true">
+        <svg class="mark draw" viewBox="0 0 200 240">
+          <path class="spine" pathLength="1" d="M52 34V206"/>
+          <path class="arm1"  pathLength="1" d="M52 88H150"/>
+          <path class="arm2"  pathLength="1" d="M52 140H112"/>
+          <circle class="halo" cx="150" cy="88" r="13" fill="none" stroke="#ef9f27" stroke-width="3"/>
+          <circle class="node" cx="150" cy="88" r="13"/>
+        </svg>
+      </div>
+      <div class="term-shell rise d4">
+        <div class="term">
+          <div class="term-bar">
+            <svg viewBox="0 0 200 240" aria-hidden="true">
+              <path d="M52 38V206" stroke="#7fc14a" stroke-width="16" stroke-linecap="round"/>
+              <path d="M52 90H150" stroke="#7fc14a" stroke-width="16" stroke-linecap="round"/>
+              <path d="M52 142H112" stroke="#7fc14a" stroke-width="16" stroke-linecap="round"/>
+              <circle cx="150" cy="90" r="16" fill="#ef9f27"/>
+            </svg>
+            <span class="term-title">fova&nbsp;<span class="dim">— protein design agent</span></span>
+            <span class="term-live"><i aria-hidden="true"></i> session</span>
+          </div>
+          <div class="term-body" id="termBody" role="img"
+               aria-label="fova running a binder design pipeline: planning, scaffolding with RFdiffusion, sequence design with ProteinMPNN, structure prediction with AlphaFold3, ranking by ipSAE to a shortlist of 47 designs, then a wet-lab submission prompt.">
+            <div class="t-line"><span class="t-prompt">❯</span><span class="t-cmd">fova design --target PD-L1 --n 50</span></div>
+            <div class="t-line"><span class="t-mark ok">✓</span><span class="t-label">planning</span><span class="t-detail">retrieved <i>12</i> papers · BindCraft + ProteinMPNN</span></div>
+            <div class="t-line"><span class="t-mark ok">✓</span><span class="t-label">scaffolding</span><span class="t-detail">RFdiffusion · <i>200</i> backbones · <i>4m 12s</i></span></div>
+            <div class="t-line"><span class="t-mark ok">✓</span><span class="t-label">sequence design</span><span class="t-detail">ProteinMPNN · <i>200</i> sequences · <i>2m 41s</i></span></div>
+            <div class="t-line"><span class="t-mark ok">✓</span><span class="t-label">predict</span><span class="t-detail">AlphaFold3 · <i>1m 08s</i></span></div>
+            <div class="t-line"><span class="t-mark ok">✓</span><span class="t-label">rank · ipSAE</span><span class="t-detail">shortlist: <i>47</i> designs · top score <i>0.84</i></span></div>
+            <div class="t-line t-confirm"><span class="t-arrow">▸</span><span>confirm wet-lab submission? [y/N]</span><span class="t-cursor"></span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</header>
+
+<!-- ===================================================== STATEMENT -->
+<section class="statement band-line">
+  <div class="shell">
+    <p class="eyebrow" data-reveal>The fova promise</p>
+    <p class="big" data-reveal style="--d:.08s">
+      <span class="moss">Free</span> by default.<br>No account needed.
+    </p>
+    <p class="sub" data-reveal style="--d:.16s">
+      Every feature works without a paid account. Local LLMs — Ollama, vLLM,
+      LM&nbsp;Studio — run out of the box, and the whole free knowledge stack is
+      no-auth. Paid LLMs and wet-lab submission are the only opt-ins, and they
+      stay optional.
+    </p>
+    <div class="opt" data-reveal style="--d:.24s">
+      <span class="tag on">Local LLMs</span>
+      <span class="tag on">Literature retrieval</span>
+      <span class="tag on">Design &amp; scoring</span>
+      <span class="tag on">SQLite provenance</span>
+      <span class="tag opt-in">Paid LLMs — opt-in</span>
+      <span class="tag opt-in">Adaptyv wet lab — opt-in</span>
+    </div>
+  </div>
+</section>
+
+<!-- ===================================================== PIPELINE -->
+<section class="band band-line" id="loop">
+  <div class="shell">
+    <div class="section-head">
+      <p class="eyebrow" data-reveal>The loop</p>
+      <h2 data-reveal style="--d:.08s">From a sentence to the bench.</h2>
+      <p data-reveal style="--d:.16s">
+        Describe a target in plain language. fova does the rest — and tracks
+        every design back to the intent that produced it.
+      </p>
+    </div>
+    <div class="pipe">
+      <article class="step" data-reveal style="--d:.05s">
+        <div class="node">⌖</div>
+        <span class="idx">01 ▸ STEP</span>
+        <h3>Plans</h3>
+        <p>Turns a natural-language target into a grounded <code>DesignPlan</code>, backed by current literature from Europe&nbsp;PMC, OpenAlex, Semantic&nbsp;Scholar &amp; bioRxiv.</p>
+      </article>
+      <article class="step" data-reveal style="--d:.14s">
+        <div class="node">⠿</div>
+        <span class="idx">02 ▸ STEP</span>
+        <h3>Orchestrates</h3>
+        <p>Runs experimentally validated tools — BindCraft, RFdiffusion, ProteinMPNN, AlphaFold3 — locally or on your own Modal GPUs.</p>
+      </article>
+      <article class="step" data-reveal style="--d:.23s">
+        <div class="node">≋</div>
+        <span class="idx">03 ▸ STEP</span>
+        <h3>Ranks</h3>
+        <p>Scores every design by <code>ipSAE</code> — the modern interface metric — then filters to a small, high-confidence shortlist.</p>
+      </article>
+      <article class="step" data-reveal style="--d:.32s">
+        <div class="node">✓</div>
+        <span class="idx">04 ▸ STEP</span>
+        <h3>Ships</h3>
+        <p>Sends the survivors to the bench through the Adaptyv Foundry API — then closes the design–test–learn loop with real results.</p>
+      </article>
+    </div>
+  </div>
+</section>
+
+<!-- ===================================================== WHY -->
+<section class="band band-line" id="why">
+  <div class="shell">
+    <div class="section-head">
+      <p class="eyebrow" data-reveal>Why fova</p>
+      <h2 data-reveal style="--d:.08s">Principles, not features.</h2>
+      <p data-reveal style="--d:.16s">
+        fova is built on eight design principles. These six are the ones you
+        feel every time you run it.
+      </p>
+    </div>
+    <div class="cards">
+      <article class="card" data-reveal style="--d:.05s">
+        <div class="ico">⊹</div>
+        <h3>Free by default</h3>
+        <p>Local LLMs work out of the box. No account, no key, no card. Paid LLMs and wet-lab submission are <span class="hi">opt-in</span>.</p>
+      </article>
+      <article class="card" data-reveal style="--d:.1s">
+        <div class="ico">✓</div>
+        <h3>Validated tools only</h3>
+        <p>Every built-in design tool has <span class="hi">documented wet-lab success</span>. No unproven methods ship in the box.</p>
+      </article>
+      <article class="card" data-reveal style="--d:.15s">
+        <div class="ico">≋</div>
+        <h3>Ranked by ipSAE</h3>
+        <p>The interface metric that outperformed ipTM across <span class="hi">3,766 tested binders</span> on 15 targets.</p>
+      </article>
+      <article class="card" data-reveal style="--d:.2s">
+        <div class="ico">⌗</div>
+        <h3>Provenance everywhere</h3>
+        <p>Every design carries full lineage — <span class="hi">intent → tool versions → wet-lab result</span> — in local SQLite.</p>
+      </article>
+      <article class="card" data-reveal style="--d:.25s">
+        <div class="ico">◇</div>
+        <h3>Local-first, cloud-elastic</h3>
+        <p>Runs offline with Ollama. Scales out to <span class="hi">your own Modal account</span> for GPU when you need it.</p>
+      </article>
+      <article class="card" data-reveal style="--d:.3s">
+        <div class="ico">▸</div>
+        <h3>Human-in-the-loop</h3>
+        <p>A confirmation checkpoint before anything <span class="hi">slow, costly, or irreversible</span> — including every wet-lab submission.</p>
+      </article>
+    </div>
+  </div>
+</section>
+
+<!-- ===================================================== TOOLS -->
+<section class="band band-line" id="tools">
+  <div class="shell">
+    <div class="section-head">
+      <p class="eyebrow" data-reveal>Orchestrated tools</p>
+      <h2 data-reveal style="--d:.08s">Only tools with wet-lab receipts.</h2>
+      <p data-reveal style="--d:.16s">
+        fova drives state-of-the-art design, structure, and knowledge tools —
+        and shows the LLM type-safe outputs, never raw stdout.
+      </p>
+    </div>
+
+    <div class="tool-group" data-reveal>
+      <div class="glab">Design <span class="ct">— binders · antibodies · enzymes</span></div>
+      <div class="chips">
+        <span class="chip">BindCraft</span>
+        <span class="chip">RFdiffusion</span>
+        <span class="chip">RFdiffusion2</span>
+        <span class="chip">ProteinMPNN</span>
+        <span class="chip">LigandMPNN</span>
+        <span class="chip">RFantibody</span>
+        <span class="chip">Chai-2</span>
+      </div>
+    </div>
+
+    <div class="tool-group" data-reveal style="--d:.08s">
+      <div class="glab">Structure &amp; scoring <span class="ct">— predict · ipSAE · filter</span></div>
+      <div class="chips">
+        <span class="chip">AlphaFold3</span>
+        <span class="chip">ESMFold</span>
+        <span class="chip">Boltz-2</span>
+        <span class="chip">Chai-1</span>
+        <span class="chip">ColabFold</span>
+        <span class="chip">ipSAE</span>
+        <span class="chip">Rosetta ΔΔG</span>
+      </div>
+    </div>
+
+    <div class="tool-group" data-reveal style="--d:.16s">
+      <div class="glab">Knowledge <span class="ct">— free · no-auth</span></div>
+      <div class="chips">
+        <span class="chip">Europe PMC</span>
+        <span class="chip">OpenAlex</span>
+        <span class="chip">Semantic Scholar</span>
+        <span class="chip">bioRxiv</span>
+        <span class="chip">Crossref</span>
+        <span class="chip">UniProt</span>
+        <span class="chip">RCSB PDB</span>
+        <span class="chip">InterPro</span>
+      </div>
+    </div>
+
+    <div class="tool-group" data-reveal style="--d:.24s">
+      <div class="glab">Wet lab <span class="ct">— close the loop</span></div>
+      <div class="chips">
+        <span class="chip">Adaptyv Foundry</span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===================================================== INSTALL -->
+<section class="band band-line" id="install">
+  <div class="shell">
+    <div class="section-head">
+      <p class="eyebrow" data-reveal>Get fova</p>
+      <h2 data-reveal style="--d:.08s">Install in one line.</h2>
+      <p data-reveal style="--d:.16s">
+        One static binary — no runtime, no dependencies. Pick the way that
+        suits you, then run <code style="font-family:'JetBrains Mono',monospace;color:var(--moss)">fova</code>.
+      </p>
+    </div>
+
+    <div class="install-rows">
+      <div class="codecard" data-reveal>
+        <div class="cc-head"><span>▸ install.sh</span><span class="ct">macOS · Linux</span></div>
+        <div class="cc-body">
+          <pre><code><span class="p">$</span> curl -fsSL https://fova.dev/install | sh</code></pre>
+          <button class="copy" data-copy="curl -fsSL https://fova.dev/install | sh" aria-label="Copy install command">
+            <span class="lc"></span>
+          </button>
+        </div>
+      </div>
+      <div class="codecard" data-reveal style="--d:.08s">
+        <div class="cc-head"><span>▸ homebrew</span><span class="ct">macOS · Linux</span></div>
+        <div class="cc-body">
+          <pre><code><span class="p">$</span> brew install alvarogonjim/tap/fova</code></pre>
+          <button class="copy" data-copy="brew install alvarogonjim/tap/fova" aria-label="Copy Homebrew command">
+            <span class="lc"></span>
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <p class="dl-lead" data-reveal>Or download a prebuilt binary</p>
+    <div class="platforms">
+      <a class="plat" data-reveal href="https://github.com/alvarogonjim/fova/releases/latest" target="_blank" rel="noopener">
+        <span class="os">macOS</span>
+        <span class="pn">Apple Silicon</span>
+        <span class="ar">arm64</span>
+        <span class="fmt">.tar.gz <span class="arr" aria-hidden="true">↗</span></span>
+      </a>
+      <a class="plat" data-reveal style="--d:.06s" href="https://github.com/alvarogonjim/fova/releases/latest" target="_blank" rel="noopener">
+        <span class="os">macOS</span>
+        <span class="pn">Intel</span>
+        <span class="ar">amd64</span>
+        <span class="fmt">.tar.gz <span class="arr" aria-hidden="true">↗</span></span>
+      </a>
+      <a class="plat" data-reveal style="--d:.12s" href="https://github.com/alvarogonjim/fova/releases/latest" target="_blank" rel="noopener">
+        <span class="os">Linux</span>
+        <span class="pn">x86-64</span>
+        <span class="ar">amd64</span>
+        <span class="fmt">.tar.gz <span class="arr" aria-hidden="true">↗</span></span>
+      </a>
+      <a class="plat" data-reveal style="--d:.18s" href="https://github.com/alvarogonjim/fova/releases/latest" target="_blank" rel="noopener">
+        <span class="os">Linux</span>
+        <span class="pn">ARM64</span>
+        <span class="ar">arm64</span>
+        <span class="fmt">.tar.gz <span class="arr" aria-hidden="true">↗</span></span>
+      </a>
+      <a class="plat" data-reveal style="--d:.24s" href="https://github.com/alvarogonjim/fova/releases/latest" target="_blank" rel="noopener">
+        <span class="os">Windows</span>
+        <span class="pn">x86-64</span>
+        <span class="ar">amd64</span>
+        <span class="fmt">.zip <span class="arr" aria-hidden="true">↗</span></span>
+      </a>
+    </div>
+    <p class="verify" data-reveal>
+      ▸ verify the install &nbsp;·&nbsp; <b>$ fova --version</b> &nbsp;→&nbsp; fova 0.5.0
+    </p>
+  </div>
+</section>
+
+<!-- ===================================================== CLOSER -->
+<section class="closer band-line">
+  <div class="shell">
+    <p class="eyebrow ce" data-reveal>Close the loop</p>
+    <h2 data-reveal style="--d:.08s">Design. Test. Learn.<br>Then do it again.</h2>
+    <div class="wordmark" data-reveal style="--d:.16s" aria-label="fova">
+      fova<i aria-hidden="true"></i>
+    </div>
+    <div class="closer-cta" data-reveal style="--d:.24s">
+      <a class="btn btn-primary" href="#install" data-magnetic>Download fova</a>
+      <a class="btn btn-ghost" href="https://github.com/alvarogonjim/fova" target="_blank" rel="noopener" data-magnetic>
+        Star on GitHub <span class="arr" aria-hidden="true">↗</span>
+      </a>
+    </div>
+  </div>
+</section>
+</main>
+
+<!-- ===================================================== FOOTER -->
+<footer>
+  <div class="shell">
+    <div class="foot-grid">
+      <div class="foot-brand">
+        <a class="brand" href="#top" aria-label="fova — home">
+          <svg viewBox="0 0 200 240" aria-hidden="true">
+            <path d="M52 38V206" stroke="#7fc14a" stroke-width="15" stroke-linecap="round"/>
+            <path d="M52 90H150" stroke="#7fc14a" stroke-width="15" stroke-linecap="round"/>
+            <path d="M52 142H112" stroke="#7fc14a" stroke-width="15" stroke-linecap="round"/>
+            <circle cx="150" cy="90" r="15" fill="#ef9f27"/>
+          </svg>
+          <span class="wm">fova</span>
+        </a>
+        <p>A terminal agent for de novo protein design — plan, run, rank, and ship designs to a wet lab from a single Go binary.</p>
+      </div>
+      <div class="foot-cols">
+        <div class="foot-col">
+          <h4>Product</h4>
+          <a href="#loop">Pipeline</a>
+          <a href="#why">Why fova</a>
+          <a href="#tools">Tools</a>
+          <a href="#install">Install</a>
+        </div>
+        <div class="foot-col">
+          <h4>Project</h4>
+          <a href="https://github.com/alvarogonjim/fova" target="_blank" rel="noopener">GitHub ↗</a>
+          <a href="https://github.com/alvarogonjim/fova/releases" target="_blank" rel="noopener">Releases ↗</a>
+          <a href="https://github.com/alvarogonjim/fova/blob/main/docs/SPECS.md" target="_blank" rel="noopener">Spec ↗</a>
+          <a href="https://github.com/alvarogonjim/fova/blob/main/LICENSE" target="_blank" rel="noopener">License ↗</a>
+        </div>
+      </div>
+    </div>
+    <div class="foot-base">
+      <span>fova <span class="moss">·</span> v0.5 “fova” <span class="moss">·</span> MIT licensed <span class="moss">·</span> free software</span>
+      <span>built for the terminal <span class="moss">—</span> <span id="year">2026</span></span>
+    </div>
+  </div>
+</footer>
+
+<script src="https://unpkg.com/lenis@1.1.13/dist/lenis.min.js" defer></script>
+<script>
+(() => {
+  const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  /* footer year */
+  const y = document.getElementById('year');
+  if (y) y.textContent = new Date().getFullYear();
+
+  /* nav: solidify on scroll */
+  const nav = document.querySelector('.nav');
+  const onScroll = () => nav.classList.toggle('scrolled', scrollY > 36);
+  onScroll();
+  addEventListener('scroll', onScroll, { passive: true });
+
+  /* scroll-reveal */
+  const reveals = document.querySelectorAll('[data-reveal]');
+  if (!reduce && 'IntersectionObserver' in window) {
+    const io = new IntersectionObserver((entries) => {
+      entries.forEach((e) => {
+        if (e.isIntersecting) { e.target.classList.add('is-in'); io.unobserve(e.target); }
+      });
+    }, { threshold: 0.12, rootMargin: '0px 0px -7% 0px' });
+    reveals.forEach((el) => io.observe(el));
+  } else {
+    reveals.forEach((el) => el.classList.add('is-in'));
+  }
+
+  /* smooth scroll via Lenis, with graceful fallback */
+  const startLenis = () => {
+    if (reduce || !window.Lenis) return null;
+    const l = new Lenis({ duration: 1.1, wheelMultiplier: 1, smoothWheel: true });
+    const raf = (t) => { l.raf(t); requestAnimationFrame(raf); };
+    requestAnimationFrame(raf);
+    return l;
+  };
+  let lenis = startLenis();
+  if (!lenis && !reduce) addEventListener('load', () => { lenis = startLenis(); }, { once: true });
+
+  document.querySelectorAll('a[href^="#"]').forEach((a) => {
+    a.addEventListener('click', (ev) => {
+      const id = a.getAttribute('href');
+      if (id.length < 2) return;
+      const target = document.querySelector(id);
+      if (!target) return;
+      ev.preventDefault();
+      if (lenis) lenis.scrollTo(target, { offset: -70 });
+      else target.scrollIntoView({ behavior: reduce ? 'auto' : 'smooth', block: 'start' });
+    });
+  });
+
+  /* copy-to-clipboard */
+  document.querySelectorAll('.copy').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      try { await navigator.clipboard.writeText(btn.dataset.copy); }
+      catch { return; }
+      btn.classList.add('copied');
+      setTimeout(() => btn.classList.remove('copied'), 1700);
+    });
+  });
+
+  /* subtle magnetic pull on primary CTAs */
+  if (!reduce && matchMedia('(pointer:fine)').matches) {
+    document.querySelectorAll('[data-magnetic]').forEach((el) => {
+      el.addEventListener('pointermove', (e) => {
+        const r = el.getBoundingClientRect();
+        const x = (e.clientX - r.left - r.width / 2) * 0.26;
+        const yy = (e.clientY - r.top - r.height / 2) * 0.4;
+        el.style.transform = `translate(${x}px, ${yy}px)`;
+      });
+      el.addEventListener('pointerleave', () => { el.style.transform = ''; });
+    });
+  }
+
+  /* ---- animated terminal pipeline ---------------------------------
+     DOM is built node-by-node (createElement / textContent) — no
+     innerHTML, no HTML strings. All content below is static. */
+  const body = document.getElementById('termBody');
+  if (!body || reduce) return;
+
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const el = (tag, cls, text) => {
+    const n = document.createElement(tag);
+    if (cls) n.className = cls;
+    if (text != null) n.textContent = text;
+    return n;
+  };
+
+  const cmd = 'fova design --target PD-L1 --n 50';
+  /* each detail is a list of segments: a plain string, or {n} for a
+     saffron-highlighted figure rendered into an <i> element. */
+  const steps = [
+    ['planning',        ['retrieved ', { n: '12' }, ' papers · BindCraft + ProteinMPNN']],
+    ['scaffolding',     ['RFdiffusion · ', { n: '200' }, ' backbones · ', { n: '4m 12s' }]],
+    ['sequence design', ['ProteinMPNN · ', { n: '200' }, ' sequences · ', { n: '2m 41s' }]],
+    ['predict',         ['AlphaFold3 · ', { n: '1m 08s' }]],
+    ['rank · ipSAE',    ['shortlist: ', { n: '47' }, ' designs · top score ', { n: '0.84' }]],
+  ];
+  const frames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+
+  const fillDetail = (det, segments) => {
+    det.textContent = '';
+    for (const seg of segments) {
+      if (typeof seg === 'string') det.append(document.createTextNode(seg));
+      else det.append(el('i', null, seg.n));
+    }
+  };
+
+  async function run() {
+    for (;;) {
+      body.textContent = '';
+
+      /* type the command */
+      const cmdLine = el('div', 't-line');
+      const cmdEl = el('span', 't-cmd');
+      const curEl = el('span', 't-cursor');
+      cmdLine.append(el('span', 't-prompt', '❯'), cmdEl, curEl);
+      body.appendChild(cmdLine);
+      await sleep(620);
+      for (const ch of cmd) {
+        cmdEl.textContent += ch;
+        await sleep(32 + Math.random() * 46);
+      }
+      await sleep(520);
+      curEl.remove();
+
+      /* run each pipeline step */
+      for (const [label, detail] of steps) {
+        const row = el('div', 't-line');
+        const mark = el('span', 't-mark run', '⠋');
+        const det = el('span', 't-detail');
+        row.append(mark, el('span', 't-label', label), det);
+        body.appendChild(row);
+
+        const end = performance.now() + 720 + Math.random() * 760;
+        let f = 0;
+        while (performance.now() < end) {
+          mark.textContent = frames[f++ % frames.length];
+          await sleep(72);
+        }
+        mark.textContent = '✓';
+        mark.classList.replace('run', 'ok');
+        fillDetail(det, detail);
+        await sleep(170);
+      }
+
+      /* wet-lab confirmation prompt */
+      const confirm = el('div', 't-line t-confirm');
+      confirm.append(
+        el('span', 't-arrow', '▸'),
+        el('span', null, 'confirm wet-lab submission? [y/N]'),
+        el('span', 't-cursor'),
+      );
+      body.appendChild(confirm);
+
+      await sleep(4400);
+    }
+  }
+  run();
+})();
+</script>
+</body>
+</html>

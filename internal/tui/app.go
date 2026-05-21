@@ -1137,6 +1137,7 @@ func (m *Model) View() string {
 	if m.width == 0 {
 		return "starting fova…"
 	}
+	m.status.chatScrolledUp = !m.chat.atBottom()
 	var body string
 	if m.width >= 100 {
 		right := lipgloss.JoinVertical(lipgloss.Left,

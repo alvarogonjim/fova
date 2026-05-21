@@ -1,3 +1,7 @@
+---
+name: plan-from-target
+description: Turn a target into a structured DesignPlan before running tools
+---
 # Skill: Planning from a target
 
 ## Procedure

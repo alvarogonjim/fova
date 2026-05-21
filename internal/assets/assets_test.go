@@ -97,3 +97,11 @@ func TestPathResolvesAssetKeys(t *testing.T) {
 		}
 	}
 }
+
+func TestEmbeddedSkillsAllHaveDescriptions(t *testing.T) {
+	for _, s := range embeddedSkills() {
+		if s.Description == "" {
+			t.Errorf("built-in skill %q has no frontmatter description", s.Name)
+		}
+	}
+}

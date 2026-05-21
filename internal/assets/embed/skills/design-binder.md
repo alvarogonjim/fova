@@ -1,3 +1,7 @@
+---
+name: design-binder
+description: De novo protein binder design against non-antibody targets
+---
 # Skill: Designing protein binders
 
 ## When to use

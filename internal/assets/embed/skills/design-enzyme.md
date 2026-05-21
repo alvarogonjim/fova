@@ -1,3 +1,7 @@
+---
+name: design-enzyme
+description: De novo enzyme design for a target reaction
+---
 # Skill: Designing enzymes
 
 ## When to use

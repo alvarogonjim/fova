@@ -1,3 +1,7 @@
+---
+name: submit-to-adaptyv
+description: Submit a design shortlist to the Adaptyv wet lab
+---
 # Skill: Submitting designs to Adaptyv
 
 ## When to use

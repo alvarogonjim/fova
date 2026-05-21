@@ -535,21 +535,43 @@ func TestAppRefreshShowsJobLogBlock(t *testing.T) {
 	}
 }
 
-func TestAppTabFocusesRunningJob(t *testing.T) {
+func TestTabCyclesPanelFocus(t *testing.T) {
 	m := newTestApp()
 	m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
-	started := time.Now().UTC()
-	m.jobs.setJobs([]domain.Job{{
-		ID: "j_run", Tool: "design.bindcraft", Status: domain.JobRunning,
-		Created: time.Now().UTC(), Started: &started, LogFile: "",
-	}})
-	m.Update(tea.KeyMsg{Type: tea.KeyTab}) // chat → the running job
-	if m.overlay != overlayDetail || m.detailID != "j_run" {
-		t.Fatalf("Tab should focus the running job's log overlay; overlay=%v detailID=%q", m.overlay, m.detailID)
+	want := []panelFocus{focusJobs, focusDesigns, focusLab, focusChat}
+	for i, w := range want {
+		m.Update(tea.KeyMsg{Type: tea.KeyTab})
+		if m.focus != w {
+			t.Errorf("Tab #%d: focus = %v, want %v", i+1, m.focus, w)
+		}
 	}
-	m.Update(tea.KeyMsg{Type: tea.KeyEsc}) // overlay → back to chat
-	if m.overlay != overlayNone {
-		t.Fatalf("Esc should close the job-log overlay, got %v", m.overlay)
+}
+
+func TestFocusedPanelArrowsMoveSelection(t *testing.T) {
+	m := newTestApp()
+	m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	m.jobs.setJobs([]domain.Job{{ID: "j1"}, {ID: "j2"}, {ID: "j3"}})
+	m.Update(tea.KeyMsg{Type: tea.KeyTab}) // focus jobs
+	m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	if m.jobs.selected != 1 {
+		t.Errorf("after Down, jobs.selected = %d, want 1", m.jobs.selected)
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyUp})
+	if m.jobs.selected != 0 {
+		t.Errorf("after Up, jobs.selected = %d, want 0", m.jobs.selected)
+	}
+}
+
+func TestFocusedPanelDimsInput(t *testing.T) {
+	m := newTestApp()
+	m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	m.Update(tea.KeyMsg{Type: tea.KeyTab}) // focus jobs
+	if m.cmdbar.active {
+		t.Error("the input should be inactive while a panel is focused")
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyEsc}) // back to chat
+	if !m.cmdbar.active {
+		t.Error("Esc should return focus to the chat and reactivate the input")
 	}
 }
 

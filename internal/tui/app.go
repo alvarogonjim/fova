@@ -212,6 +212,7 @@ func New(d Deps) *Model {
 			_ = lab.StartReceiver(context.Background(), d.WebhookPort, d.Store, m.bus)
 		}()
 	}
+	m.syncPanelFocus()
 	return m
 }
 
@@ -491,6 +492,42 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 		}
 		return m, nil
+	}
+
+	// When a side panel holds focus, it owns the keyboard: arrows move the
+	// row selection, Tab/Esc move focus, Enter opens the detail view (wired
+	// in the detail-overlay task). The message input is inactive.
+	if m.focus != focusChat {
+		switch msg.Type {
+		case tea.KeyUp:
+			m.panelSelectUp()
+			return m, nil
+		case tea.KeyDown:
+			m.panelSelectDown()
+			return m, nil
+		case tea.KeyEnter:
+			return m, nil // detail view wired in Task 10
+		case tea.KeyTab:
+			m.cycleFocus()
+			return m, nil
+		case tea.KeyEsc:
+			m.focus = focusChat
+			m.syncPanelFocus()
+			return m, nil
+		case tea.KeyCtrlD:
+			return m, tea.Quit
+		case tea.KeyCtrlC:
+			if m.running && m.turnCancel != nil {
+				m.turnCancel()
+				m.chat.appendError("cancelled")
+			}
+			return m, nil
+		}
+		if msg.Type == tea.KeyRunes && len(msg.Runes) == 1 && msg.Runes[0] == '?' {
+			m.overlay = overlayKeys
+			return m, nil
+		}
+		return m, nil // swallow every other key — the input is inactive
 	}
 
 	// The slash-command autocomplete popup, when open, captures navigation keys.
@@ -1050,17 +1087,6 @@ func (m *Model) applyModel(id string) {
 	m.chat.appendAgentDeltaBlock("Switched to " + m.status.model + " (" + m.status.provider + ").")
 }
 
-// runningJobIDs returns the IDs of currently-running jobs, in panel order.
-func (m *Model) runningJobIDs() []string {
-	var ids []string
-	for _, j := range m.jobs.jobs {
-		if j.Status == domain.JobRunning {
-			ids = append(ids, string(j.ID))
-		}
-	}
-	return ids
-}
-
 // refreshJobLogs upserts an in-chat log block for every job submitted during
 // this session, and refreshes the full-screen view when one is open.
 func (m *Model) refreshJobLogs() {
@@ -1092,43 +1118,51 @@ func (m *Model) openDetail(id string) {
 	m.detail.setContent(glyph(job.Status)+" "+job.Tool+" · "+id, body)
 }
 
-// cycleFocus advances the unified Tab focus ring: chat → each running job's
-// full-screen log → the jobs / designs / lab panels → back to chat.
+// cycleFocus advances the Tab focus ring: chat → jobs → designs → lab → chat.
 func (m *Model) cycleFocus() {
-	jobs := m.runningJobIDs()
-	total := 1 + len(jobs) + 3 // chat + running jobs + 3 panels
-	cur := 0
-	switch {
-	case m.overlay == overlayDetail:
-		for i, id := range jobs {
-			if id == m.detailID {
-				cur = 1 + i
-			}
-		}
-	case m.focus == focusJobs:
-		cur = 1 + len(jobs)
-	case m.focus == focusDesigns:
-		cur = 2 + len(jobs)
-	case m.focus == focusLab:
-		cur = 3 + len(jobs)
-	}
-	switch next := (cur + 1) % total; {
-	case next == 0:
-		m.overlay, m.focus, m.detailID = overlayNone, focusChat, ""
-	case next <= len(jobs):
-		m.detailID = jobs[next-1]
-		m.overlay = overlayDetail
-		m.openDetail(m.detailID)
+	switch m.focus {
+	case focusChat:
+		m.focus = focusJobs
+	case focusJobs:
+		m.focus = focusDesigns
+	case focusDesigns:
+		m.focus = focusLab
 	default:
-		m.overlay, m.detailID = overlayNone, ""
-		switch next - 1 - len(jobs) {
-		case 0:
-			m.focus = focusJobs
-		case 1:
-			m.focus = focusDesigns
-		default:
-			m.focus = focusLab
-		}
+		m.focus = focusChat
+	}
+	m.syncPanelFocus()
+}
+
+// syncPanelFocus pushes m.focus into the panels and the input bar so their
+// rendering matches: the focused panel highlights; the input dims whenever a
+// panel (not the chat) holds focus.
+func (m *Model) syncPanelFocus() {
+	m.jobs.setFocused(m.focus == focusJobs)
+	m.designs.setFocused(m.focus == focusDesigns)
+	m.lab.setFocused(m.focus == focusLab)
+	m.cmdbar.setActive(m.focus == focusChat)
+}
+
+// panelSelectUp / panelSelectDown move the selection in the focused panel.
+func (m *Model) panelSelectUp() {
+	switch m.focus {
+	case focusJobs:
+		m.jobs.selectUp()
+	case focusDesigns:
+		m.designs.selectUp()
+	case focusLab:
+		m.lab.selectUp()
+	}
+}
+
+func (m *Model) panelSelectDown() {
+	switch m.focus {
+	case focusJobs:
+		m.jobs.selectDown()
+	case focusDesigns:
+		m.designs.selectDown()
+	case focusLab:
+		m.lab.selectDown()
 	}
 }
 

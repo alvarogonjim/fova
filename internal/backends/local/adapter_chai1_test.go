@@ -436,7 +436,7 @@ func TestChai1AdapterInvokeEmptyChainErrors(t *testing.T) {
 	}
 }
 
-func TestChai1AdapterInvokeWeightsMissing(t *testing.T) {
+func TestChai1AdapterInvokeCreatesWeightsCache(t *testing.T) {
 	home := t.TempDir()
 	reg, err := LoadRegistry(home)
 	if err != nil {
@@ -446,10 +446,16 @@ func TestChai1AdapterInvokeWeightsMissing(t *testing.T) {
 	env := AdapterEnv{Recipe: rec, WorkDir: t.TempDir(), Registry: reg}
 	_ = stubContainerRuntime(t, nil)
 
+	// Chai-1 downloads its weights at container runtime, so a missing
+	// weights cache must be created on demand, not rejected.
 	_, err = chai1Adapter{}.Invoke(context.Background(), env,
 		[]byte(`{"sequences":{"A":"MKQ"}}`))
-	if err == nil || !strings.Contains(err.Error(), "weights cache") {
-		t.Fatalf("want a weights-cache-missing error, got: %v", err)
+	if err != nil && strings.Contains(err.Error(), "weights cache") {
+		t.Fatalf("a missing weights cache must not error, got: %v", err)
+	}
+	cache := ModelsRoot(reg.Home(), "chai1")
+	if info, statErr := os.Stat(cache); statErr != nil || !info.IsDir() {
+		t.Fatalf("Invoke must create the weights cache %s; stat err = %v", cache, statErr)
 	}
 }
 

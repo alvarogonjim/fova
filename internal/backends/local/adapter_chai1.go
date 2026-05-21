@@ -128,16 +128,15 @@ func (chai1Adapter) Invoke(ctx context.Context, env AdapterEnv, request []byte) 
 	}
 
 	mounts := []Mount{{HostPath: env.WorkDir, ContainerPath: "/work"}}
+	// CHAI_DOWNLOADS_DIR is baked into the image at /models; Chai-1 downloads
+	// its weights into the bind-mounted cache at runtime, so an empty
+	// directory is the correct pre-state. Create it if absent rather than
+	// failing.
 	modelsCache := ModelsRoot(env.Registry.Home(), "chai1")
-	if info, err := os.Stat(modelsCache); err == nil && info.IsDir() {
-		// CHAI_DOWNLOADS_DIR is baked into the image at /models, so the
-		// container reads the weights cache directly from the bind mount.
-		mounts = append(mounts, Mount{HostPath: modelsCache, ContainerPath: "/models"})
-	} else {
-		return nil, fmt.Errorf(
-			"fold.chai1: weights cache %s missing — run /install chai1",
-			modelsCache)
+	if err := os.MkdirAll(modelsCache, 0o755); err != nil {
+		return nil, fmt.Errorf("fold.chai1: create weights cache %s: %w", modelsCache, err)
 	}
+	mounts = append(mounts, Mount{HostPath: modelsCache, ContainerPath: "/models"})
 
 	// ENTRYPOINT is ["chai-lab"]; the subcommand `fold` plus the FASTA and
 	// output dir are passed as positional args.

@@ -498,8 +498,8 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 
 	// When a side panel holds focus, it owns the keyboard: arrows move the
-	// row selection, Tab/Esc move focus, Enter opens the detail view (wired
-	// in the detail-overlay task). The message input is inactive.
+	// row selection, Tab/Esc move focus, Enter opens the detail view. The
+	// message input is inactive.
 	if m.focus != focusChat {
 		switch msg.Type {
 		case tea.KeyUp:

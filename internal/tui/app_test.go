@@ -847,3 +847,84 @@ func TestClearKeepsPanelsVisible(t *testing.T) {
 		t.Error("/clear should return focus to the chat")
 	}
 }
+
+func TestDetailOverlayRefreshesLive(t *testing.T) {
+	m := newTestApp()
+	m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	m.jobs.setJobs([]domain.Job{
+		{ID: "j1", Tool: "design.bindcraft", Status: domain.JobRunning, Created: time.Now()},
+	})
+	m.Update(tea.KeyMsg{Type: tea.KeyTab})   // focus jobs
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter}) // open detail
+	// The job finishes; the panels reload with its new status.
+	m.jobs.setJobs([]domain.Job{
+		{ID: "j1", Tool: "design.bindcraft", Status: domain.JobSucceeded, Created: time.Now()},
+	})
+	m.refreshDetail()
+	if !strings.Contains(m.View(), "succeeded") {
+		t.Error("an open job detail should refresh to the job's new status")
+	}
+}
+
+func TestDetailOverlayClosesWhenItemGone(t *testing.T) {
+	m := newTestApp()
+	m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	m.jobs.setJobs([]domain.Job{{ID: "j1", Tool: "t", Status: domain.JobRunning, Created: time.Now()}})
+	m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m.jobs.setJobs(nil) // the job disappears from the panel
+	m.refreshDetail()
+	if m.overlay != overlayNone {
+		t.Error("the detail overlay should close when its item disappears")
+	}
+}
+
+func TestEnterOpensDesignDetail(t *testing.T) {
+	m := newTestApp()
+	m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	m.designs.setDesigns([]domain.Design{
+		{ID: "d-xyz", Origin: domain.OriginBindCraft, Created: time.Now()},
+	})
+	m.Update(tea.KeyMsg{Type: tea.KeyTab}) // focus jobs
+	m.Update(tea.KeyMsg{Type: tea.KeyTab}) // focus designs
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if m.overlay != overlayDetail {
+		t.Fatalf("Enter on the designs panel should open the detail overlay, got %v", m.overlay)
+	}
+	if !strings.Contains(m.View(), "d-xyz") {
+		t.Error("the detail overlay should show the selected design")
+	}
+}
+
+func TestEnterOpensLabDetail(t *testing.T) {
+	m := newTestApp()
+	m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	m.lab.setExperiments([]domain.Experiment{
+		{ID: "e1", TargetName: "PD-L1", AssayType: "binding", Status: "in_progress"},
+	})
+	m.Update(tea.KeyMsg{Type: tea.KeyTab}) // focus jobs
+	m.Update(tea.KeyMsg{Type: tea.KeyTab}) // focus designs
+	m.Update(tea.KeyMsg{Type: tea.KeyTab}) // focus lab
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if m.overlay != overlayDetail {
+		t.Fatalf("Enter on the lab panel should open the detail overlay, got %v", m.overlay)
+	}
+	if !strings.Contains(m.View(), "PD-L1") {
+		t.Error("the detail overlay should show the selected experiment")
+	}
+}
+
+func TestDetailOverlayTabAdvancesFocus(t *testing.T) {
+	m := newTestApp()
+	m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	m.jobs.setJobs([]domain.Job{{ID: "j1", Tool: "t", Status: domain.JobRunning, Created: time.Now()}})
+	m.Update(tea.KeyMsg{Type: tea.KeyTab})   // focus jobs
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter}) // open detail
+	m.Update(tea.KeyMsg{Type: tea.KeyTab})   // close detail + advance focus
+	if m.overlay != overlayNone {
+		t.Error("Tab in the detail overlay should close it")
+	}
+	if m.focus != focusDesigns {
+		t.Errorf("Tab in the detail overlay should advance focus to designs, got %v", m.focus)
+	}
+}

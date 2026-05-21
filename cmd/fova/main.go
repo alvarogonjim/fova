@@ -214,7 +214,7 @@ func buildRegistry(workspace string, st *store.Store, mgr *jobmgr.Manager, model
 	registry.Register(designtools.NewRFdiffusion2Tool(workspace, mgr, backend, st))
 	registry.Register(designtools.NewLigandMPNNTool(workspace, mgr, backend, st))
 	registry.Register(fold.NewBoltz2(workspace, mgr, backend))
-	registry.Register(fold.NewChai1(mgr, backend))
+	registry.Register(fold.NewChai1(workspace, mgr, backend))
 	registry.Register(scoretools.NewFilterTool(st))
 	registry.Register(scoretools.NewMetricsTool())
 	registry.Register(scoretools.NewIPSAETool())

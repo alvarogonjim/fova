@@ -64,7 +64,7 @@ func TestJobLogTailLines(t *testing.T) {
 }
 
 func TestJobLogView(t *testing.T) {
-	v := newJobLogView(NewTheme())
+	v := newDetailView(NewTheme())
 	v.setSize(80, 20)
 	v.setContent("install bindcraft", "line1\nline2")
 
@@ -78,7 +78,7 @@ func TestJobLogView(t *testing.T) {
 }
 
 func TestJobLogViewUpdateScroll(t *testing.T) {
-	v := newJobLogView(NewTheme())
+	v := newDetailView(NewTheme())
 	v.setSize(40, 5)
 	var sb strings.Builder
 	for i := 0; i < 50; i++ {
@@ -86,7 +86,7 @@ func TestJobLogViewUpdateScroll(t *testing.T) {
 	}
 	v.setContent("hdr", sb.String())
 
-	// Routing a scroll key through update returns a jobLogView without panicking.
+	// Routing a scroll key through update returns a detailView without panicking.
 	v = v.update(tea.KeyMsg{Type: tea.KeyPgDown})
 	if got := v.View(); !strings.Contains(got, "hdr") {
 		t.Errorf("View() after scroll missing header; got:\n%s", got)

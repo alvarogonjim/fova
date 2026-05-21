@@ -43,23 +43,23 @@ func tailLines(path string, n int) []string {
 	return lines
 }
 
-// jobLogView is the full-screen, scrollable view of a job's complete log
+// detailView is the full-screen, scrollable view of a job's complete log
 // (design doc §4.5). It wraps a bubbles/viewport for the log body and renders
 // a styled header line above it.
-type jobLogView struct {
+type detailView struct {
 	theme    Theme
 	viewport viewport.Model
 	header   string
 }
 
-// newJobLogView returns a jobLogView with an empty viewport.
-func newJobLogView(th Theme) jobLogView {
-	return jobLogView{theme: th, viewport: viewport.New(0, 0)}
+// newDetailView returns a detailView with an empty viewport.
+func newDetailView(th Theme) detailView {
+	return detailView{theme: th, viewport: viewport.New(0, 0)}
 }
 
 // setSize resizes the inner viewport. The header occupies one line, so the
 // viewport gets the remaining height.
-func (v *jobLogView) setSize(w, h int) {
+func (v *detailView) setSize(w, h int) {
 	if w < 0 {
 		w = 0
 	}
@@ -73,20 +73,20 @@ func (v *jobLogView) setSize(w, h int) {
 
 // setContent stores the header line and sets the viewport content to the full
 // log body.
-func (v *jobLogView) setContent(header, body string) {
+func (v *detailView) setContent(header, body string) {
 	v.header = header
 	v.viewport.SetContent(body)
 }
 
 // update routes scroll keys (↑/↓/PgUp/PgDn, and k/j) to the viewport and
-// returns the updated jobLogView. The viewport's default key map already binds
+// returns the updated detailView. The viewport's default key map already binds
 // all of these.
-func (v jobLogView) update(msg tea.KeyMsg) jobLogView {
+func (v detailView) update(msg tea.KeyMsg) detailView {
 	v.viewport, _ = v.viewport.Update(msg)
 	return v
 }
 
 // View renders the styled header line above the viewport's view.
-func (v jobLogView) View() string {
+func (v detailView) View() string {
 	return v.theme.Header.Render(v.header) + "\n" + v.viewport.View()
 }

@@ -544,8 +544,8 @@ func TestAppTabFocusesRunningJob(t *testing.T) {
 		Created: time.Now().UTC(), Started: &started, LogFile: "",
 	}})
 	m.Update(tea.KeyMsg{Type: tea.KeyTab}) // chat → the running job
-	if m.overlay != overlayJobLog || m.jobLogID != "j_run" {
-		t.Fatalf("Tab should focus the running job's log overlay; overlay=%v jobLogID=%q", m.overlay, m.jobLogID)
+	if m.overlay != overlayDetail || m.detailID != "j_run" {
+		t.Fatalf("Tab should focus the running job's log overlay; overlay=%v detailID=%q", m.overlay, m.detailID)
 	}
 	m.Update(tea.KeyMsg{Type: tea.KeyEsc}) // overlay → back to chat
 	if m.overlay != overlayNone {

@@ -38,7 +38,7 @@ const (
 	overlayConfirm
 	overlaySubmit
 	overlayPicker
-	overlayJobLog
+	overlayDetail
 	overlayKeys
 )
 
@@ -77,8 +77,8 @@ type Model struct {
 	lab     labModel
 	focus   panelFocus
 
-	jobLog       jobLogView   // full-screen log view for the Tab-focused job
-	jobLogID     string       // ID of the job shown in jobLog ("" = none)
+	detail       detailView   // full-screen log view for the Tab-focused job
+	detailID     string       // ID of the job shown in detail ("" = none)
 	sessionStart time.Time    // jobs created before this aren't blocked into chat
 	sessionCost  float64      // running LLM cost for this TUI session, in USD
 	budgetLimit  float64      // [budget].session_soft_limit_usd; 0 = no limit
@@ -182,7 +182,7 @@ func New(d Deps) *Model {
 	m.jobs = newJobsModel(th)
 	m.designs = newDesignsModel(th)
 	m.lab = newLabModel(th)
-	m.jobLog = newJobLogView(th)
+	m.detail = newDetailView(th)
 	m.keys = newKeysOverlay()
 	m.slashMenu = newSlashMenu()
 	m.sessionStart = time.Now().UTC()
@@ -464,12 +464,12 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 		}
 		return m, nil
-	case overlayJobLog:
+	case overlayDetail:
 		switch msg.Type {
 		case tea.KeyTab:
 			m.cycleFocus()
 		case tea.KeyEsc:
-			m.overlay, m.focus, m.jobLogID = overlayNone, focusChat, ""
+			m.overlay, m.focus, m.detailID = overlayNone, focusChat, ""
 		case tea.KeyCtrlD:
 			return m, tea.Quit
 		case tea.KeyCtrlC:
@@ -478,7 +478,7 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.chat.appendError("cancelled")
 			}
 		default:
-			m.jobLog = m.jobLog.update(msg)
+			m.detail = m.detail.update(msg)
 		}
 		return m, nil
 	case overlayKeys:
@@ -1070,13 +1070,13 @@ func (m *Model) refreshJobLogs() {
 		}
 		m.chat.upsertJobLog(string(j.ID), j.Tool, j.Status, j.Started, tailLines(j.LogFile, 6))
 	}
-	if m.overlay == overlayJobLog && m.jobLogID != "" {
-		m.openJobLog(m.jobLogID)
+	if m.overlay == overlayDetail && m.detailID != "" {
+		m.openDetail(m.detailID)
 	}
 }
 
-// openJobLog loads job id's complete log into the full-screen view.
-func (m *Model) openJobLog(id string) {
+// openDetail loads job id's complete log into the full-screen view.
+func (m *Model) openDetail(id string) {
 	var job domain.Job
 	for _, j := range m.jobs.jobs {
 		if string(j.ID) == id {
@@ -1088,8 +1088,8 @@ func (m *Model) openJobLog(id string) {
 	if strings.TrimSpace(body) == "" {
 		body = "(no output yet)"
 	}
-	m.jobLog.setSize(m.width, m.height)
-	m.jobLog.setContent(glyph(job.Status)+" "+job.Tool+" · "+id, body)
+	m.detail.setSize(m.width, m.height)
+	m.detail.setContent(glyph(job.Status)+" "+job.Tool+" · "+id, body)
 }
 
 // cycleFocus advances the unified Tab focus ring: chat → each running job's
@@ -1099,9 +1099,9 @@ func (m *Model) cycleFocus() {
 	total := 1 + len(jobs) + 3 // chat + running jobs + 3 panels
 	cur := 0
 	switch {
-	case m.overlay == overlayJobLog:
+	case m.overlay == overlayDetail:
 		for i, id := range jobs {
-			if id == m.jobLogID {
+			if id == m.detailID {
 				cur = 1 + i
 			}
 		}
@@ -1114,13 +1114,13 @@ func (m *Model) cycleFocus() {
 	}
 	switch next := (cur + 1) % total; {
 	case next == 0:
-		m.overlay, m.focus, m.jobLogID = overlayNone, focusChat, ""
+		m.overlay, m.focus, m.detailID = overlayNone, focusChat, ""
 	case next <= len(jobs):
-		m.jobLogID = jobs[next-1]
-		m.overlay = overlayJobLog
-		m.openJobLog(m.jobLogID)
+		m.detailID = jobs[next-1]
+		m.overlay = overlayDetail
+		m.openDetail(m.detailID)
 	default:
-		m.overlay, m.jobLogID = overlayNone, ""
+		m.overlay, m.detailID = overlayNone, ""
 		switch next - 1 - len(jobs) {
 		case 0:
 			m.focus = focusJobs
@@ -1173,8 +1173,8 @@ func (m *Model) View() string {
 		return base + "\n" + m.submit.view(m.theme, m.width)
 	case overlayPicker:
 		return base + "\n" + m.picker.view(m.theme, m.width)
-	case overlayJobLog:
-		return m.jobLog.View()
+	case overlayDetail:
+		return m.detail.View()
 	case overlayKeys:
 		return base + "\n" + m.keys.view(m.theme, m.width)
 	}
@@ -1192,7 +1192,7 @@ func (m *Model) layout() {
 	m.jobs.setWidth(panelW)
 	m.designs.setWidth(panelW)
 	m.lab.setWidth(panelW)
-	m.jobLog.setSize(m.width, m.height)
+	m.detail.setSize(m.width, m.height)
 	chatW := m.width
 	if panelW > 0 {
 		chatW = m.width - panelW - 2 // 2 spaces of gap

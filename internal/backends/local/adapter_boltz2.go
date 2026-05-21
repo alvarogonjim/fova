@@ -128,13 +128,65 @@ func boltz2Args(req boltz2Request) []string {
 	return args
 }
 
-// parseBoltz2Output collects every PDB under outDir (Boltz writes per-input
+// boltz2Confidence is the subset of Boltz-2's confidence_in_model_<N>.json
+// that fova ingests into a design's Scores. All pLDDT/pTM-family values are
+// in [0, 1] (higher is better); pde/ipde are in Ångström (lower is better).
+type boltz2Confidence struct {
+	ConfidenceScore float64            `json:"confidence_score"`
+	PTM             float64            `json:"ptm"`
+	IPTM            float64            `json:"iptm"`
+	LigandIPTM      float64            `json:"ligand_iptm"`
+	ProteinIPTM     float64            `json:"protein_iptm"`
+	ComplexPLDDT    float64            `json:"complex_plddt"`
+	ComplexIPLDDT   float64            `json:"complex_iplddt"`
+	ComplexPDE      float64            `json:"complex_pde"`
+	ComplexIPDE     float64            `json:"complex_ipde"`
+	ChainsPTM       map[string]float64 `json:"chains_ptm"`
+}
+
+// boltz2Scores reads the confidence JSON sibling of a structure file and maps
+// it to the score keys THE CONTRACT pins. A missing or unparseable file yields
+// an empty (non-nil) map and no error — a successful prediction without
+// confidence still returns the structure.
+func boltz2Scores(structurePath string) map[string]float64 {
+	scores := map[string]float64{}
+	dir := filepath.Dir(structurePath)
+	ext := filepath.Ext(structurePath)
+	stem := strings.TrimSuffix(filepath.Base(structurePath), ext)
+	// Structure file is in_model_<N>.<ext>; the sibling confidence file is
+	// confidence_in_model_<N>.json.
+	confPath := filepath.Join(dir, "confidence_"+stem+".json")
+	body, err := os.ReadFile(confPath)
+	if err != nil {
+		return scores
+	}
+	var c boltz2Confidence
+	if err := json.Unmarshal(body, &c); err != nil {
+		return scores
+	}
+	scores["plddt"] = c.ComplexPLDDT
+	scores["ptm"] = c.PTM
+	scores["iptm"] = c.IPTM
+	scores["confidence_score"] = c.ConfidenceScore
+	scores["ligand_iptm"] = c.LigandIPTM
+	scores["protein_iptm"] = c.ProteinIPTM
+	scores["complex_iplddt"] = c.ComplexIPLDDT
+	scores["complex_pde"] = c.ComplexPDE
+	scores["complex_ipde"] = c.ComplexIPDE
+	for k, v := range c.ChainsPTM {
+		scores["chain_"+k+"_ptm"] = v
+	}
+	return scores
+}
+
+// parseBoltz2Output collects every PDB/CIF under outDir (Boltz writes per-input
 // subdirectories like predictions/<stem>/<stem>_model_0.pdb), returning one
-// designOut per file. The structure_file path is host-side so the caller can
-// open it directly. Sequence and scores are left empty — Boltz-2 doesn't emit
-// the per-model confidence as part of the PDB header.
+// designOut per file sorted by path. Each model's Scores are read from its
+// sibling confidence_<stem>.json; a model without a confidence file simply
+// gets an empty Scores map. The structure_file path is host-side so the
+// caller can open it directly.
 func parseBoltz2Output(outDir string) ([]designOut, error) {
-	var pdbs []string
+	var structures []string
 	err := filepath.Walk(outDir, func(p string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
@@ -142,25 +194,26 @@ func parseBoltz2Output(outDir string) ([]designOut, error) {
 		if info.IsDir() {
 			return nil
 		}
-		if strings.HasSuffix(strings.ToLower(p), ".pdb") {
-			pdbs = append(pdbs, p)
+		low := strings.ToLower(p)
+		if strings.HasSuffix(low, ".pdb") || strings.HasSuffix(low, ".cif") {
+			structures = append(structures, p)
 		}
 		return nil
 	})
 	if err != nil {
 		return nil, err
 	}
-	sort.Strings(pdbs)
+	sort.Strings(structures)
 	var designs []designOut
-	for _, p := range pdbs {
+	for _, p := range structures {
 		designs = append(designs, designOut{
 			Sequence:      map[string]string{},
 			StructureFile: p,
-			Scores:        map[string]float64{},
+			Scores:        boltz2Scores(p),
 		})
 	}
 	if len(designs) == 0 {
-		return nil, fmt.Errorf("fold.boltz2: no PDB files found under %s", outDir)
+		return nil, fmt.Errorf("fold.boltz2: no PDB/CIF files found under %s", outDir)
 	}
 	return designs, nil
 }

@@ -118,15 +118,20 @@ func TestBoltz2Args(t *testing.T) {
 	}
 }
 
-func TestParseBoltz2Output(t *testing.T) {
+func TestParseBoltz2OutputWithScores(t *testing.T) {
 	outDir := t.TempDir()
-	// Boltz writes per-model PDBs under predictions/<stem>/...
 	sub := filepath.Join(outDir, "predictions", "in")
 	if err := os.MkdirAll(sub, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(sub, "in_model_0.pdb"),
 		[]byte("ATOM\nEND\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	conf := `{"confidence_score":0.84,"ptm":0.81,"iptm":0.79,` +
+		`"complex_plddt":0.88,"chains_ptm":{"0":0.9,"1":0.7}}`
+	if err := os.WriteFile(filepath.Join(sub, "confidence_in_model_0.json"),
+		[]byte(conf), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	designs, err := parseBoltz2Output(outDir)
@@ -136,14 +141,37 @@ func TestParseBoltz2Output(t *testing.T) {
 	if len(designs) != 1 {
 		t.Fatalf("want 1 design, got %d", len(designs))
 	}
-	if designs[0].StructureFile == "" {
-		t.Error("structure_file must be set")
+	s := designs[0].Scores
+	if s["plddt"] != 0.88 || s["ptm"] != 0.81 || s["iptm"] != 0.79 {
+		t.Errorf("standard scores wrong: %v", s)
+	}
+	if s["chain_0_ptm"] != 0.9 || s["chain_1_ptm"] != 0.7 {
+		t.Errorf("chains_ptm not flattened: %v", s)
+	}
+}
+
+func TestParseBoltz2OutputNoConfidenceFile(t *testing.T) {
+	outDir := t.TempDir()
+	sub := filepath.Join(outDir, "predictions", "in")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sub, "in_model_0.pdb"),
+		[]byte("ATOM\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	designs, err := parseBoltz2Output(outDir)
+	if err != nil {
+		t.Fatalf("a prediction without a confidence file must not error: %v", err)
+	}
+	if len(designs) != 1 || len(designs[0].Scores) != 0 {
+		t.Errorf("want 1 design with empty scores, got %+v", designs)
 	}
 }
 
 func TestParseBoltz2OutputEmptyErrors(t *testing.T) {
 	if _, err := parseBoltz2Output(t.TempDir()); err == nil {
-		t.Fatal("expected an error when no PDBs are present")
+		t.Fatal("expected an error when no structures are present")
 	}
 }
 

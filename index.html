@@ -3,14 +3,14 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>fova — design proteins in your terminal</title>
-<meta name="description" content="fova is a terminal agent for de novo protein design. It plans, runs, and ranks design jobs — and ships the survivors to a wet lab — from a single Go binary. Free by default." />
+<title>fova: design proteins in your terminal</title>
+<meta name="description" content="fova is a terminal agent for de novo protein design. It plans, runs, and ranks design jobs, then ships the survivors to a wet lab, all from a single Go binary. Free by default." />
 <meta name="theme-color" content="#0d1f15" />
 <meta name="color-scheme" content="dark" />
 
 <meta property="og:type" content="website" />
-<meta property="og:title" content="fova — design proteins in your terminal" />
-<meta property="og:description" content="A terminal agent for de novo protein design. It plans, runs, ranks — and ships the survivors to a wet lab. Free by default." />
+<meta property="og:title" content="fova: design proteins in your terminal" />
+<meta property="og:description" content="A terminal agent for de novo protein design. It plans, runs, ranks, and ships the survivors to a wet lab. Free by default." />
 <meta property="og:url" content="https://github.com/alvarogonjim/fova" />
 <meta name="twitter:card" content="summary_large_image" />
 
@@ -22,7 +22,7 @@
 
 <style>
 /* ============================================================
-   fova — landing page
+   fova landing page
    Palette mirrors internal/tui/theme.go (DefaultPalette):
      forest #0d1f15 · sand #d4cfc0 · moss #7fc14a · saffron #EF9F27
    ============================================================ */
@@ -558,7 +558,7 @@ footer{border-top:1px solid var(--line); padding-block:3.2rem; background:var(--
 <!-- ===================================================== NAV -->
 <nav class="nav" aria-label="Primary">
   <div class="shell nav-in">
-    <a class="brand" href="#top" aria-label="fova — home">
+    <a class="brand" href="#top" aria-label="fova home">
       <svg viewBox="0 0 200 240" aria-hidden="true">
         <path d="M52 38V206" stroke="#7fc14a" stroke-width="15" stroke-linecap="round"/>
         <path d="M52 90H150" stroke="#7fc14a" stroke-width="15" stroke-linecap="round"/>
@@ -594,8 +594,8 @@ footer{border-top:1px solid var(--line); padding-block:3.2rem; background:var(--
       </h1>
       <p class="lead rise d3">
         fova is a terminal agent for <b>de novo protein design</b>. It plans, runs,
-        and ranks design jobs — and ships the survivors to a wet lab — from a single
-        Go binary.
+        and ranks design jobs, then ships the survivors to a wet lab, all from a
+        single Go binary.
       </p>
       <div class="hero-cta rise d4">
         <a class="btn btn-primary" href="#install" data-magnetic>Download fova</a>
@@ -628,17 +628,17 @@ footer{border-top:1px solid var(--line); padding-block:3.2rem; background:var(--
               <path d="M52 142H112" stroke="#7fc14a" stroke-width="16" stroke-linecap="round"/>
               <circle cx="150" cy="90" r="16" fill="#ef9f27"/>
             </svg>
-            <span class="term-title">fova&nbsp;<span class="dim">— protein design agent</span></span>
+            <span class="term-title">fova&nbsp;<span class="dim">· protein design agent</span></span>
             <span class="term-live"><i aria-hidden="true"></i> session</span>
           </div>
           <div class="term-body" id="termBody" role="img"
-               aria-label="fova running a binder design pipeline: planning, scaffolding with RFdiffusion, sequence design with ProteinMPNN, structure prediction with AlphaFold3, ranking by ipSAE to a shortlist of 47 designs, then a wet-lab submission prompt.">
+               aria-label="fova running a binder design pipeline: planning, scaffolding with RFdiffusion, sequence design with ProteinMPNN, structure prediction with AlphaFold3, ranking and filtering to a shortlist of 47 designs, then a wet lab submission prompt.">
             <div class="t-line"><span class="t-prompt">❯</span><span class="t-cmd">fova design --target PD-L1 --n 50</span></div>
             <div class="t-line"><span class="t-mark ok">✓</span><span class="t-label">planning</span><span class="t-detail">retrieved <i>12</i> papers · BindCraft + ProteinMPNN</span></div>
             <div class="t-line"><span class="t-mark ok">✓</span><span class="t-label">scaffolding</span><span class="t-detail">RFdiffusion · <i>200</i> backbones · <i>4m 12s</i></span></div>
             <div class="t-line"><span class="t-mark ok">✓</span><span class="t-label">sequence design</span><span class="t-detail">ProteinMPNN · <i>200</i> sequences · <i>2m 41s</i></span></div>
             <div class="t-line"><span class="t-mark ok">✓</span><span class="t-label">predict</span><span class="t-detail">AlphaFold3 · <i>1m 08s</i></span></div>
-            <div class="t-line"><span class="t-mark ok">✓</span><span class="t-label">rank · ipSAE</span><span class="t-detail">shortlist: <i>47</i> designs · top score <i>0.84</i></span></div>
+            <div class="t-line"><span class="t-mark ok">✓</span><span class="t-label">rank</span><span class="t-detail">shortlist: <i>47</i> designs · top score <i>0.84</i></span></div>
             <div class="t-line t-confirm"><span class="t-arrow">▸</span><span>confirm wet-lab submission? [y/N]</span><span class="t-cursor"></span></div>
           </div>
         </div>
@@ -655,18 +655,18 @@ footer{border-top:1px solid var(--line); padding-block:3.2rem; background:var(--
       <span class="moss">Free</span> by default.<br>No account needed.
     </p>
     <p class="sub" data-reveal style="--d:.16s">
-      Every feature works without a paid account. Local LLMs — Ollama, vLLM,
-      LM&nbsp;Studio — run out of the box, and the whole free knowledge stack is
-      no-auth. Paid LLMs and wet-lab submission are the only opt-ins, and they
-      stay optional.
+      Every feature works without a paid account. Local LLMs like Ollama, vLLM,
+      and LM&nbsp;Studio run out of the box, and the whole free knowledge stack
+      needs no keys. Paid LLMs and wet lab submission are the only opt-ins, and
+      they stay optional.
     </p>
     <div class="opt" data-reveal style="--d:.24s">
       <span class="tag on">Local LLMs</span>
       <span class="tag on">Literature retrieval</span>
       <span class="tag on">Design &amp; scoring</span>
       <span class="tag on">SQLite provenance</span>
-      <span class="tag opt-in">Paid LLMs — opt-in</span>
-      <span class="tag opt-in">Adaptyv wet lab — opt-in</span>
+      <span class="tag opt-in">Paid LLMs · opt-in</span>
+      <span class="tag opt-in">Adaptyv wet lab · opt-in</span>
     </div>
   </div>
 </section>
@@ -678,7 +678,7 @@ footer{border-top:1px solid var(--line); padding-block:3.2rem; background:var(--
       <p class="eyebrow" data-reveal>The loop</p>
       <h2 data-reveal style="--d:.08s">From a sentence to the bench.</h2>
       <p data-reveal style="--d:.16s">
-        Describe a target in plain language. fova does the rest — and tracks
+        Describe a target in plain language. fova does the rest, and tracks
         every design back to the intent that produced it.
       </p>
     </div>
@@ -693,19 +693,19 @@ footer{border-top:1px solid var(--line); padding-block:3.2rem; background:var(--
         <div class="node">⠿</div>
         <span class="idx">02 ▸ STEP</span>
         <h3>Orchestrates</h3>
-        <p>Runs experimentally validated tools — BindCraft, RFdiffusion, ProteinMPNN, AlphaFold3 — locally or on your own Modal GPUs.</p>
+        <p>Runs experimentally validated tools like BindCraft, RFdiffusion, ProteinMPNN, and AlphaFold3, locally or on your own Modal GPUs.</p>
       </article>
       <article class="step" data-reveal style="--d:.23s">
         <div class="node">≋</div>
         <span class="idx">03 ▸ STEP</span>
         <h3>Ranks</h3>
-        <p>Scores every design by <code>ipSAE</code> — the modern interface metric — then filters to a small, high-confidence shortlist.</p>
+        <p>Scores every design on interface and confidence metrics, then filters to a small, trustworthy shortlist.</p>
       </article>
       <article class="step" data-reveal style="--d:.32s">
         <div class="node">✓</div>
         <span class="idx">04 ▸ STEP</span>
         <h3>Ships</h3>
-        <p>Sends the survivors to the bench through the Adaptyv Foundry API — then closes the design–test–learn loop with real results.</p>
+        <p>Sends the survivors to the bench through the Adaptyv Foundry API, then closes the loop with real results.</p>
       </article>
     </div>
   </div>
@@ -731,17 +731,17 @@ footer{border-top:1px solid var(--line); padding-block:3.2rem; background:var(--
       <article class="card" data-reveal style="--d:.1s">
         <div class="ico">✓</div>
         <h3>Validated tools only</h3>
-        <p>Every built-in design tool has <span class="hi">documented wet-lab success</span>. No unproven methods ship in the box.</p>
+        <p>Every built-in design tool has <span class="hi">documented wet lab success</span>. No unproven methods ship in the box.</p>
       </article>
       <article class="card" data-reveal style="--d:.15s">
         <div class="ico">≋</div>
-        <h3>Ranked by ipSAE</h3>
-        <p>The interface metric that outperformed ipTM across <span class="hi">3,766 tested binders</span> on 15 targets.</p>
+        <h3>Ranked on real metrics</h3>
+        <p>fova scores every design on <span class="hi">multiple interface and confidence metrics</span>, never a single number, so the shortlist holds up at the bench.</p>
       </article>
       <article class="card" data-reveal style="--d:.2s">
         <div class="ico">⌗</div>
         <h3>Provenance everywhere</h3>
-        <p>Every design carries full lineage — <span class="hi">intent → tool versions → wet-lab result</span> — in local SQLite.</p>
+        <p>Every design carries its full lineage in local SQLite: <span class="hi">intent → tool versions → wet lab result</span>.</p>
       </article>
       <article class="card" data-reveal style="--d:.25s">
         <div class="ico">◇</div>
@@ -751,7 +751,7 @@ footer{border-top:1px solid var(--line); padding-block:3.2rem; background:var(--
       <article class="card" data-reveal style="--d:.3s">
         <div class="ico">▸</div>
         <h3>Human-in-the-loop</h3>
-        <p>A confirmation checkpoint before anything <span class="hi">slow, costly, or irreversible</span> — including every wet-lab submission.</p>
+        <p>A confirmation checkpoint before anything <span class="hi">slow, costly, or irreversible</span>, including every wet lab submission.</p>
       </article>
     </div>
   </div>
@@ -762,15 +762,15 @@ footer{border-top:1px solid var(--line); padding-block:3.2rem; background:var(--
   <div class="shell">
     <div class="section-head">
       <p class="eyebrow" data-reveal>Orchestrated tools</p>
-      <h2 data-reveal style="--d:.08s">Only tools with wet-lab receipts.</h2>
+      <h2 data-reveal style="--d:.08s">Only tools with wet lab receipts.</h2>
       <p data-reveal style="--d:.16s">
-        fova drives state-of-the-art design, structure, and knowledge tools —
-        and shows the LLM type-safe outputs, never raw stdout.
+        fova drives the best design, structure, and knowledge tools available,
+        and shows the model structured outputs instead of raw stdout.
       </p>
     </div>
 
     <div class="tool-group" data-reveal>
-      <div class="glab">Design <span class="ct">— binders · antibodies · enzymes</span></div>
+      <div class="glab">Design <span class="ct">· binders · antibodies · enzymes</span></div>
       <div class="chips">
         <span class="chip">BindCraft</span>
         <span class="chip">RFdiffusion</span>
@@ -783,7 +783,7 @@ footer{border-top:1px solid var(--line); padding-block:3.2rem; background:var(--
     </div>
 
     <div class="tool-group" data-reveal style="--d:.08s">
-      <div class="glab">Structure &amp; scoring <span class="ct">— predict · ipSAE · filter</span></div>
+      <div class="glab">Structure &amp; scoring <span class="ct">· predict · ipSAE · filter</span></div>
       <div class="chips">
         <span class="chip">AlphaFold3</span>
         <span class="chip">ESMFold</span>
@@ -796,7 +796,7 @@ footer{border-top:1px solid var(--line); padding-block:3.2rem; background:var(--
     </div>
 
     <div class="tool-group" data-reveal style="--d:.16s">
-      <div class="glab">Knowledge <span class="ct">— free · no-auth</span></div>
+      <div class="glab">Knowledge <span class="ct">· free · no keys</span></div>
       <div class="chips">
         <span class="chip">Europe PMC</span>
         <span class="chip">OpenAlex</span>
@@ -810,7 +810,7 @@ footer{border-top:1px solid var(--line); padding-block:3.2rem; background:var(--
     </div>
 
     <div class="tool-group" data-reveal style="--d:.24s">
-      <div class="glab">Wet lab <span class="ct">— close the loop</span></div>
+      <div class="glab">Wet lab <span class="ct">· close the loop</span></div>
       <div class="chips">
         <span class="chip">Adaptyv Foundry</span>
       </div>
@@ -825,8 +825,8 @@ footer{border-top:1px solid var(--line); padding-block:3.2rem; background:var(--
       <p class="eyebrow" data-reveal>Get fova</p>
       <h2 data-reveal style="--d:.08s">Install in one line.</h2>
       <p data-reveal style="--d:.16s">
-        One static binary — no runtime, no dependencies. Pick the way that
-        suits you, then run <code style="font-family:'JetBrains Mono',monospace;color:var(--moss)">fova</code>.
+        One static binary with no runtime and no dependencies. Pick whichever
+        way suits you, then run <code style="font-family:'JetBrains Mono',monospace;color:var(--moss)">fova</code>.
       </p>
     </div>
 
@@ -913,7 +913,7 @@ footer{border-top:1px solid var(--line); padding-block:3.2rem; background:var(--
   <div class="shell">
     <div class="foot-grid">
       <div class="foot-brand">
-        <a class="brand" href="#top" aria-label="fova — home">
+        <a class="brand" href="#top" aria-label="fova home">
           <svg viewBox="0 0 200 240" aria-hidden="true">
             <path d="M52 38V206" stroke="#7fc14a" stroke-width="15" stroke-linecap="round"/>
             <path d="M52 90H150" stroke="#7fc14a" stroke-width="15" stroke-linecap="round"/>
@@ -922,7 +922,7 @@ footer{border-top:1px solid var(--line); padding-block:3.2rem; background:var(--
           </svg>
           <span class="wm">fova</span>
         </a>
-        <p>A terminal agent for de novo protein design — plan, run, rank, and ship designs to a wet lab from a single Go binary.</p>
+        <p>A terminal agent for de novo protein design. Plan, run, rank, and ship designs to a wet lab from a single Go binary.</p>
       </div>
       <div class="foot-cols">
         <div class="foot-col">
@@ -943,7 +943,7 @@ footer{border-top:1px solid var(--line); padding-block:3.2rem; background:var(--
     </div>
     <div class="foot-base">
       <span>fova <span class="moss">·</span> v0.5 “fova” <span class="moss">·</span> MIT licensed <span class="moss">·</span> free software</span>
-      <span>built for the terminal <span class="moss">—</span> <span id="year">2026</span></span>
+      <span>built for the terminal <span class="moss">·</span> <span id="year">2026</span></span>
     </div>
   </div>
 </footer>
@@ -1023,8 +1023,8 @@ footer{border-top:1px solid var(--line); padding-block:3.2rem; background:var(--
   }
 
   /* ---- animated terminal pipeline ---------------------------------
-     DOM is built node-by-node (createElement / textContent) — no
-     innerHTML, no HTML strings. All content below is static. */
+     DOM is built node by node with createElement and textContent.
+     No innerHTML, no HTML strings. All content below is static. */
   const body = document.getElementById('termBody');
   if (!body || reduce) return;
 
@@ -1044,7 +1044,7 @@ footer{border-top:1px solid var(--line); padding-block:3.2rem; background:var(--
     ['scaffolding',     ['RFdiffusion · ', { n: '200' }, ' backbones · ', { n: '4m 12s' }]],
     ['sequence design', ['ProteinMPNN · ', { n: '200' }, ' sequences · ', { n: '2m 41s' }]],
     ['predict',         ['AlphaFold3 · ', { n: '1m 08s' }]],
-    ['rank · ipSAE',    ['shortlist: ', { n: '47' }, ' designs · top score ', { n: '0.84' }]],
+    ['rank',            ['shortlist: ', { n: '47' }, ' designs · top score ', { n: '0.84' }]],
   ];
   const frames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 

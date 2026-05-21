@@ -161,3 +161,48 @@ func TestRenderExperimentDetailWithResults(t *testing.T) {
 		}
 	}
 }
+
+func TestSortedScoreKeys(t *testing.T) {
+	got := sortedScoreKeys(map[string]float64{"z": 1, "a": 2, "m": 3})
+	if len(got) != 3 || got[0] != "a" || got[1] != "m" || got[2] != "z" {
+		t.Errorf("sortedScoreKeys = %v, want [a m z]", got)
+	}
+}
+
+func TestShortHash(t *testing.T) {
+	if got := shortHash("abcdef1234"); got != "abcdef" {
+		t.Errorf("a long hash should truncate to 6 chars, got %q", got)
+	}
+	if got := shortHash("abc"); got != "abc" {
+		t.Errorf("a short hash should be returned as-is, got %q", got)
+	}
+}
+
+func TestWrapResidues(t *testing.T) {
+	if got := wrapResidues(""); got != "  (empty)" {
+		t.Errorf("empty chain: got %q, want %q", got, "  (empty)")
+	}
+	if got := wrapResidues("ABC"); !strings.Contains(got, "ABC") {
+		t.Errorf("short chain should appear verbatim: got %q", got)
+	}
+	if got := wrapResidues(strings.Repeat("A", 50)); strings.Contains(got, "\n") {
+		t.Errorf("50 residues (5 blocks) should fit on one line, got %q", got)
+	}
+	if got := wrapResidues(strings.Repeat("A", 51)); strings.Count(got, "\n") != 1 {
+		t.Errorf("51 residues should wrap to 2 lines (1 newline), got %d newlines in %q",
+			strings.Count(got, "\n"), got)
+	}
+}
+
+func TestRenderSequenceChains(t *testing.T) {
+	if got := renderSequenceChains(domain.Sequence{}); got != " (no sequence)" {
+		t.Errorf("no chains: got %q, want %q", got, " (no sequence)")
+	}
+	out := renderSequenceChains(domain.Sequence{Chains: map[string]string{
+		"B": "WWWWWWWWWW", "A": "MMMMMMMMMM",
+	}})
+	ia, ib := strings.Index(out, "chain A"), strings.Index(out, "chain B")
+	if ia < 0 || ib < 0 || ia > ib {
+		t.Errorf("chains should render sorted, A before B: got %q", out)
+	}
+}

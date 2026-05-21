@@ -5,7 +5,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/alvarogonjim/fova/internal/domain"
 	tea "github.com/charmbracelet/bubbletea"
 )
 
@@ -90,5 +92,72 @@ func TestJobLogViewUpdateScroll(t *testing.T) {
 	v = v.update(tea.KeyMsg{Type: tea.KeyPgDown})
 	if got := v.View(); !strings.Contains(got, "hdr") {
 		t.Errorf("View() after scroll missing header; got:\n%s", got)
+	}
+}
+
+func TestRenderJobDetailRunning(t *testing.T) {
+	started := time.Now().Add(-2 * time.Minute)
+	j := domain.Job{
+		ID: "job-abc", Tool: "design.bindcraft", Status: domain.JobRunning,
+		Backend: "modal", Progress: 0.5, Created: time.Now(), Started: &started,
+	}
+	header, body := renderJobDetail(NewTheme(), j)
+	if !strings.Contains(header, "design.bindcraft") || !strings.Contains(header, "job-abc") {
+		t.Errorf("header missing job identity: %q", header)
+	}
+	for _, want := range []string{"status", "backend", "modal", "log"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("body missing %q: %q", want, body)
+		}
+	}
+}
+
+func TestRenderJobDetailFailedShowsError(t *testing.T) {
+	j := domain.Job{ID: "j", Tool: "t", Status: domain.JobFailed, Error: "boom", Created: time.Now()}
+	_, body := renderJobDetail(NewTheme(), j)
+	if !strings.Contains(body, "error") || !strings.Contains(body, "boom") {
+		t.Errorf("failed job body should show the error: %q", body)
+	}
+}
+
+func TestRenderDesignDetail(t *testing.T) {
+	d := domain.Design{
+		ID: "d-1", Origin: domain.OriginBindCraft, Application: domain.AppBinder,
+		Created: time.Now(),
+		Sequence: domain.Sequence{Chains: map[string]string{"A": "MKTAYIAKQR"}},
+		Scores:   map[string]float64{"ipsae": 0.71, "plddt_mean": 88.4},
+	}
+	header, body := renderDesignDetail(NewTheme(), d)
+	if !strings.Contains(header, "d-1") {
+		t.Errorf("header missing design id: %q", header)
+	}
+	for _, want := range []string{"scores", "ipsae", "sequence", "MKTAYIAKQR", "provenance"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("body missing %q: %q", want, body)
+		}
+	}
+}
+
+func TestRenderExperimentDetailNoResults(t *testing.T) {
+	e := domain.Experiment{ID: "e1", TargetName: "PD-L1", AssayType: "binding", Status: "in_progress"}
+	_, body := renderExperimentDetail(NewTheme(), e)
+	if !strings.Contains(body, "no results yet") {
+		t.Errorf("an experiment with no results should say so: %q", body)
+	}
+}
+
+func TestRenderExperimentDetailWithResults(t *testing.T) {
+	kd := 12.0
+	e := domain.Experiment{
+		ID: "e1", TargetName: "PD-L1", AssayType: "binding", Status: "done",
+		Results: []domain.ExperimentResult{
+			{DesignID: "d-1", Kd: &kd, KdUnits: "nM", BindingStrength: "strong"},
+		},
+	}
+	_, body := renderExperimentDetail(NewTheme(), e)
+	for _, want := range []string{"results", "d-1", "strong"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("body missing %q: %q", want, body)
+		}
 	}
 }

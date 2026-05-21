@@ -338,6 +338,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case tea.MouseMsg:
+		m.chat.handleMouse(msg)
+		return m, nil
+
 	// --- agent bus messages ---
 	case agent.TextDeltaMsg:
 		m.chat.appendAgentDelta(msg.Delta)

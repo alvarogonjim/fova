@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -26,6 +27,19 @@ func newTestApp() *Model {
 		Models:       llm.NewModelRegistry(config.DefaultCatalog()),
 		SystemPrompt: agent.SystemPrompt,
 	})
+}
+
+func TestAppMouseWheelScrollsChat(t *testing.T) {
+	m := newTestApp()
+	m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	for i := 0; i < 40; i++ {
+		m.chat.appendAgentDeltaBlock(fmt.Sprintf("entry %d", i))
+	}
+	m.chat.viewport.GotoBottom()
+	m.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonWheelUp})
+	if m.chat.viewport.AtBottom() {
+		t.Error("a MouseMsg wheel-up should scroll the chat")
+	}
 }
 
 func TestAppHeaderShowsWorkspacePath(t *testing.T) {

@@ -1,12 +1,30 @@
 package tui
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
 
+	tea "github.com/charmbracelet/bubbletea"
+
 	"github.com/alvarogonjim/fova/internal/domain"
 )
+
+func TestChatMouseWheelScrollsUp(t *testing.T) {
+	c := newChatModel(NewTheme(), 40, 4)
+	for i := 0; i < 30; i++ {
+		c.appendAgentDeltaBlock(fmt.Sprintf("line %d", i))
+	}
+	c.viewport.GotoBottom()
+	if !c.viewport.AtBottom() {
+		t.Fatal("setup: chat should start at the bottom")
+	}
+	c.handleMouse(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonWheelUp})
+	if c.viewport.AtBottom() {
+		t.Error("wheel-up should scroll the chat off the bottom")
+	}
+}
 
 func TestChatAppendAndRender(t *testing.T) {
 	c := newChatModel(NewTheme(), 80, 20)

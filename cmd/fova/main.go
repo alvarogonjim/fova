@@ -163,7 +163,7 @@ func runTUI() error {
 		Guard:              guard,
 	})
 
-	p := tea.NewProgram(app, tea.WithAltScreen())
+	p := tea.NewProgram(app, tea.WithAltScreen(), tea.WithMouseCellMotion())
 	_, err = p.Run()
 	return err
 }

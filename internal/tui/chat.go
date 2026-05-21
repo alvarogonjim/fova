@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/charmbracelet/bubbles/viewport"
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/lipgloss"
 
@@ -326,6 +327,13 @@ func (c *chatModel) refresh() {
 }
 
 func (c *chatModel) View() string { return c.viewport.View() }
+
+// handleMouse forwards a mouse event to the chat viewport. The viewport's
+// built-in MouseWheelEnabled handling scrolls it on wheel-up / wheel-down;
+// non-wheel events (clicks, motion) are ignored by the viewport.
+func (c *chatModel) handleMouse(msg tea.MouseMsg) {
+	c.viewport, _ = c.viewport.Update(msg)
+}
 
 // formatToolDur renders an elapsed duration compactly for a tool-trace header.
 func formatToolDur(d time.Duration) string {

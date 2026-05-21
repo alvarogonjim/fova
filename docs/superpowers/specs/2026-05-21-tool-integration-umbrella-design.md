@@ -120,10 +120,11 @@ without a shared code abstraction.
    rework of the existing thin adapter. fova owns infra flags (output dir,
    weights cache, devices, workers); the agent never sees them.
 4. **Preflight.** A cheap, no-GPU validation pass — see §5.
-5. **Plan / review integration.** A bespoke method-config carried on
-   `DesignPlan` as an optional field, plus a `/plan` render section, so the
-   agent proposes the spec / parameters and the user accepts, edits, or
-   cancels. See §4.
+5. **Review integration.** The surface depends on tool kind (see §4): design
+   tools get a bespoke method-config on `DesignPlan` plus a `/plan` render
+   section; predictors (`fold.boltz2`, `fold.chai1`) go through the tool
+   confirmation gate. Either way the agent proposes the spec / parameters and
+   the user accepts, edits, or cancels.
 6. **Score ingestion.** Parse the tool's native confidence / metrics output
    into `Design.Scores`. See §6.
 7. **Grounding skill.** A `internal/skills/builtin/<tool>-*.md` skill that
@@ -140,34 +141,55 @@ next tool.
 
 ---
 
-## 4. Review mechanism — bespoke per tool
+## 4. Review mechanism — bespoke per tool, split by tool kind
 
 The user chose bespoke integration over a shared framework. Each tool
-therefore implements the "agent proposes, user supervises" loop itself,
-following the BoltzGen pattern but with its own types:
+implements the "agent proposes, user supervises" loop itself, following the
+BoltzGen pattern but with its own types. The *surface* depends on the tool
+kind.
+
+### Design tools — `rfantibody`, `chai2`, `rfdiffusion2`, `ligandmpnn`
+
+A design tool is chosen as a `DesignPlan` method, so it supervises through the
+existing `/plan` flow:
 
 - The tool's method-config is its **own Go type**, hung off `DesignPlan` as an
-  optional field. BoltzGen's config and each of the six are independent — no
+  optional field. BoltzGen's config and each of the four are independent — no
   shared union, no collision.
 - `plan.create` accepts that tool's parameters / spec path, runs the tool's
   **preflight** (§5), and rejects the plan if preflight fails — consistent
   with the existing install-status and tool-registration guards.
-- `/plan` renders the tool's section: its parameters, any spec-file path with
-  a short preview, and the preflight result.
-- `/plan approve` re-runs preflight to catch edits made between proposal and
-  approval, then hands control to the agent turn that `/plan approve` already
-  starts (per the known-issue #1 fix).
+- `/plan` renders the tool's section; `/plan approve` re-runs preflight to
+  catch edits, then hands control to the agent turn it already starts (per the
+  known-issue #1 fix).
+
+### Predictors — `fold.boltz2`, `fold.chai1`
+
+A predictor is called by the agent repeatedly mid-pipeline; it is not a
+`DesignPlan` method and does not belong in the project-level `/plan` (one
+design plan per project). It supervises through the **tool confirmation gate**
+(`internal/agent/loop.go`): the tool sets `RequiresConfirmation` true, the gate
+renders the full proposed spec, and preflight runs at the top of `Execute` so
+no doomed job is ever submitted.
+
+### Editable review — a cross-cutting sub-project
+
+The confirmation gate is binary today (accept / decline); true inline editing
+lives only in the `/plan` flow. A faithful "accept / **edit** / cancel" review
+for predictor specs needs an editable confirmation surface. That surface is
+cross-cutting — it would serve all six tools and BoltzGen — so it is **its own
+spec** under this umbrella rather than being buried in one tool's bespoke
+work. Until it lands, predictors ship with the enriched binary gate and "edit"
+means decline-with-correction.
+
+### Shared-file footprint
 
 Because integration is bespoke, the only **physically shared** edits per tool
-are tiny and conflict-trivial:
-
-- one registration line in `cmd/fova/main.go`;
-- one dispatch case in the `/plan` renderer (`internal/tools/plan/render.go`
-  and `internal/tui/plan.go`);
-- `compat.go` aliases — already present for all four design methods.
-
-Serial delivery means these are touched one tool at a time, so there is no
-multi-way merge reconciliation.
+are tiny and conflict-trivial: one registration line in `cmd/fova/main.go`;
+for design tools, one dispatch case in the `/plan` renderer
+(`internal/tools/plan/render.go`, `internal/tui/plan.go`); `compat.go` aliases
+(already present for all four design methods). Serial delivery touches these
+one tool at a time — no multi-way merge reconciliation.
 
 ---
 
@@ -271,11 +293,13 @@ established once and carried forward.
   validation pass runs each tool on the GB10. The checklist:
 
   1. `/install <tool>` succeeds and the smoke test passes.
-  2. The agent proposes a spec / parameters; `/plan` renders the section;
-     preflight reports valid.
-  3. `/plan approve` submits the job; the job completes.
-  4. Designs / predicted structures land in the designs panel **with
-     populated scores**.
+  2. The agent proposes a spec / parameters; the review surface (a `/plan`
+     section for design tools, the confirmation gate for predictors) renders
+     it; preflight reports valid.
+  3. Approval submits the job; the job completes.
+  4. Designs / predicted structures land **with populated scores** (in the
+     designs panel for design tools; in the job result envelope for
+     predictors).
   5. Provenance records the tool call and parameters.
 
 ---
@@ -304,7 +328,11 @@ established once and carried forward.
 - This umbrella spec.
 - Six per-tool design specs under `docs/superpowers/specs/`, each followed by
   its own implementation plan and implementation.
+- One cross-cutting spec — **editable tool-call review** (§4) — for the inline
+  accept / edit / cancel surface shared by predictors and design tools.
+  Scheduled after the predictors land, so it has concrete consumers to design
+  against.
 - For each tool: a bespoke tool type, a local-backend adapter, a preflight, a
-  plan-integration section, score ingestion, a grounding skill, and tests.
+  review-integration section, score ingestion, a grounding skill, and tests.
 - A follow-up note to expand `design.rfdiffusion` / `design.proteinmpnn` /
   `design.bindcraft` beyond the generic schema (out of scope here).

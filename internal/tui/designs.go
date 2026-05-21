@@ -97,9 +97,10 @@ func RenderSectionRule(theme Theme, label string, width int, attention bool) str
 	return prefix + muted.Render(clipLine(line, width-prefixWidth))
 }
 
-// View renders the designs panel. The header uses RenderSectionRule (rebrand
-// §3.3); rows route through one of three style branches based on whether the
-// design is in the wet-lab shortlist (spec §3.5).
+// View renders the designs panel. The header is rendered by panelHeader
+// (accent-coloured when the panel is focused); each row renders via the
+// focused-selection branch when it is the selected row of a focused panel,
+// otherwise via the wet-lab-shortlist styling (spec §3.5).
 func (m designsModel) View() string {
 	var b strings.Builder
 	b.WriteString(panelHeader(
@@ -125,10 +126,9 @@ func (m designsModel) View() string {
 		lab := "—"
 
 		if m.focused && i == m.selected {
-			accent := lipgloss.NewStyle().Foreground(m.theme.Palette.Accent)
 			line := fmt.Sprintf("%-11s %6s %6s %6s %3s",
 				id, plddt, ipsae, iptm, lab)
-			b.WriteString(accent.Render("▸ " + clipLine(line, m.width-2)))
+			b.WriteString(saffronStyle.Render("▸ " + clipLine(line, m.width-2)))
 			b.WriteString("\n")
 			continue
 		}

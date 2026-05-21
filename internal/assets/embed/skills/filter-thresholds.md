@@ -1,3 +1,7 @@
+---
+name: filter-thresholds
+description: Standard score cutoffs for shortlisting designs
+---
 # Skill: Filter thresholds
 
 Standard cutoffs for shortlisting designs. Apply via `score.filter`.

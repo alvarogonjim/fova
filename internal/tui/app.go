@@ -16,13 +16,14 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/alvarogonjim/fova/internal/agent"
+	"github.com/alvarogonjim/fova/internal/assets"
 	"github.com/alvarogonjim/fova/internal/backends/local"
-	"github.com/alvarogonjim/fova/internal/config"
 	"github.com/alvarogonjim/fova/internal/domain"
 	jobmgr "github.com/alvarogonjim/fova/internal/jobs"
 	"github.com/alvarogonjim/fova/internal/llm"
 	"github.com/alvarogonjim/fova/internal/replay"
 	"github.com/alvarogonjim/fova/internal/safety"
+	"github.com/alvarogonjim/fova/internal/skills"
 	"github.com/alvarogonjim/fova/internal/store"
 	"github.com/alvarogonjim/fova/internal/tools"
 	"github.com/alvarogonjim/fova/internal/tools/lab"
@@ -89,9 +90,15 @@ type Model struct {
 	registry     *tools.Registry
 	models       *llm.ModelRegistry
 	systemPrompt string
-	session      *agent.Session   // one session for the whole TUI lifetime
-	store        *store.Store     // nil → persistence disabled
-	sessionID    domain.SessionID // current persisted session
+	skillLoader  *skills.Loader // backs the skills.list/read tools and /skills
+	assetReport  assets.Report  // validation Report from the last assets.Load()
+	// pendingAssetPath is the file an in-flight /skills or /config edit is
+	// editing; pendingAssetReload requests a bundle reload when it closes.
+	pendingAssetPath   string
+	pendingAssetReload bool
+	session            *agent.Session   // one session for the whole TUI lifetime
+	store              *store.Store     // nil → persistence disabled
+	sessionID          domain.SessionID // current persisted session
 
 	jobMgr    *jobmgr.Manager // async job manager (install / deploy / design jobs)
 	localReg  *local.Registry // installable-tool registry
@@ -140,11 +147,13 @@ type Deps struct {
 	Registry           *tools.Registry
 	Models             *llm.ModelRegistry
 	SystemPrompt       string
+	SkillLoader        *skills.Loader
+	AssetReport        assets.Report
 	Store              *store.Store
 	Jobs               *jobmgr.Manager
 	Local              *local.Registry
 	FovaHome           string
-	ConfigDir          string       // <ConfigDir>, used by /theme writeback; "" falls back to config.ConfigDir()
+	ConfigDir          string       // <ConfigDir>, used by /theme writeback; "" falls back to assets.Dir()
 	WebhookPort        int          // Adaptyv webhook receiver port; 0 disables it
 	WebhookURL         string       // Adaptyv callback URL (config-derived)
 	BudgetLimitUSD     float64      // [budget].session_soft_limit_usd; 0 = no limit
@@ -170,6 +179,8 @@ func New(d Deps) *Model {
 		registry:     d.Registry,
 		models:       d.Models,
 		systemPrompt: d.SystemPrompt,
+		skillLoader:  d.SkillLoader,
+		assetReport:  d.AssetReport,
 		session:      agent.NewSession(d.SystemPrompt),
 		store:        d.Store,
 		jobMgr:       d.Jobs,
@@ -408,6 +419,19 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.cmdbar.refreshHeight() {
 				m.layout()
 			}
+		}
+		return m, nil
+	case editorFileDoneMsg:
+		if msg.Err != nil {
+			m.chat.appendError("editor: " + msg.Err.Error())
+			m.pendingAssetReload = false
+			m.pendingAssetPath = ""
+			return m, nil
+		}
+		if m.pendingAssetReload {
+			m.pendingAssetReload = false
+			m.pendingAssetPath = ""
+			return m.cmdReload()
 		}
 		return m, nil
 	}
@@ -752,9 +776,13 @@ func (m *Model) runSlashCommand(cmd, arg string) (tea.Model, tea.Cmd) {
 		return m.cmdTheme(arg)
 	case "reload":
 		return m.cmdReload()
+	case "skills":
+		return m.cmdSkills(arg)
+	case "config":
+		return m.cmdConfig(arg)
 	case "keys":
 		return m.cmdKeys()
-	case "jobs", "designs", "lab", "export", "cost", "project", "skills":
+	case "jobs", "designs", "lab", "export", "cost", "project":
 		m.chat.appendAgentDeltaBlock("/" + cmd + " arrives in a later fova milestone.")
 		return m, nil
 	default:
@@ -919,7 +947,7 @@ func (m *Model) cmdTheme(arg string) (tea.Model, tea.Cmd) {
 func (m *Model) saveThemeChoice(mode string) error {
 	dir := m.configDir
 	if dir == "" {
-		dir = config.ConfigDir()
+		dir = assets.Dir()
 	}
 	// FOVA_CONFIG_DIR is what LoadConfig/SaveConfig consult; setting it
 	// here keeps the save targeted at the Deps-supplied directory without
@@ -933,24 +961,25 @@ func (m *Model) saveThemeChoice(mode string) error {
 			_ = os.Unsetenv("FOVA_CONFIG_DIR")
 		}
 	}()
-	c, err := config.LoadConfig()
+	c, err := assets.LoadConfig()
 	if err != nil {
 		return err
 	}
 	c.UI.Theme = mode
-	return config.SaveConfig(c)
+	return assets.SaveConfig(c)
 }
 
 // lookupEnv is a tiny wrapper so saveThemeChoice can be read top-to-bottom.
 func lookupEnv(key string) (string, bool) { return os.LookupEnv(key) }
 
-// cmdReload re-reads config.toml and models.toml without restarting the TUI.
-// The new theme is applied live; budget/webhook/etc. fields update for the
-// remainder of the session. The conversation history is untouched.
+// cmdReload re-reads every asset (config.toml, models.toml, system.md,
+// skills) without restarting the TUI. The theme is applied live, the model
+// registry and skill set are swapped, and the running agent's system prompt
+// is hot-swapped. Conversation history is untouched.
 func (m *Model) cmdReload() (tea.Model, tea.Cmd) {
 	dir := m.configDir
 	if dir == "" {
-		dir = config.ConfigDir()
+		dir = assets.Dir()
 	}
 	prev, hadPrev := lookupEnv("FOVA_CONFIG_DIR")
 	_ = os.Setenv("FOVA_CONFIG_DIR", dir)
@@ -961,31 +990,44 @@ func (m *Model) cmdReload() (tea.Model, tea.Cmd) {
 			_ = os.Unsetenv("FOVA_CONFIG_DIR")
 		}
 	}()
-	cfg, err := config.LoadConfig()
+	bundle, err := assets.Load()
 	if err != nil {
-		m.chat.appendError("reload config.toml: " + err.Error())
-		return m, nil
-	}
-	cat, err := config.LoadModels()
-	if err != nil {
-		m.chat.appendError("reload models.toml: " + err.Error())
+		m.chat.appendError("reload: " + err.Error())
 		return m, nil
 	}
 	if m.models == nil {
-		m.models = llm.NewModelRegistry(cat)
+		m.models = llm.NewModelRegistry(bundle.Models)
 	} else {
-		m.models.Reload(cat)
+		m.models.Reload(bundle.Models)
 	}
-	if err := m.models.SelectDefault(cfg.Defaults); err != nil {
+	if err := m.models.SelectDefault(bundle.Config.Defaults); err != nil {
 		m.chat.appendError("apply [defaults] from config.toml: " + err.Error())
 	}
-	ApplyTheme(cfg.UI.Theme)
-	m.budgetLimit = cfg.Budget.SessionSoftLimitUSD
-	m.status.costLimit = cfg.Budget.SessionSoftLimitUSD
-	m.webhookURL = cfg.Webhook.EffectiveURL()
+	ApplyTheme(bundle.Config.UI.Theme)
+	m.budgetLimit = bundle.Config.Budget.SessionSoftLimitUSD
+	m.status.costLimit = bundle.Config.Budget.SessionSoftLimitUSD
+	m.webhookURL = bundle.Config.Webhook.EffectiveURL()
 	m.status.model = m.models.ActiveModel()
 	m.status.provider = m.models.ActiveProviderName()
-	m.chat.appendAgentDeltaBlock("config.toml and models.toml reloaded")
+
+	// Swap the skill set and re-register the skills.list/read tools.
+	m.skillLoader = skills.NewLoader(bundle.Skills)
+	if m.registry != nil {
+		m.registry.Register(m.skillLoader.ListTool())
+		m.registry.Register(m.skillLoader.ReadTool())
+	}
+	// Hot-swap the system prompt for the next agent turn.
+	m.systemPrompt = agent.BuildSystemPrompt(Commands(), bundle.SystemPrompt)
+	if m.session != nil {
+		m.session.SetSystemPrompt(m.systemPrompt)
+	}
+	m.assetReport = bundle.Report
+
+	msg := "reloaded config.toml, models.toml, system.md and skills"
+	if s := bundle.Report.Summary(); s != "" {
+		msg += " — " + s
+	}
+	m.chat.appendAgentDeltaBlock(msg)
 	return m, nil
 }
 
@@ -1225,10 +1267,10 @@ func helpText() string {
 	return b.String()
 }
 
-// loadConfigForTest is a re-export of config.LoadConfig used by tests in this
-// package that do not import internal/config directly. Not part of the public
+// loadConfigForTest is a re-export of assets.LoadConfig used by tests in this
+// package that do not import internal/assets directly. Not part of the public
 // API; safe to remove if no test refers to it.
-func loadConfigForTest() (any, error) { return config.LoadConfig() }
+func loadConfigForTest() (any, error) { return assets.LoadConfig() }
 
 // workspaceFromHome mirrors cmd/fova.defaultWorkspace: the active project's
 // workspace lives at $FOVA_HOME/projects/default. An empty home (tests that

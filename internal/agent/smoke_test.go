@@ -47,7 +47,7 @@ func TestSmoke_FoldAndScore(t *testing.T) {
 	}}
 
 	bus := make(chan tea.Msg, 64)
-	loop := NewLoop(prov, "mock", reg, NewSession(SystemPrompt), bus,
+	loop := NewLoop(prov, "mock", reg, NewSession(BuildSystemPrompt(nil, fakeTemplate)), bus,
 		func(string) bool { return true })
 
 	go func() {

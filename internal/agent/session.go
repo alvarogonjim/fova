@@ -1,7 +1,11 @@
 // Package agent implements the fova ReAct agent loop.
 package agent
 
-import "github.com/alvarogonjim/fova/internal/llm"
+import (
+	"sync"
+
+	"github.com/alvarogonjim/fova/internal/llm"
+)
 
 // MessageSink persists messages as a session accumulates them.
 // Implementations must be safe to call from the agent goroutine.
@@ -12,6 +16,7 @@ type MessageSink interface {
 // Session holds the conversation history for one agent run.
 // v0.1 keeps everything in memory with no compaction.
 type Session struct {
+	mu       sync.Mutex
 	system   string
 	messages []llm.Message
 	sink     MessageSink
@@ -32,8 +37,19 @@ func (s *Session) persist(role, content, toolCallID string) {
 	}
 }
 
-// SystemPrompt returns the system prompt.
-func (s *Session) SystemPrompt() string { return s.system }
+// SystemPrompt returns the current system prompt.
+func (s *Session) SystemPrompt() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.system
+}
+
+// SetSystemPrompt swaps the system prompt; the next turn picks it up.
+func (s *Session) SetSystemPrompt(p string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.system = p
+}
 
 // Messages returns a copy of the conversation so far.
 func (s *Session) Messages() []llm.Message {

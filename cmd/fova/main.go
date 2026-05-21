@@ -12,9 +12,9 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/alvarogonjim/fova/internal/agent"
+	"github.com/alvarogonjim/fova/internal/assets"
 	"github.com/alvarogonjim/fova/internal/backends"
 	"github.com/alvarogonjim/fova/internal/backends/local"
-	"github.com/alvarogonjim/fova/internal/config"
 	jobmgr "github.com/alvarogonjim/fova/internal/jobs"
 	"github.com/alvarogonjim/fova/internal/llm"
 	"github.com/alvarogonjim/fova/internal/safety"
@@ -112,19 +112,17 @@ func runTUI() error {
 
 	mgr := jobmgr.NewManager(st, nil)
 	mgr.SetLogDir(filepath.Join(fovaHome(), "logs"))
-	cat, err := config.LoadModels()
+	bundle, err := assets.Load()
 	if err != nil {
 		return err
 	}
-	models := llm.NewModelRegistry(cat)
-	cfg, err := config.LoadConfig()
-	if err != nil {
-		return err
-	}
+	models := llm.NewModelRegistry(bundle.Models)
+	cfg := bundle.Config
 	tui.ApplyTheme(cfg.UI.Theme)
 	if err := models.SelectDefault(cfg.Defaults); err != nil {
 		return err
 	}
+	skillLoader := skills.NewLoader(bundle.Skills)
 
 	home := fovaHome()
 	localReg, err := local.LoadRegistry(home)
@@ -136,7 +134,7 @@ func runTUI() error {
 	// rather than inside buildRegistry so the same Installer instance backs
 	// both paths.
 	installer := local.NewInstaller(localReg)
-	registry := buildRegistry(workspace, st, mgr, models, cfg, installer)
+	registry := buildRegistry(workspace, st, mgr, models, cfg, installer, skillLoader)
 
 	webhookPort := 0
 	if cfg.Webhook.Enabled {
@@ -150,17 +148,19 @@ func runTUI() error {
 	app := tui.New(tui.Deps{
 		Registry:           registry,
 		Models:             models,
-		SystemPrompt:       agent.BuildSystemPrompt(tui.Commands()),
+		SystemPrompt:       agent.BuildSystemPrompt(tui.Commands(), bundle.SystemPrompt),
 		Store:              st,
 		Jobs:               mgr,
 		Local:              localReg,
 		FovaHome:           home,
-		ConfigDir:          config.ConfigDir(),
+		ConfigDir:          assets.Dir(),
 		WebhookPort:        webhookPort,
 		WebhookURL:         cfg.Webhook.EffectiveURL(),
 		BudgetLimitUSD:     cfg.Budget.SessionSoftLimitUSD,
 		InlineGraphicsMode: cfg.UI.InlineGraphics,
 		Guard:              guard,
+		SkillLoader:        skillLoader,
+		AssetReport:        bundle.Report,
 	})
 
 	p := tea.NewProgram(app, tea.WithAltScreen())
@@ -169,15 +169,14 @@ func runTUI() error {
 }
 
 // buildRegistry assembles the tool registry for a TUI session.
-func buildRegistry(workspace string, st *store.Store, mgr *jobmgr.Manager, models *llm.ModelRegistry, cfg config.Config, installer *local.Installer) *tools.Registry {
+func buildRegistry(workspace string, st *store.Store, mgr *jobmgr.Manager, models *llm.ModelRegistry, cfg assets.Config, installer *local.Installer, skillLoader *skills.Loader) *tools.Registry {
 	registry := tools.NewRegistry()
 	for _, t := range tools.NewFSTools(workspace) {
 		registry.Register(t)
 	}
 	registry.Register(fold.NewESMFold(workspace))
-	loader := skills.NewLoader()
-	registry.Register(loader.ListTool())
-	registry.Register(loader.ReadTool())
+	registry.Register(skillLoader.ListTool())
+	registry.Register(skillLoader.ReadTool())
 
 	// estd lets jobs.status / jobs.result surface each tool's advertised
 	// EstimatedDuration without taking a hard dependency on the full

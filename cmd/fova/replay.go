@@ -8,7 +8,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/alvarogonjim/fova/internal/agent"
-	"github.com/alvarogonjim/fova/internal/config"
+	"github.com/alvarogonjim/fova/internal/assets"
 	"github.com/alvarogonjim/fova/internal/llm"
 	"github.com/alvarogonjim/fova/internal/replay"
 	"github.com/alvarogonjim/fova/internal/tools"
@@ -80,11 +80,11 @@ var runReplayTUI = func(path string) error {
 	if err != nil {
 		return err
 	}
-	cat, err := config.LoadModels()
+	bundle, err := assets.Load()
 	if err != nil {
 		return err
 	}
-	models := llm.NewModelRegistry(cat)
+	models := llm.NewModelRegistry(bundle.Models)
 	// Best-effort: select the recorded model so the welcome line names it.
 	// A miss is non-fatal — replay never calls the provider.
 	_ = models.SetModel(doc.Model)
@@ -92,7 +92,7 @@ var runReplayTUI = func(path string) error {
 	app := tui.New(tui.Deps{
 		Registry:     tools.NewRegistry(),
 		Models:       models,
-		SystemPrompt: agent.BuildSystemPrompt(tui.Commands()),
+		SystemPrompt: agent.BuildSystemPrompt(tui.Commands(), bundle.SystemPrompt),
 		ReplayEvents: doc.Events,
 		ReplayPace:   true,
 	})

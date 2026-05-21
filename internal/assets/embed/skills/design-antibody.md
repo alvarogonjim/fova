@@ -1,3 +1,7 @@
+---
+name: design-antibody
+description: De novo antibody design and humanisation
+---
 # Skill: Designing antibodies
 
 ## When to use

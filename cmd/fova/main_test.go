@@ -5,10 +5,11 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/alvarogonjim/fova/internal/assets"
 	"github.com/alvarogonjim/fova/internal/backends/local"
-	"github.com/alvarogonjim/fova/internal/config"
 	jobmgr "github.com/alvarogonjim/fova/internal/jobs"
 	"github.com/alvarogonjim/fova/internal/llm"
+	"github.com/alvarogonjim/fova/internal/skills"
 	"github.com/alvarogonjim/fova/internal/store"
 )
 
@@ -54,7 +55,7 @@ func TestRunTUIWiresJobTools(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer st.Close()
-	reg := buildRegistry(t.TempDir(), st, jobmgr.NewManager(st, nil), llm.NewModelRegistry(config.DefaultCatalog()), config.DefaultConfig(), newTestInstaller(t))
+	reg := buildRegistry(t.TempDir(), st, jobmgr.NewManager(st, nil), llm.NewModelRegistry(assets.DefaultCatalog()), assets.DefaultConfig(), newTestInstaller(t), skills.NewLoader(nil))
 	for _, name := range []string{"jobs.list", "jobs.status", "jobs.cancel", "jobs.result"} {
 		if _, ok := reg.Get(name); !ok {
 			t.Errorf("registry missing %s", name)
@@ -73,7 +74,7 @@ func TestRunTUIWiresDesignAndScoreTools(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer st.Close()
-	reg := buildRegistry(t.TempDir(), st, jobmgr.NewManager(st, nil), llm.NewModelRegistry(config.DefaultCatalog()), config.DefaultConfig(), newTestInstaller(t))
+	reg := buildRegistry(t.TempDir(), st, jobmgr.NewManager(st, nil), llm.NewModelRegistry(assets.DefaultCatalog()), assets.DefaultConfig(), newTestInstaller(t), skills.NewLoader(nil))
 	for _, name := range []string{
 		"design.bindcraft", "design.rfdiffusion", "design.proteinmpnn",
 		"design.rfantibody", "design.chai2", "design.rfdiffusion2", "design.ligandmpnn",
@@ -94,7 +95,7 @@ func TestRunTUIWiresKnowledgeAndPlanTools(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer st.Close()
-	reg := buildRegistry(t.TempDir(), st, jobmgr.NewManager(st, nil), llm.NewModelRegistry(config.DefaultCatalog()), config.DefaultConfig(), newTestInstaller(t))
+	reg := buildRegistry(t.TempDir(), st, jobmgr.NewManager(st, nil), llm.NewModelRegistry(assets.DefaultCatalog()), assets.DefaultConfig(), newTestInstaller(t), skills.NewLoader(nil))
 	for _, name := range []string{
 		"knowledge.europepmc", "knowledge.openalex", "knowledge.s2",
 		"knowledge.biorxiv", "knowledge.crossref", "knowledge.uniprot",
@@ -127,7 +128,7 @@ func TestRunTUIWiresLabTools(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer st.Close()
-	reg := buildRegistry(t.TempDir(), st, jobmgr.NewManager(st, nil), llm.NewModelRegistry(config.DefaultCatalog()), config.DefaultConfig(), newTestInstaller(t))
+	reg := buildRegistry(t.TempDir(), st, jobmgr.NewManager(st, nil), llm.NewModelRegistry(assets.DefaultCatalog()), assets.DefaultConfig(), newTestInstaller(t), skills.NewLoader(nil))
 	for _, name := range []string{
 		"lab.targets_search", "lab.cost_estimate", "lab.submit_experiment",
 		"lab.experiment_status", "lab.results",

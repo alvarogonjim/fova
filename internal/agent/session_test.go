@@ -8,8 +8,9 @@ import (
 )
 
 func TestSystemPromptEmbedded(t *testing.T) {
-	if !strings.Contains(SystemPrompt, "You are fova") {
-		t.Fatal("system prompt not embedded")
+	prompt := BuildSystemPrompt(nil, fakeTemplate)
+	if !strings.Contains(prompt, "You are fova") {
+		t.Errorf("base preamble missing from rendered prompt")
 	}
 }
 

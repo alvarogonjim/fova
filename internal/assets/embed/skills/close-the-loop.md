@@ -1,3 +1,7 @@
+---
+name: close-the-loop
+description: Fold wet-lab results back into the next design round
+---
 # Skill: Closing the experimental loop
 
 ## When to use

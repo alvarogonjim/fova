@@ -13,7 +13,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/alvarogonjim/fova/internal/agent"
-	"github.com/alvarogonjim/fova/internal/config"
+	"github.com/alvarogonjim/fova/internal/assets"
 	"github.com/alvarogonjim/fova/internal/domain"
 	"github.com/alvarogonjim/fova/internal/llm"
 	"github.com/alvarogonjim/fova/internal/store"
@@ -23,8 +23,8 @@ import (
 func newTestApp() *Model {
 	return New(Deps{
 		Registry:     tools.NewRegistry(),
-		Models:       llm.NewModelRegistry(config.DefaultCatalog()),
-		SystemPrompt: agent.SystemPrompt,
+		Models:       llm.NewModelRegistry(assets.DefaultCatalog()),
+		SystemPrompt: assets.DefaultSystemPrompt(),
 	})
 }
 
@@ -37,8 +37,8 @@ func TestAppHeaderShowsWorkspacePath(t *testing.T) {
 	home := t.TempDir()
 	m := New(Deps{
 		Registry:     tools.NewRegistry(),
-		Models:       llm.NewModelRegistry(config.DefaultCatalog()),
-		SystemPrompt: agent.SystemPrompt,
+		Models:       llm.NewModelRegistry(assets.DefaultCatalog()),
+		SystemPrompt: assets.DefaultSystemPrompt(),
 		FovaHome:     home,
 	})
 	want := filepath.Join(home, "projects", "default")
@@ -57,8 +57,8 @@ func TestAppPersistsSessionAndMessages(t *testing.T) {
 
 	m := New(Deps{
 		Registry:     tools.NewRegistry(),
-		Models:       llm.NewModelRegistry(config.DefaultCatalog()),
-		SystemPrompt: agent.SystemPrompt,
+		Models:       llm.NewModelRegistry(assets.DefaultCatalog()),
+		SystemPrompt: assets.DefaultSystemPrompt(),
 		Store:        st,
 	})
 	if m.sessionID == "" {
@@ -171,8 +171,8 @@ func TestAppRefreshLoadsPanelsFromStore(t *testing.T) {
 
 	m := New(Deps{
 		Registry:     tools.NewRegistry(),
-		Models:       llm.NewModelRegistry(config.DefaultCatalog()),
-		SystemPrompt: agent.SystemPrompt,
+		Models:       llm.NewModelRegistry(assets.DefaultCatalog()),
+		SystemPrompt: assets.DefaultSystemPrompt(),
 		Store:        st,
 	})
 	m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
@@ -227,8 +227,8 @@ func TestAppPlanCommandShowsPersistedPlan(t *testing.T) {
 
 	m := New(Deps{
 		Registry:     tools.NewRegistry(),
-		Models:       llm.NewModelRegistry(config.DefaultCatalog()),
-		SystemPrompt: agent.SystemPrompt,
+		Models:       llm.NewModelRegistry(assets.DefaultCatalog()),
+		SystemPrompt: assets.DefaultSystemPrompt(),
 		Store:        st,
 	})
 	m.runSlashCommand("plan", "")
@@ -257,8 +257,8 @@ func TestAppPlanCommandPreservesNewlines(t *testing.T) {
 
 	m := New(Deps{
 		Registry:     tools.NewRegistry(),
-		Models:       llm.NewModelRegistry(config.DefaultCatalog()),
-		SystemPrompt: agent.SystemPrompt,
+		Models:       llm.NewModelRegistry(assets.DefaultCatalog()),
+		SystemPrompt: assets.DefaultSystemPrompt(),
 		Store:        st,
 	})
 	m.runSlashCommand("plan", "")
@@ -295,8 +295,8 @@ func TestAppPlanApprove(t *testing.T) {
 
 	m := New(Deps{
 		Registry:     tools.NewRegistry(),
-		Models:       llm.NewModelRegistry(config.DefaultCatalog()),
-		SystemPrompt: agent.SystemPrompt,
+		Models:       llm.NewModelRegistry(assets.DefaultCatalog()),
+		SystemPrompt: assets.DefaultSystemPrompt(),
 		Store:        st,
 	})
 	m.runSlashCommand("plan", "approve")
@@ -379,8 +379,8 @@ func newBoltzGenTestApp(t *testing.T, checkOutput string) (*Model, *store.Store)
 	}
 	m := New(Deps{
 		Registry:     reg,
-		Models:       llm.NewModelRegistry(config.DefaultCatalog()),
-		SystemPrompt: agent.SystemPrompt,
+		Models:       llm.NewModelRegistry(assets.DefaultCatalog()),
+		SystemPrompt: assets.DefaultSystemPrompt(),
 		Store:        st,
 		FovaHome:     home,
 	})
@@ -540,9 +540,9 @@ func TestAppTabFocusesRunningJob(t *testing.T) {
 }
 
 func TestAddTurnCostAccumulatesAndWarns(t *testing.T) {
-	cat := config.Catalog{
-		Providers: []config.Provider{{Name: "p", Kind: "anthropic"}},
-		Models:    []config.Model{{ID: "m", Provider: "p", InputPricePer1M: 100, OutputPricePer1M: 100}},
+	cat := assets.Catalog{
+		Providers: []assets.Provider{{Name: "p", Kind: "anthropic"}},
+		Models:    []assets.Model{{ID: "m", Provider: "p", InputPricePer1M: 100, OutputPricePer1M: 100}},
 	}
 	m := &Model{
 		chat:        newChatModel(NewTheme(), 80, 20),
@@ -574,7 +574,7 @@ func TestRunSlashCommandTheme(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("FOVA_CONFIG_DIR", dir)
 	// Materialise the embedded default so /theme has a config to mutate.
-	if _, err := config.LoadConfig(); err != nil {
+	if _, err := assets.LoadConfig(); err != nil {
 		t.Fatalf("seed LoadConfig: %v", err)
 	}
 
@@ -582,7 +582,7 @@ func TestRunSlashCommandTheme(t *testing.T) {
 	m.configDir = dir
 
 	m.runSlashCommand("theme", "dark")
-	got, err := config.LoadConfig()
+	got, err := assets.LoadConfig()
 	if err != nil {
 		t.Fatalf("LoadConfig after /theme: %v", err)
 	}
@@ -592,7 +592,7 @@ func TestRunSlashCommandTheme(t *testing.T) {
 
 	// A bad argument must not touch the file.
 	m.runSlashCommand("theme", "neon")
-	got2, err := config.LoadConfig()
+	got2, err := assets.LoadConfig()
 	if err != nil {
 		t.Fatalf("LoadConfig after bad /theme: %v", err)
 	}
@@ -608,10 +608,10 @@ func TestRunSlashCommandTheme(t *testing.T) {
 func TestRunSlashCommandThemePreservesOtherFields(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("FOVA_CONFIG_DIR", dir)
-	if _, err := config.LoadConfig(); err != nil {
+	if _, err := assets.LoadConfig(); err != nil {
 		t.Fatalf("seed LoadConfig: %v", err)
 	}
-	pre, err := config.LoadConfig()
+	pre, err := assets.LoadConfig()
 	if err != nil {
 		t.Fatalf("LoadConfig: %v", err)
 	}
@@ -620,7 +620,7 @@ func TestRunSlashCommandThemePreservesOtherFields(t *testing.T) {
 	m.configDir = dir
 	m.runSlashCommand("theme", "light")
 
-	got, err := config.LoadConfig()
+	got, err := assets.LoadConfig()
 	if err != nil {
 		t.Fatalf("LoadConfig after /theme: %v", err)
 	}
@@ -638,7 +638,7 @@ func TestRunSlashCommandThemePreservesOtherFields(t *testing.T) {
 func TestRunSlashCommandReload(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("FOVA_CONFIG_DIR", dir)
-	if _, err := config.LoadConfig(); err != nil {
+	if _, err := assets.LoadConfig(); err != nil {
 		t.Fatalf("seed LoadConfig: %v", err)
 	}
 

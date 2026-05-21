@@ -1,5 +1,4 @@
-// Package config loads fova's TOML configuration (SPECS §14).
-package config
+package assets
 
 import (
 	_ "embed"
@@ -12,7 +11,7 @@ import (
 	"github.com/BurntSushi/toml"
 )
 
-//go:embed models.toml
+//go:embed embed/models.toml
 var defaultModelsTOML string
 
 // Provider is an LLM endpoint. Kind is anthropic | google | openai (openai =
@@ -42,9 +41,9 @@ type Catalog struct {
 	Models    []Model    `toml:"model"`
 }
 
-// ConfigDir returns fova's config directory: $FOVA_CONFIG_DIR if set,
-// otherwise ~/.config/fova (SPECS §14.1).
-func ConfigDir() string {
+// Dir returns fova's config directory: $FOVA_CONFIG_DIR if set, otherwise
+// ~/.config/fova.
+func Dir() string {
 	if d := os.Getenv("FOVA_CONFIG_DIR"); d != "" {
 		return d
 	}
@@ -99,11 +98,11 @@ func DefaultCatalog() Catalog {
 	return c
 }
 
-// LoadModels loads the model catalog from <ConfigDir>/models.toml. If the file
+// LoadModels loads the model catalog from <Dir>/models.toml. If the file
 // does not exist, the embedded default is written there (first-run
 // materialization) and returned. A malformed or invalid file is an error.
 func LoadModels() (Catalog, error) {
-	dir := ConfigDir()
+	dir := Dir()
 	path := filepath.Join(dir, "models.toml")
 	body, err := os.ReadFile(path)
 	if errors.Is(err, fs.ErrNotExist) {

@@ -1,3 +1,7 @@
+---
+name: boltzgen-spec
+description: Author and validate a design.boltzgen specification YAML
+---
 # Skill: Authoring BoltzGen design specifications
 
 ## When to use

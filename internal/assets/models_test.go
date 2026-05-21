@@ -1,4 +1,4 @@
-package config
+package assets
 
 import (
 	"os"
@@ -57,8 +57,8 @@ provider = "x"
 
 func TestConfigDirHonoursEnv(t *testing.T) {
 	t.Setenv("FOVA_CONFIG_DIR", "/tmp/fova-cfg-xyz")
-	if got := ConfigDir(); got != "/tmp/fova-cfg-xyz" {
-		t.Errorf("ConfigDir = %q, want the env override", got)
+	if got := Dir(); got != "/tmp/fova-cfg-xyz" {
+		t.Errorf("Dir = %q, want the env override", got)
 	}
 }
 

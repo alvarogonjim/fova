@@ -1,4 +1,4 @@
-package config
+package assets
 
 import (
 	_ "embed"
@@ -12,7 +12,7 @@ import (
 	"github.com/BurntSushi/toml"
 )
 
-//go:embed config.toml
+//go:embed embed/config.toml
 var defaultConfigTOML string
 
 // UIConfig is the [ui] section of config.toml. Its consumers (theming, inline
@@ -132,7 +132,7 @@ func DefaultConfig() Config {
 	return c
 }
 
-// SaveConfig validates c and writes it to <ConfigDir>/config.toml, atomically
+// SaveConfig validates c and writes it to <Dir>/config.toml, atomically
 // via a temp file + rename. Every field of Config is encoded, so callers that
 // want to mutate one value should load → mutate → save (the unchanged fields
 // are preserved verbatim). SaveConfig never touches models.toml.
@@ -140,7 +140,7 @@ func SaveConfig(c Config) error {
 	if err := c.validate(); err != nil {
 		return fmt.Errorf("save config: %w", err)
 	}
-	dir := ConfigDir()
+	dir := Dir()
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("create config dir %s: %w", dir, err)
 	}
@@ -167,11 +167,11 @@ func SaveConfig(c Config) error {
 	return nil
 }
 
-// LoadConfig loads config.toml from <ConfigDir>. If the file does not exist,
+// LoadConfig loads config.toml from <Dir>. If the file does not exist,
 // the embedded default is written there (first-run materialization) and
 // returned. A malformed or invalid file is an error.
 func LoadConfig() (Config, error) {
-	dir := ConfigDir()
+	dir := Dir()
 	path := filepath.Join(dir, "config.toml")
 	body, err := os.ReadFile(path)
 	if errors.Is(err, fs.ErrNotExist) {

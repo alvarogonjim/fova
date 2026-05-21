@@ -5,35 +5,43 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+
+	"github.com/alvarogonjim/fova/internal/assets"
 )
 
-func TestLoaderListsBuiltinSkill(t *testing.T) {
-	l := NewLoader()
-	names := l.Names()
+func testSkills() []assets.Skill {
+	return []assets.Skill{
+		{Name: "filter-thresholds", Description: "Standard score cutoffs", Body: "rank by ipSAE"},
+		{Name: "design-binder", Description: "Binder design", Body: "use design.boltzgen"},
+	}
+}
+
+func TestLoaderListsSkill(t *testing.T) {
+	l := NewLoader(testSkills())
 	found := false
-	for _, n := range names {
+	for _, n := range l.Names() {
 		if n == "filter-thresholds" {
 			found = true
 		}
 	}
 	if !found {
-		t.Fatalf("filter-thresholds not loaded; got %v", names)
+		t.Fatalf("filter-thresholds not loaded; got %v", l.Names())
 	}
 }
 
-func TestSkillsListTool(t *testing.T) {
-	l := NewLoader()
+func TestSkillsListToolShowsDescriptions(t *testing.T) {
+	l := NewLoader(testSkills())
 	res, err := l.ListTool().Execute(context.Background(), json.RawMessage(`{}`))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(res.Display, "filter-thresholds") {
-		t.Fatalf("skills.list missing skill: %q", res.Display)
+	if !strings.Contains(res.Display, "filter-thresholds — Standard score cutoffs") {
+		t.Fatalf("skills.list missing the description column: %q", res.Display)
 	}
 }
 
-func TestSkillsReadTool(t *testing.T) {
-	l := NewLoader()
+func TestSkillsReadToolReturnsBody(t *testing.T) {
+	l := NewLoader(testSkills())
 	res, err := l.ReadTool().Execute(context.Background(),
 		json.RawMessage(`{"name":"filter-thresholds"}`))
 	if err != nil {

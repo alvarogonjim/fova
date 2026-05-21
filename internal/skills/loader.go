@@ -1,43 +1,32 @@
-// Package skills loads markdown skill files and exposes them as agent tools.
+// Package skills exposes loaded skills as the skills.list and skills.read
+// agent tools. The skills themselves are loaded by internal/assets.
 package skills
 
 import (
 	"context"
-	"embed"
 	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
 	"time"
 
+	"github.com/alvarogonjim/fova/internal/assets"
 	"github.com/alvarogonjim/fova/internal/domain"
 	"github.com/alvarogonjim/fova/internal/tools"
 )
 
-//go:embed builtin/*.md
-var builtinFS embed.FS
-
-// Loader holds the loaded skills, keyed by name (filename without ".md").
+// Loader holds the loaded skills, keyed by name.
 type Loader struct {
-	skills map[string]string
+	skills map[string]assets.Skill
 }
 
-// NewLoader reads every embedded built-in skill.
-func NewLoader() *Loader {
-	l := &Loader{skills: map[string]string{}}
-	entries, _ := builtinFS.ReadDir("builtin")
-	for _, e := range entries {
-		if !strings.HasSuffix(e.Name(), ".md") {
-			continue
-		}
-		data, err := builtinFS.ReadFile("builtin/" + e.Name())
-		if err != nil {
-			continue
-		}
-		name := strings.TrimSuffix(e.Name(), ".md")
-		l.skills[name] = string(data)
+// NewLoader wraps an already-loaded skill set (from assets.Bundle.Skills).
+func NewLoader(skills []assets.Skill) *Loader {
+	m := make(map[string]assets.Skill, len(skills))
+	for _, s := range skills {
+		m[s.Name] = s
 	}
-	return l
+	return &Loader{skills: m}
 }
 
 // Names returns the loaded skill names, sorted.
@@ -71,7 +60,11 @@ func (skillsList) EstimatedDuration(json.RawMessage) time.Duration { return time
 func (t skillsList) Execute(_ context.Context, input json.RawMessage) (tools.Result, error) {
 	var b strings.Builder
 	for _, n := range t.l.Names() {
-		fmt.Fprintf(&b, "- %s\n", n)
+		if d := t.l.skills[n].Description; d != "" {
+			fmt.Fprintf(&b, "- %s — %s\n", n, d)
+		} else {
+			fmt.Fprintf(&b, "- %s\n", n)
+		}
 	}
 	return tools.Result{
 		Display:    b.String(),
@@ -104,12 +97,12 @@ func (t skillsRead) Execute(_ context.Context, input json.RawMessage) (tools.Res
 	if err := json.Unmarshal(input, &in); err != nil {
 		return tools.Result{}, err
 	}
-	body, ok := t.l.skills[in.Name]
+	s, ok := t.l.skills[in.Name]
 	if !ok {
 		return tools.Result{}, fmt.Errorf("unknown skill %q", in.Name)
 	}
 	return tools.Result{
-		Display:    body,
+		Display:    s.Body,
 		Provenance: domain.NewToolCallRef("skills.read", input),
 	}, nil
 }

@@ -13,7 +13,7 @@
 #
 # Model weights (~6 GB, including the Boltz-2 refolding stack) are NOT baked
 # into the image: they're downloaded from HuggingFace on first run into
-# /models (mounted from ~/.proteus/models/boltzgen/ at run time) via the
+# /models (mounted from ~/fova/.fova/models/boltzgen/ at run time) via the
 # HF_HOME env var below.
 
 FROM nvcr.io/nvidia/pytorch:25.04-py3
@@ -24,6 +24,11 @@ WORKDIR /opt
 # can only succeed under `podman run --gpus all`; the tools.toml `smoke_test`
 # invokes verify_gpu.py at run time.
 COPY _base/verify_gpu.py /opt/_base/verify_gpu.py
+
+# Stage a tiny self-contained BoltzGen spec (a single designed protein chain,
+# no `file:` target). The tools.toml `smoke_test` runs `boltzgen check` on it
+# to validate install + spec parsing at install time — no GPU, no weights.
+COPY _base/boltzgen_example.yaml /opt/_base/boltzgen_example.yaml
 
 # BoltzGen install on the NGC PyTorch base — two aarch64-specific gotchas:
 #
@@ -50,8 +55,23 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN : > /etc/pip/constraint.txt \
  && PIP_CONSTRAINT= pip install --no-cache-dir boltzgen==0.3.2
 
+# Repair the NumPy-2.0 / tensorboard conflict.
+#
+# `pip install boltzgen==0.3.2` installs numpy==2.0.2. The NGC base bundles a
+# `tensorboard` (pulled in by PyTorch-Lightning's default TensorBoardLogger)
+# that was compiled against NumPy 1.x — it calls the removed `np.string_` and
+# crashes the pipeline at step 1. Reinstall a NumPy-2.0-compatible
+# `tensorboard` over the stale NGC one. PIP_CONSTRAINT= blanks the NGC pin so
+# the upgrade is allowed.
+RUN PIP_CONSTRAINT= pip install --no-cache-dir -U tensorboard
+
+# Build-time sanity check: a broken dependency set must fail the build, not
+# the first run. Importing numpy, tensorboard and torch together exercises
+# the exact path that crashed (tensorboard against NumPy 2.0).
+RUN python -c "import numpy, tensorboard, torch; print('deps ok', numpy.__version__)"
+
 # HuggingFace cache for the Boltz-2 weights + BoltzGen's own checkpoints.
-# /models is bind-mounted from ~/.proteus/models/boltzgen/ at run time so
+# /models is bind-mounted from ~/fova/.fova/models/boltzgen/ at run time so
 # weights survive image rebuilds and `/uninstall`.
 ENV HF_HOME=/models \
     HF_HUB_DOWNLOAD_TIMEOUT=600

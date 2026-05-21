@@ -18,6 +18,14 @@ func TestDefaultSystemPromptHasMarkerAndPreamble(t *testing.T) {
 	if !strings.Contains(p, "Do not invoke `jobs.cancel`") {
 		t.Error("embedded system.md is missing the long-running-job rule")
 	}
+	// Snapshot guard for the v0.6 "Bug 3" cancel-threshold wording — a reword
+	// of either phrase must go through the spec owner.
+	if !strings.Contains(p, "`elapsed < estimated`") {
+		t.Error("embedded system.md is missing the `elapsed < estimated` rule")
+	}
+	if !strings.Contains(p, "2 × estimated") {
+		t.Error("embedded system.md is missing the 2 × estimated cancel threshold")
+	}
 }
 
 func TestLoadSystemPromptValidFile(t *testing.T) {

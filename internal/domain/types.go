@@ -125,6 +125,7 @@ type DesignOrigin string
 
 const (
 	OriginBindCraft   DesignOrigin = "bindcraft"
+	OriginBoltzGen    DesignOrigin = "boltzgen"
 	OriginRFDiffMPNN  DesignOrigin = "rfdiff_mpnn"
 	OriginRFAntibody  DesignOrigin = "rfantibody"
 	OriginChai2       DesignOrigin = "chai2"

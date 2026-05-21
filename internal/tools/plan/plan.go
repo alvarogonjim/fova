@@ -29,11 +29,21 @@ type InstallChecker interface {
 	Status(name string) local.ToolStatus
 }
 
+// ToolRegistry reports whether an agent tool is registered. plan.create uses
+// it to reject a method whose design.* tool has no executable implementation
+// — a method blessed in compat.go and installed locally but never wired into
+// the registry (the design.boltzgen gap, 2026-05-21). *tools.Registry
+// satisfies this; tests can inject a fake.
+type ToolRegistry interface {
+	Get(name string) (tools.Tool, bool)
+}
+
 // CreateTool implements plan.create: build a DesignPlan from a target and
 // persist it for the user to review and approve.
 type CreateTool struct {
 	store     *store.Store
 	installer InstallChecker
+	registry  ToolRegistry
 }
 
 // NewPlanCreateTool builds the plan.create tool.
@@ -42,9 +52,18 @@ type CreateTool struct {
 // (Bug 11). Passing nil disables that check — only the in-memory schema
 // validation runs — which is useful for tests that don't care about the
 // install path, but production wiring always supplies a real installer.
-func NewPlanCreateTool(st *store.Store, installer InstallChecker) tools.Tool {
+//
+// The returned *CreateTool satisfies tools.Tool. Production wiring should
+// also call SetRegistry so plan.create can reject methods with no registered
+// design.* tool.
+func NewPlanCreateTool(st *store.Store, installer InstallChecker) *CreateTool {
 	return &CreateTool{store: st, installer: installer}
 }
+
+// SetRegistry wires the tools registry so plan.create can verify a method's
+// design.* tool is actually registered. A nil registry (the default) skips
+// that check.
+func (t *CreateTool) SetRegistry(r ToolRegistry) { t.registry = r }
 
 func (*CreateTool) Name() string { return "plan.create" }
 func (*CreateTool) Description() string {
@@ -72,7 +91,7 @@ func (*CreateTool) InputSchema() map[string]any {
 			"method": map[string]any{
 				"type": "string",
 				"description": "The primary design method/tool to run. Accepted: " +
-					"BindCraft, RFdiffusion, RFdiffusion2, ProteinMPNN, " +
+					"BindCraft, BoltzGen, RFdiffusion, RFdiffusion2, ProteinMPNN, " +
 					"LigandMPNN, RFantibody, Chai2 (the design.* registered " +
 					"name and lowercase tool name are also accepted). The " +
 					"method must be compatible with the chosen application " +
@@ -173,7 +192,7 @@ func (t *CreateTool) Execute(_ context.Context, input json.RawMessage) (tools.Re
 	if !ok {
 		return tools.Result{}, fmt.Errorf(
 			"plan.create: method %q is not a known design method — accepted "+
-				"names: BindCraft, RFdiffusion, RFdiffusion2, ProteinMPNN, "+
+				"names: BindCraft, BoltzGen, RFdiffusion, RFdiffusion2, ProteinMPNN, "+
 				"LigandMPNN, RFantibody, Chai2 (lower-case and design.* "+
 				"forms also accepted)", p.Method)
 	}
@@ -186,6 +205,9 @@ func (t *CreateTool) Execute(_ context.Context, input json.RawMessage) (tools.Re
 			strings.Join(compatibleMethods(p.Application), ", "))
 	}
 	if err := t.checkInstalled(method); err != nil {
+		return tools.Result{}, err
+	}
+	if err := t.checkRegistered(method); err != nil {
 		return tools.Result{}, err
 	}
 	if err := validateFilters(input, p.Filters); err != nil {
@@ -384,6 +406,32 @@ func (t *CreateTool) checkInstalled(m Method) error {
 			"— run /install %s or pick a different method (see /doctor "+
 			"for the full tool status)",
 		m, tool, tool)
+}
+
+// checkRegistered returns an error if the agent-facing design.* tool for
+// method m is not in the tools registry. This catches a method that is
+// blessed in compat.go and installed locally but never wired up as an
+// executable tool — the design.boltzgen gap found on 2026-05-21, where an
+// approved BoltzGen plan could not run because no design.boltzgen tool
+// existed. A nil registry (legacy/test paths) skips the check.
+func (t *CreateTool) checkRegistered(m Method) error {
+	if t.registry == nil {
+		return nil
+	}
+	name := designToolForMethod(m)
+	if name == "" {
+		return fmt.Errorf(
+			"plan.create: method %q has no design.* tool mapping — extend "+
+				"designToolForMethod in compat.go", m)
+	}
+	if _, ok := t.registry.Get(name); !ok {
+		return fmt.Errorf(
+			"plan.create: method %q resolves to tool %q, which is not registered "+
+				"— the method is listed in compat.go but no executable tool is "+
+				"wired into the registry. Pick a different method, or register %s.",
+			m, name, name)
+	}
+	return nil
 }
 
 // validateFilters bounds-checks every populated field in FilterConfig and

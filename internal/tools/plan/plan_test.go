@@ -497,3 +497,48 @@ func TestPlanCreateAcceptsCompatibleApplicationMethod(t *testing.T) {
 		}
 	}
 }
+
+// fakeRegistry is a ToolRegistry stub reporting a fixed set of tool names as
+// registered.
+type fakeRegistry map[string]bool
+
+func (f fakeRegistry) Get(name string) (tools.Tool, bool) { return nil, f[name] }
+
+// TestCheckRegisteredRejectsUnwiredMethod guards the design.boltzgen-class
+// gap: a method blessed in compat.go whose design.* tool was never wired
+// into the registry must be rejected at plan.create time.
+func TestCheckRegisteredRejectsUnwiredMethod(t *testing.T) {
+	ct := &CreateTool{registry: fakeRegistry{"design.bindcraft": true}}
+
+	if err := ct.checkRegistered(MethodBindCraft); err != nil {
+		t.Errorf("a registered method must pass checkRegistered: %v", err)
+	}
+
+	err := ct.checkRegistered(MethodBoltzGen)
+	if err == nil {
+		t.Fatal("a method whose design.* tool is not registered must be rejected")
+	}
+	if !strings.Contains(err.Error(), "design.boltzgen") {
+		t.Errorf("error should name the missing tool; got: %v", err)
+	}
+
+	// A nil registry (legacy/test wiring) skips the check.
+	ct.registry = nil
+	if err := ct.checkRegistered(MethodBoltzGen); err != nil {
+		t.Errorf("nil registry must skip the check: %v", err)
+	}
+}
+
+// TestDesignToolForMethodIsTotal ensures every compat.go Method maps to a
+// non-empty design.* tool name — so checkRegistered never trips on its own
+// "no mapping" branch for a known method.
+func TestDesignToolForMethodIsTotal(t *testing.T) {
+	for _, m := range []Method{
+		MethodBindCraft, MethodBoltzGen, MethodRFdiffusion, MethodRFdiffusion2,
+		MethodProteinMPNN, MethodLigandMPNN, MethodRFantibody, MethodChai2,
+	} {
+		if got := designToolForMethod(m); got == "" {
+			t.Errorf("designToolForMethod(%q) is empty — add it to compat.go", m)
+		}
+	}
+}

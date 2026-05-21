@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -15,11 +16,14 @@ import (
 func init() { registerAdapter(chai1Adapter{}) }
 
 // chai1Adapter wires fold.chai1 to the container-mode Chai-1 image: it
-// compiles the agent's typed multi-entity request into a Chai-1 input FASTA,
-// runs `chai-lab fold` inside the tool image with the host weights cache
-// bind-mounted at /models (CHAI_DOWNLOADS_DIR is set to /models inside the
-// image), and returns the produced CIF/PDB(s) in the {"designs":[...]}
-// envelope.
+// compiles the agent's typed multi-entity request (protein/dna/rna/ligand/
+// glycan entities, restraints, templates, MSA choice, model parameters) into a
+// Chai-1 input FASTA and an optional restraint CSV, stages any precomputed MSA
+// directory and template-hits file into the workdir, runs `chai-lab fold`
+// inside the tool image with the install-time weights cache bind-mounted at
+// /models (CHAI_DOWNLOADS_DIR is set to /models inside the image), and returns
+// the produced structures — with their .npz confidence scores — in the
+// {"designs":[...]} envelope.
 type chai1Adapter struct{}
 
 func (chai1Adapter) AgentTool() string { return "fold.chai1" }
@@ -218,14 +222,50 @@ func parseChai1Output(outDir string) ([]designOut, error) {
 	return designs, nil
 }
 
-// Invoke writes the FASTA, runs `chai-lab fold` inside the tool image, and
-// parses the produced structure file(s) into the {"designs":[...]} envelope.
-// The image's ENTRYPOINT is ["chai-lab"], so Cmd starts with "fold".
+// chai1MSAIsPath reports whether a request's MSA field names a precomputed MSA
+// directory (anything other than the two reserved keywords or the empty
+// string, which is treated as "default").
+func chai1MSAIsPath(msa string) bool {
+	return msa != "" && msa != "default" && msa != "server"
+}
+
+// copyChai1Dir recursively copies the directory tree rooted at src into dst,
+// recreating sub-directories and copying regular files. It is used to stage a
+// precomputed MSA directory into the container workdir.
+func copyChai1Dir(src, dst string) error {
+	return filepath.WalkDir(src, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(src, p)
+		if err != nil {
+			return err
+		}
+		target := filepath.Join(dst, rel)
+		if d.IsDir() {
+			return os.MkdirAll(target, 0o755)
+		}
+		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+			return err
+		}
+		return copyFile(p, target)
+	})
+}
+
+// Invoke compiles the typed multi-entity request into a Chai-1 input FASTA
+// (and a restraint CSV when restraints are present), stages any precomputed
+// MSA directory and template-hits file into the workdir, runs `chai-lab fold`
+// inside the tool image with the install-time weights cache bind-mounted at
+// /models, and parses the produced structures — with their .npz confidence
+// scores — into the {"designs":[...]} envelope. The image's ENTRYPOINT is
+// ["chai-lab"], so Cmd starts with the `fold` subcommand.
 func (chai1Adapter) Invoke(ctx context.Context, env AdapterEnv, request []byte) ([]byte, error) {
 	var req chai1Request
 	if err := json.Unmarshal(request, &req); err != nil {
 		return nil, fmt.Errorf("fold.chai1: invalid request: %w", err)
 	}
+	// The tool's preflight is the primary input guard; this is the
+	// backend-side backstop against a malformed request reaching the runtime.
 	if len(req.Entities) == 0 {
 		return nil, fmt.Errorf("fold.chai1: at least one entity is required")
 	}
@@ -236,9 +276,34 @@ func (chai1Adapter) Invoke(ctx context.Context, env AdapterEnv, request []byte) 
 		return nil, fmt.Errorf("fold.chai1: container image is not configured (run /install chai1)")
 	}
 
+	// Stage any precomputed MSA directory and template-hits file into the
+	// workdir so the container flags reference paths resolvable at /work.
+	stagedMSADir := ""
+	if chai1MSAIsPath(req.MSA) {
+		base := filepath.Base(req.MSA)
+		if err := copyChai1Dir(req.MSA, filepath.Join(env.WorkDir, base)); err != nil {
+			return nil, fmt.Errorf("fold.chai1: stage MSA directory %q: %w", req.MSA, err)
+		}
+		stagedMSADir = base
+	}
+	stagedHits := ""
+	if req.Templates != nil && req.Templates.HitsPath != "" {
+		base := filepath.Base(req.Templates.HitsPath)
+		if err := copyFile(req.Templates.HitsPath, filepath.Join(env.WorkDir, base)); err != nil {
+			return nil, fmt.Errorf("fold.chai1: stage template hits %q: %w", req.Templates.HitsPath, err)
+		}
+		stagedHits = base
+	}
+
 	inputFASTA := filepath.Join(env.WorkDir, "in.fasta")
 	if err := os.WriteFile(inputFASTA, []byte(buildChai1FASTA(req)), 0o644); err != nil {
 		return nil, fmt.Errorf("fold.chai1: write input FASTA: %w", err)
+	}
+	if len(req.Restraints) > 0 {
+		restraintsPath := filepath.Join(env.WorkDir, "restraints.csv")
+		if err := os.WriteFile(restraintsPath, []byte(buildChai1Restraints(req.Restraints)), 0o644); err != nil {
+			return nil, fmt.Errorf("fold.chai1: write restraint CSV: %w", err)
+		}
 	}
 	outDir := filepath.Join(env.WorkDir, "out")
 	if err := os.MkdirAll(outDir, 0o755); err != nil {
@@ -256,14 +321,41 @@ func (chai1Adapter) Invoke(ctx context.Context, env AdapterEnv, request []byte) 
 			env.Recipe.ImageTag)
 	}
 
-	mounts := []Mount{{HostPath: env.WorkDir, ContainerPath: "/work"}}
+	// Chai-1 weights (~1.3 GB) are fetched at /install time into this cache.
+	// A missing cache means install did not complete, so validate it exists
+	// (os.Stat) rather than creating it (spec §2).
 	modelsCache := ModelsRoot(env.Registry.Home(), "chai1")
-	if err := os.MkdirAll(modelsCache, 0o755); err != nil {
-		return nil, fmt.Errorf("fold.chai1: create weights cache %s: %w", modelsCache, err)
+	if info, err := os.Stat(modelsCache); err != nil || !info.IsDir() {
+		return nil, fmt.Errorf(
+			"fold.chai1: weights cache %s missing — run /install chai1",
+			modelsCache)
 	}
-	mounts = append(mounts, Mount{HostPath: modelsCache, ContainerPath: "/models"})
 
+	// ENTRYPOINT is ["chai-lab"]; the subcommand `fold` plus the FASTA and
+	// output dir are passed as positional args, followed by model-parameter
+	// flags and the fova-derived infrastructure flags.
 	cmd := []string{"fold", "/work/in.fasta", "/work/out"}
+	cmd = append(cmd, chai1Args(req)...)
+	if req.MSA == "server" {
+		cmd = append(cmd, "--use-msa-server")
+	}
+	if stagedMSADir != "" {
+		cmd = append(cmd, "--msa-directory", "/work/"+stagedMSADir)
+	}
+	if req.Templates != nil && req.Templates.Server {
+		cmd = append(cmd, "--use-templates-server")
+	}
+	if stagedHits != "" {
+		cmd = append(cmd, "--template-hits-path", "/work/"+stagedHits)
+	}
+	if len(req.Restraints) > 0 {
+		cmd = append(cmd, "--constraint-path", "/work/restraints.csv")
+	}
+
+	mounts := []Mount{
+		{HostPath: env.WorkDir, ContainerPath: "/work"},
+		{HostPath: modelsCache, ContainerPath: "/models"},
+	}
 	if _, err := rt.RunContainer(ctx, ContainerRunArgs{
 		Image:   env.Recipe.ImageTag,
 		Cmd:     cmd,
@@ -281,6 +373,9 @@ func (chai1Adapter) Invoke(ctx context.Context, env AdapterEnv, request []byte) 
 		return nil, err
 	}
 
+	// Optional: copy the top structure to the workspace-side path the caller
+	// requested. env.WorkDir is removed when RunDesign returns, so without
+	// this hop the structure_file path would dangle.
 	if dst := strings.TrimSpace(req.SaveAs); dst != "" {
 		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 			return nil, fmt.Errorf("fold.chai1: stage save_as parent: %w", err)

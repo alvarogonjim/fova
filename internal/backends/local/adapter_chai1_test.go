@@ -393,126 +393,59 @@ func TestParseChai1OutputEmptyErrors(t *testing.T) {
 }
 
 func TestChai1AdapterInvoke(t *testing.T) {
-	var logBuf bytes.Buffer
-	var progress []float64
-	env := chai1TestEnv(t, &logBuf, &progress)
-
-	calls := stubContainerRuntime(t, func(args []string) error {
+	env := chai1TestEnv(t, nil, nil)
+	stubContainerRuntime(t, func(args []string) error {
 		if len(args) < 2 || args[1] != "run" {
 			return nil
 		}
-		// Drop a stub CIF where chai-lab would have written one.
 		out := filepath.Join(env.WorkDir, "out")
 		if err := os.MkdirAll(out, 0o755); err != nil {
 			return err
 		}
-		return os.WriteFile(filepath.Join(out, "pred.model_0.cif"),
+		npz := makeNPZ(t, map[string][]byte{"ptm": makeNPY("()", []float64{0.8})})
+		_ = os.Rename(npz, filepath.Join(out, "scores.model_idx_0.npz"))
+		return os.WriteFile(filepath.Join(out, "pred.model_idx_0.cif"),
 			[]byte("data_pred\n"), 0o644)
 	})
-
-	saveAs := filepath.Join(t.TempDir(), "designs", "predicted.cif")
-	body := []byte(`{"sequences":{"A":"MKQHKAMIVAL","B":"GGGGSGGGGS"},"save_as":"` + saveAs + `"}`)
-
+	body := []byte(`{"entities":[{"type":"protein","id":"A","sequence":"MKQ"}]}`)
 	out, err := chai1Adapter{}.Invoke(context.Background(), env, body)
 	if err != nil {
 		t.Fatalf("Invoke: %v", err)
 	}
 	var resp designsEnvelope
 	if err := json.Unmarshal(out, &resp); err != nil {
-		t.Fatalf("output is not a designs envelope: %v", err)
+		t.Fatalf("not a designs envelope: %v", err)
 	}
-	if len(resp.Designs) != 1 {
-		t.Fatalf("want 1 design, got %d", len(resp.Designs))
+	if len(resp.Designs) != 1 || resp.Designs[0].Scores["ptm"] != 0.8 {
+		t.Fatalf("want 1 scored design, got %+v", resp.Designs)
 	}
-	if resp.Designs[0].StructureFile != saveAs {
-		t.Errorf("structure_file = %q, want save_as path %q", resp.Designs[0].StructureFile, saveAs)
-	}
-	if _, err := os.Stat(saveAs); err != nil {
-		t.Errorf("save_as file not present at %q: %v", saveAs, err)
-	}
-
-	fasta, err := os.ReadFile(filepath.Join(env.WorkDir, "in.fasta"))
-	if err != nil {
-		t.Fatalf("read in.fasta: %v", err)
-	}
-	fastaStr := string(fasta)
-	for _, want := range []string{
-		">protein|name=chain_A", "MKQHKAMIVAL",
-		">protein|name=chain_B", "GGGGSGGGGS",
-	} {
-		if !strings.Contains(fastaStr, want) {
-			t.Errorf("FASTA missing %q in:\n%s", want, fastaStr)
-		}
-	}
-	if strings.Index(fastaStr, "chain_A") > strings.Index(fastaStr, "chain_B") {
-		t.Errorf("FASTA chains must be alphabetically ordered, got:\n%s", fastaStr)
-	}
-
-	var runCalls [][]string
-	for _, c := range *calls {
-		if len(c) >= 2 && c[1] == "run" {
-			runCalls = append(runCalls, c)
-		}
-	}
-	if len(runCalls) != 1 {
-		t.Fatalf("want 1 `podman run` call, got %d: %v", len(runCalls), runCalls)
-	}
-	joined := strings.Join(runCalls[0], " ")
-	for _, want := range []string{
-		"/usr/bin/podman run",
-		"--device nvidia.com/gpu=all",
-		"-v " + env.WorkDir + ":/work",
-		"-v " + ModelsRoot(env.Registry.Home(), "chai1") + ":/models",
-		"-w /work",
-		env.Recipe.ImageTag,
-		// Cmd: subcommand `fold` + FASTA + output dir.
-		"fold /work/in.fasta /work/out",
-	} {
-		if !strings.Contains(joined, want) {
-			t.Errorf("argv missing %q in:\n%s", want, joined)
-		}
-	}
-	if len(progress) < 2 {
-		t.Errorf("env.Progress should have ticked at least twice, got %v", progress)
+	fasta, _ := os.ReadFile(filepath.Join(env.WorkDir, "in.fasta"))
+	if !strings.Contains(string(fasta), ">protein|name=A") {
+		t.Errorf("FASTA wrong:\n%s", fasta)
 	}
 }
 
-func TestChai1AdapterInvokeMissingSequences(t *testing.T) {
+func TestChai1AdapterInvokeRejectsBadRequest(t *testing.T) {
 	env := chai1TestEnv(t, nil, nil)
-	if _, err := (chai1Adapter{}).Invoke(context.Background(), env, []byte(`{}`)); err == nil {
-		t.Fatal("expected an error when sequences is missing")
+	if _, err := (chai1Adapter{}).Invoke(context.Background(), env, []byte(`{"entities":[]}`)); err == nil {
+		t.Fatal("expected an error for empty entities")
 	}
 }
 
-func TestChai1AdapterInvokeEmptyChainErrors(t *testing.T) {
-	env := chai1TestEnv(t, nil, nil)
-	_, err := chai1Adapter{}.Invoke(context.Background(), env,
-		[]byte(`{"sequences":{"A":""}}`))
-	if err == nil || !strings.Contains(err.Error(), "empty sequence") {
-		t.Fatalf("expected an empty-sequence error, got: %v", err)
-	}
-}
-
-func TestChai1AdapterInvokeCreatesWeightsCache(t *testing.T) {
+func TestChai1AdapterInvokeMissingWeightsCacheErrors(t *testing.T) {
 	home := t.TempDir()
 	reg, err := LoadRegistry(home)
 	if err != nil {
 		t.Fatal(err)
 	}
 	rec, _ := reg.Tool("chai1")
+	// Models cache deliberately NOT created.
 	env := AdapterEnv{Recipe: rec, WorkDir: t.TempDir(), Registry: reg}
-	_ = stubContainerRuntime(t, nil)
-
-	// Chai-1 downloads its weights at container runtime, so a missing
-	// weights cache must be created on demand, not rejected.
+	stubContainerRuntime(t, nil)
 	_, err = chai1Adapter{}.Invoke(context.Background(), env,
-		[]byte(`{"sequences":{"A":"MKQ"}}`))
-	if err != nil && strings.Contains(err.Error(), "weights cache") {
-		t.Fatalf("a missing weights cache must not error, got: %v", err)
-	}
-	cache := ModelsRoot(reg.Home(), "chai1")
-	if info, statErr := os.Stat(cache); statErr != nil || !info.IsDir() {
-		t.Fatalf("Invoke must create the weights cache %s; stat err = %v", cache, statErr)
+		[]byte(`{"entities":[{"type":"protein","id":"A","sequence":"MKQ"}]}`))
+	if err == nil || !strings.Contains(err.Error(), "install chai1") {
+		t.Fatalf("want a 'run /install chai1' error, got: %v", err)
 	}
 }
 

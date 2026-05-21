@@ -325,6 +325,20 @@ func TestBuildChai1Restraints(t *testing.T) {
 	}
 }
 
+func TestChai1Args(t *testing.T) {
+	r, s := 5, 7
+	got := strings.Join(chai1Args(chai1Request{
+		NumTrunkRecycles: &r, NumDiffnSamples: &s}), " ")
+	for _, want := range []string{"--num-trunk-recycles 5", "--num-diffn-samples 7"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("args missing %q in %q", want, got)
+		}
+	}
+	if strings.Contains(strings.Join(chai1Args(chai1Request{}), " "), "--seed") {
+		t.Error("an unset seed must omit the flag")
+	}
+}
+
 func TestParseChai1Output(t *testing.T) {
 	outDir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(outDir, "pred.model_0.cif"),

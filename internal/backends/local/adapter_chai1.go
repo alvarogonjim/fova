@@ -122,6 +122,32 @@ func buildChai1Restraints(rs []chai1Restraint) string {
 	return b.String()
 }
 
+// chai1Args maps the model-parameter fields of a chai1Request to `chai-lab
+// fold` CLI flags. A nil pointer omits its flag entirely so Chai-1 falls back
+// to its own default. The infrastructure flags (--use-msa-server,
+// --msa-directory, --use-templates-server, --template-hits-path,
+// --constraint-path) are derived in Invoke, not here.
+func chai1Args(req chai1Request) []string {
+	var args []string
+	type flag struct {
+		name string
+		val  *int
+	}
+	for _, f := range []flag{
+		{"--num-trunk-recycles", req.NumTrunkRecycles},
+		{"--num-diffn-timesteps", req.NumDiffnTimesteps},
+		{"--num-diffn-samples", req.NumDiffnSamples},
+		{"--num-trunk-samples", req.NumTrunkSamples},
+		{"--recycle-msa-subsample", req.RecycleMSASubsample},
+		{"--seed", req.Seed},
+	} {
+		if f.val != nil {
+			args = append(args, f.name, strconv.Itoa(*f.val))
+		}
+	}
+	return args
+}
+
 // parseChai1Output collects every CIF and PDB under outDir, returning one
 // designOut per file. Chai-1 emits CIFs by default; we accept both to keep
 // the parser tolerant of an upstream flag flip.

@@ -76,22 +76,30 @@ func stubContainerRuntime(t *testing.T, onRun func(args []string) error) *[][]st
 	return calls
 }
 
-func TestWriteBoltz2YAMLDeterministic(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "in.yaml")
-	if err := writeBoltz2YAML(path, map[string]string{"B": "MMMM", "A": "AAAA"}); err != nil {
-		t.Fatalf("writeBoltz2YAML: %v", err)
-	}
-	body, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	got := string(body)
-	want := "sequences:\n" +
-		"  - protein:\n      id: A\n      sequence: AAAA\n      msa: empty\n" +
-		"  - protein:\n      id: B\n      sequence: MMMM\n      msa: empty\n"
+func TestBuildBoltz2YAML(t *testing.T) {
+	req := boltz2Request{Entities: []boltz2Entity{
+		{Type: "protein", ID: chainIDs{"A"}, Sequence: "MKQ", MSA: "empty"},
+		{Type: "protein", ID: chainIDs{"B", "C"}, Sequence: "AAA"},
+		{Type: "ligand", ID: chainIDs{"L"}, SMILES: "CCO"},
+		{Type: "rna", ID: chainIDs{"R"}, Sequence: "ACGU", Cyclic: true},
+	}}
+	got := buildBoltz2YAML(req)
+	want := "version: 1\n" +
+		"sequences:\n" +
+		"  - protein:\n      id: A\n      sequence: MKQ\n      msa: empty\n" +
+		"  - protein:\n      id: [B, C]\n      sequence: AAA\n" +
+		"  - ligand:\n      id: L\n      smiles: CCO\n" +
+		"  - rna:\n      id: R\n      sequence: ACGU\n      cyclic: true\n"
 	if got != want {
 		t.Errorf("yaml mismatch\n got:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+func TestBuildBoltz2YAMLServerMSAOmitsLine(t *testing.T) {
+	req := boltz2Request{Entities: []boltz2Entity{
+		{Type: "protein", ID: chainIDs{"A"}, Sequence: "MKQ", MSA: "server"}}}
+	if strings.Contains(buildBoltz2YAML(req), "msa:") {
+		t.Error("msa: server must omit the msa line so --use_msa_server fills it")
 	}
 }
 

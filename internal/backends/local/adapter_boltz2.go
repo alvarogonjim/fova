@@ -23,42 +23,86 @@ type boltz2Adapter struct{}
 func (boltz2Adapter) AgentTool() string { return "fold.boltz2" }
 func (boltz2Adapter) Recipe() string    { return "boltz2" }
 
-// boltz2Request is the subset of the fold.boltz2 input the adapter uses.
-//   - Sequences: chain id → amino-acid sequence (every chain becomes a protein
-//     record in the Boltz YAML, with `msa: empty` so the in-image MSA dance is
-//     skipped — matches the smoke_test).
-//   - SaveAs: optional workspace-side path the parsed PDB is copied to so the
-//     caller can locate the structure outside env.WorkDir (the temp dir is
-//     wiped on return from RunDesign).
+// chainIDs unmarshals a JSON chain id given either as a string ("A") or a
+// string array (["B","C"]) into a uniform []string.
+type chainIDs []string
+
+func (c *chainIDs) UnmarshalJSON(b []byte) error {
+	var one string
+	if err := json.Unmarshal(b, &one); err == nil {
+		*c = chainIDs{one}
+		return nil
+	}
+	var many []string
+	if err := json.Unmarshal(b, &many); err != nil {
+		return fmt.Errorf("id must be a string or a list of strings: %w", err)
+	}
+	*c = chainIDs(many)
+	return nil
+}
+
+// boltz2Entity is one molecular component of the predicted complex.
+type boltz2Entity struct {
+	Type     string   `json:"type"`     // protein | dna | rna | ligand
+	ID       chainIDs `json:"id"`       // one or more chain ids
+	Sequence string   `json:"sequence"` // protein/dna/rna
+	SMILES   string   `json:"smiles"`   // ligand (exclusive with ccd)
+	CCD      string   `json:"ccd"`      // ligand (exclusive with smiles)
+	MSA      string   `json:"msa"`      // "empty" | "server" | workspace path; protein/dna/rna
+	Cyclic   bool     `json:"cyclic"`   // protein/dna/rna
+}
+
+// boltz2Request is the full fold.boltz2 input. Pointer fields are model
+// parameters: nil ⇒ omit the CLI flag and let Boltz-2 use its own default.
 type boltz2Request struct {
-	Sequences map[string]string `json:"sequences"`
-	SaveAs    string            `json:"save_as"`
+	Entities         []boltz2Entity `json:"entities"`
+	RecyclingSteps   *int           `json:"recycling_steps"`
+	SamplingSteps    *int           `json:"sampling_steps"`
+	DiffusionSamples *int           `json:"diffusion_samples"`
+	StepScale        *float64       `json:"step_scale"`
+	OutputFormat     string         `json:"output_format"` // "pdb" (default) | "mmcif"
+	SaveAs           string         `json:"save_as"`
 }
 
-// sortedChains returns the chain IDs in deterministic alphabetical order so
-// the YAML written into env.WorkDir is stable across runs (and testable).
-func sortedChains(seqs map[string]string) []string {
-	keys := make([]string, 0, len(seqs))
-	for k := range seqs {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	return keys
-}
-
-// writeBoltz2YAML renders the Boltz-2 input file. The schema mirrors the
-// upstream README example (sequences:\n  - protein:\n      id: …\n
-// sequence: …\n      msa: empty). msa: empty is critical: it skips the
-// in-process MSA server (which we don't have on the GB10) so `boltz predict`
-// folds the sequence as-is.
-func writeBoltz2YAML(path string, seqs map[string]string) error {
+// buildBoltz2YAML renders the Boltz-2 v1 input document for any entity mix.
+// One list item per entity in input order; the item key is the entity type.
+// `id` is a scalar for a single chain or a flow list ([B, C]) for several.
+// `sequence` is emitted for protein/dna/rna; `smiles`/`ccd` for ligand. The
+// `msa` line is emitted for protein/dna/rna when MSA is "" or "empty" (as
+// `msa: empty`) or a staged path; it is omitted when MSA is "server" so
+// `--use_msa_server` fills it. `cyclic: true` is emitted only when set.
+func buildBoltz2YAML(req boltz2Request) string {
 	var b strings.Builder
+	b.WriteString("version: 1\n")
 	b.WriteString("sequences:\n")
-	for _, id := range sortedChains(seqs) {
-		fmt.Fprintf(&b, "  - protein:\n      id: %s\n      sequence: %s\n      msa: empty\n",
-			id, seqs[id])
+	for _, e := range req.Entities {
+		fmt.Fprintf(&b, "  - %s:\n", e.Type)
+		if len(e.ID) == 1 {
+			fmt.Fprintf(&b, "      id: %s\n", e.ID[0])
+		} else {
+			fmt.Fprintf(&b, "      id: [%s]\n", strings.Join(e.ID, ", "))
+		}
+		switch e.Type {
+		case "ligand":
+			if e.SMILES != "" {
+				fmt.Fprintf(&b, "      smiles: %s\n", e.SMILES)
+			} else if e.CCD != "" {
+				fmt.Fprintf(&b, "      ccd: %s\n", e.CCD)
+			}
+		default: // protein / dna / rna
+			fmt.Fprintf(&b, "      sequence: %s\n", e.Sequence)
+			// `msa: empty` or a staged path is emitted as given; an unset MSA
+			// ("") omits the line entirely, as does "server" (so
+			// --use_msa_server fills it).
+			if e.MSA != "" && e.MSA != "server" {
+				fmt.Fprintf(&b, "      msa: %s\n", e.MSA)
+			}
+			if e.Cyclic {
+				b.WriteString("      cyclic: true\n")
+			}
+		}
 	}
-	return os.WriteFile(path, []byte(b.String()), 0o644)
+	return b.String()
 }
 
 // parseBoltz2Output collects every PDB under outDir (Boltz writes per-input
@@ -106,13 +150,8 @@ func (boltz2Adapter) Invoke(ctx context.Context, env AdapterEnv, request []byte)
 	if err := json.Unmarshal(request, &req); err != nil {
 		return nil, fmt.Errorf("fold.boltz2: invalid request: %w", err)
 	}
-	if len(req.Sequences) == 0 {
-		return nil, fmt.Errorf("fold.boltz2: at least one chain is required in \"sequences\"")
-	}
-	for id, seq := range req.Sequences {
-		if strings.TrimSpace(seq) == "" {
-			return nil, fmt.Errorf("fold.boltz2: chain %q has an empty sequence", id)
-		}
+	if len(req.Entities) == 0 {
+		return nil, fmt.Errorf("fold.boltz2: at least one entity is required")
 	}
 	if env.Registry == nil {
 		return nil, fmt.Errorf("fold.boltz2: adapter registry unavailable")
@@ -122,7 +161,7 @@ func (boltz2Adapter) Invoke(ctx context.Context, env AdapterEnv, request []byte)
 	}
 
 	inputYAML := filepath.Join(env.WorkDir, "in.yaml")
-	if err := writeBoltz2YAML(inputYAML, req.Sequences); err != nil {
+	if err := os.WriteFile(inputYAML, []byte(buildBoltz2YAML(req)), 0o644); err != nil {
 		return nil, fmt.Errorf("fold.boltz2: write input YAML: %w", err)
 	}
 	outDir := filepath.Join(env.WorkDir, "out")

@@ -39,6 +39,9 @@ func (l *Loader) Names() []string {
 	return names
 }
 
+// Skill returns the loaded skill with the given name (zero value if absent).
+func (l *Loader) Skill(name string) assets.Skill { return l.skills[name] }
+
 // ListTool returns the skills.list tool.
 func (l *Loader) ListTool() tools.Tool { return skillsList{l} }
 

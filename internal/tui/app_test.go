@@ -12,6 +12,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/alvarogonjim/fova/internal/agent"
+	"github.com/alvarogonjim/fova/internal/assets"
 	"github.com/alvarogonjim/fova/internal/config"
 	"github.com/alvarogonjim/fova/internal/domain"
 	"github.com/alvarogonjim/fova/internal/llm"
@@ -23,7 +24,7 @@ func newTestApp() *Model {
 	return New(Deps{
 		Registry:     tools.NewRegistry(),
 		Models:       llm.NewModelRegistry(config.DefaultCatalog()),
-		SystemPrompt: agent.SystemPrompt,
+		SystemPrompt: assets.DefaultSystemPrompt(),
 	})
 }
 
@@ -37,7 +38,7 @@ func TestAppHeaderShowsWorkspacePath(t *testing.T) {
 	m := New(Deps{
 		Registry:     tools.NewRegistry(),
 		Models:       llm.NewModelRegistry(config.DefaultCatalog()),
-		SystemPrompt: agent.SystemPrompt,
+		SystemPrompt: assets.DefaultSystemPrompt(),
 		FovaHome:     home,
 	})
 	want := filepath.Join(home, "projects", "default")
@@ -57,7 +58,7 @@ func TestAppPersistsSessionAndMessages(t *testing.T) {
 	m := New(Deps{
 		Registry:     tools.NewRegistry(),
 		Models:       llm.NewModelRegistry(config.DefaultCatalog()),
-		SystemPrompt: agent.SystemPrompt,
+		SystemPrompt: assets.DefaultSystemPrompt(),
 		Store:        st,
 	})
 	if m.sessionID == "" {
@@ -171,7 +172,7 @@ func TestAppRefreshLoadsPanelsFromStore(t *testing.T) {
 	m := New(Deps{
 		Registry:     tools.NewRegistry(),
 		Models:       llm.NewModelRegistry(config.DefaultCatalog()),
-		SystemPrompt: agent.SystemPrompt,
+		SystemPrompt: assets.DefaultSystemPrompt(),
 		Store:        st,
 	})
 	m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
@@ -227,7 +228,7 @@ func TestAppPlanCommandShowsPersistedPlan(t *testing.T) {
 	m := New(Deps{
 		Registry:     tools.NewRegistry(),
 		Models:       llm.NewModelRegistry(config.DefaultCatalog()),
-		SystemPrompt: agent.SystemPrompt,
+		SystemPrompt: assets.DefaultSystemPrompt(),
 		Store:        st,
 	})
 	m.runSlashCommand("plan", "")
@@ -257,7 +258,7 @@ func TestAppPlanCommandPreservesNewlines(t *testing.T) {
 	m := New(Deps{
 		Registry:     tools.NewRegistry(),
 		Models:       llm.NewModelRegistry(config.DefaultCatalog()),
-		SystemPrompt: agent.SystemPrompt,
+		SystemPrompt: assets.DefaultSystemPrompt(),
 		Store:        st,
 	})
 	m.runSlashCommand("plan", "")
@@ -295,7 +296,7 @@ func TestAppPlanApprove(t *testing.T) {
 	m := New(Deps{
 		Registry:     tools.NewRegistry(),
 		Models:       llm.NewModelRegistry(config.DefaultCatalog()),
-		SystemPrompt: agent.SystemPrompt,
+		SystemPrompt: assets.DefaultSystemPrompt(),
 		Store:        st,
 	})
 	m.runSlashCommand("plan", "approve")

@@ -7,7 +7,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/alvarogonjim/fova/internal/agent"
+	"github.com/alvarogonjim/fova/internal/assets"
 	"github.com/alvarogonjim/fova/internal/config"
 	"github.com/alvarogonjim/fova/internal/llm"
 	"github.com/alvarogonjim/fova/internal/replay"
@@ -29,7 +29,7 @@ func newReplayTestApp(events []replay.Event) *Model {
 	return New(Deps{
 		Registry:     tools.NewRegistry(),
 		Models:       llm.NewModelRegistry(config.DefaultCatalog()),
-		SystemPrompt: agent.SystemPrompt,
+		SystemPrompt: assets.DefaultSystemPrompt(),
 		ReplayEvents: events,
 		ReplayPace:   false, // tests skip the pacing wait
 	})
@@ -101,7 +101,7 @@ func TestReplaySpaceSteps(t *testing.T) {
 	m := New(Deps{
 		Registry:     tools.NewRegistry(),
 		Models:       llm.NewModelRegistry(config.DefaultCatalog()),
-		SystemPrompt: agent.SystemPrompt,
+		SystemPrompt: assets.DefaultSystemPrompt(),
 		ReplayEvents: replayFixture(),
 		ReplayPace:   true,
 	})

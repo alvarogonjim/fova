@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/alvarogonjim/fova/internal/agent"
+	"github.com/alvarogonjim/fova/internal/assets"
 	"github.com/alvarogonjim/fova/internal/backends/local"
 	"github.com/alvarogonjim/fova/internal/config"
 	"github.com/alvarogonjim/fova/internal/domain"
@@ -36,7 +36,7 @@ func newSetupTestModel(t *testing.T) *Model {
 	return New(Deps{
 		Registry:     tools.NewRegistry(),
 		Models:       llm.NewModelRegistry(config.DefaultCatalog()),
-		SystemPrompt: agent.SystemPrompt,
+		SystemPrompt: assets.DefaultSystemPrompt(),
 		Store:        st,
 		Jobs:         jobmgr.NewManager(st, nil),
 		Local:        reg,

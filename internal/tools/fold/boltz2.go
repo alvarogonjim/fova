@@ -132,9 +132,9 @@ type boltz2Request struct {
 }
 
 // boltz2Tool is the bespoke agent tool for Boltz-2 biomolecular complex
-// structure prediction. Unlike the shared foldJobTool, it accepts a typed
-// multi-entity request (protein/DNA/RNA/ligand), validates it in preflight,
-// resolves workspace paths, and submits a background compute job.
+// structure prediction. It accepts a typed multi-entity request
+// (protein/DNA/RNA/ligand), validates it in preflight, resolves workspace
+// paths, and submits a background compute job.
 type boltz2Tool struct {
 	workspaceRoot string
 	mgr           *jobs.Manager

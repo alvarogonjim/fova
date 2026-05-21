@@ -207,6 +207,7 @@ func buildRegistry(workspace string, st *store.Store, mgr *jobmgr.Manager, model
 	}
 	registry.Register(designtools.NewBindCraftTool(workspace, mgr, backend, st))
 	registry.Register(designtools.NewBoltzGenTool(workspace, mgr, backend, st))
+	registry.Register(designtools.NewBoltzGenCheckTool(workspace, backend))
 	registry.Register(designtools.NewRFdiffusionTool(workspace, mgr, backend, st))
 	registry.Register(designtools.NewProteinMPNNTool(workspace, mgr, backend, st))
 	registry.Register(designtools.NewRFAntibodyTool(workspace, mgr, backend, st))

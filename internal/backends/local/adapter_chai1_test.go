@@ -294,18 +294,18 @@ func chai1TestEnv(t *testing.T, logBuf *bytes.Buffer, progress *[]float64) Adapt
 	return env
 }
 
-func TestWriteChai1FASTADeterministic(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "in.fasta")
-	if err := writeChai1FASTA(path, map[string]string{"B": "MMMM", "A": "AAAA"}); err != nil {
-		t.Fatalf("writeChai1FASTA: %v", err)
-	}
-	body, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	got := string(body)
-	want := ">protein|name=chain_A\nAAAA\n>protein|name=chain_B\nMMMM\n"
+func TestBuildChai1FASTA(t *testing.T) {
+	req := chai1Request{Entities: []chai1Entity{
+		{Type: "protein", ID: "A", Sequence: "MKQ"},
+		{Type: "ligand", ID: "L", SMILES: "CCO"},
+		{Type: "rna", ID: "R", Sequence: "ACGU"},
+		{Type: "glycan", ID: "G", Glycan: "NAG"},
+	}}
+	got := buildChai1FASTA(req)
+	want := ">protein|name=A\nMKQ\n" +
+		">ligand|name=L\nCCO\n" +
+		">rna|name=R\nACGU\n" +
+		">glycan|name=G\nNAG\n"
 	if got != want {
 		t.Errorf("fasta mismatch\n got:\n%s\nwant:\n%s", got, want)
 	}

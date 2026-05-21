@@ -53,15 +53,11 @@ func waitJob(t *testing.T, m *jobs.Manager, id domain.JobID) domain.Job {
 
 func TestFoldJobToolsImplementToolInterface(t *testing.T) {
 	mgr, backend := newFoldTestDeps(t, `{}`)
-	var _ tools.Tool = NewBoltz2(mgr, backend)
 	var _ tools.Tool = NewChai1(mgr, backend)
 }
 
 func TestFoldJobToolNames(t *testing.T) {
 	mgr, backend := newFoldTestDeps(t, `{}`)
-	if got := NewBoltz2(mgr, backend).Name(); got != "fold.boltz2" {
-		t.Errorf("Boltz2 Name = %q, want fold.boltz2", got)
-	}
 	if got := NewChai1(mgr, backend).Name(); got != "fold.chai1" {
 		t.Errorf("Chai1 Name = %q, want fold.chai1", got)
 	}
@@ -72,7 +68,6 @@ func TestFoldJobToolSubmitsJob(t *testing.T) {
 		name string
 		tool func(*jobs.Manager, stubBackend) *foldJobTool
 	}{
-		{"fold.boltz2", func(m *jobs.Manager, b stubBackend) *foldJobTool { return NewBoltz2(m, b) }},
 		{"fold.chai1", func(m *jobs.Manager, b stubBackend) *foldJobTool { return NewChai1(m, b) }},
 	}
 	for _, tc := range cases {
@@ -102,7 +97,7 @@ func TestFoldJobToolSubmitsJob(t *testing.T) {
 
 func TestFoldJobToolRejectsEmptySequences(t *testing.T) {
 	mgr, backend := newFoldTestDeps(t, `{}`)
-	tool := NewBoltz2(mgr, backend)
+	tool := NewChai1(mgr, backend)
 	if _, err := tool.Execute(context.Background(), json.RawMessage(`{"sequences":{}}`)); err == nil {
 		t.Error("Execute should reject a request with no chains")
 	}

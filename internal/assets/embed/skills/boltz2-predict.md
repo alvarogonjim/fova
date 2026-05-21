@@ -1,3 +1,7 @@
+---
+name: boltz2-predict
+description: Predict biomolecular complex structures with Boltz-2 (fold.boltz2)
+---
 # Skill: Predicting structures with Boltz-2
 
 ## When to use

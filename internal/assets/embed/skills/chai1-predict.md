@@ -1,3 +1,7 @@
+---
+name: chai1-predict
+description: Predict biomolecular complex structures with Chai-1 (fold.chai1)
+---
 # Skill: Predicting structures with Chai-1
 
 ## When to use

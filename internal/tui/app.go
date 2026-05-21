@@ -18,7 +18,6 @@ import (
 	"github.com/alvarogonjim/fova/internal/agent"
 	"github.com/alvarogonjim/fova/internal/assets"
 	"github.com/alvarogonjim/fova/internal/backends/local"
-	"github.com/alvarogonjim/fova/internal/config"
 	"github.com/alvarogonjim/fova/internal/domain"
 	jobmgr "github.com/alvarogonjim/fova/internal/jobs"
 	"github.com/alvarogonjim/fova/internal/llm"
@@ -883,7 +882,7 @@ func (m *Model) cmdTheme(arg string) (tea.Model, tea.Cmd) {
 func (m *Model) saveThemeChoice(mode string) error {
 	dir := m.configDir
 	if dir == "" {
-		dir = config.ConfigDir()
+		dir = assets.Dir()
 	}
 	// FOVA_CONFIG_DIR is what LoadConfig/SaveConfig consult; setting it
 	// here keeps the save targeted at the Deps-supplied directory without
@@ -897,12 +896,12 @@ func (m *Model) saveThemeChoice(mode string) error {
 			_ = os.Unsetenv("FOVA_CONFIG_DIR")
 		}
 	}()
-	c, err := config.LoadConfig()
+	c, err := assets.LoadConfig()
 	if err != nil {
 		return err
 	}
 	c.UI.Theme = mode
-	return config.SaveConfig(c)
+	return assets.SaveConfig(c)
 }
 
 // lookupEnv is a tiny wrapper so saveThemeChoice can be read top-to-bottom.
@@ -1203,10 +1202,10 @@ func helpText() string {
 	return b.String()
 }
 
-// loadConfigForTest is a re-export of config.LoadConfig used by tests in this
-// package that do not import internal/config directly. Not part of the public
+// loadConfigForTest is a re-export of assets.LoadConfig used by tests in this
+// package that do not import internal/assets directly. Not part of the public
 // API; safe to remove if no test refers to it.
-func loadConfigForTest() (any, error) { return config.LoadConfig() }
+func loadConfigForTest() (any, error) { return assets.LoadConfig() }
 
 // workspaceFromHome mirrors cmd/fova.defaultWorkspace: the active project's
 // workspace lives at $FOVA_HOME/projects/default. An empty home (tests that

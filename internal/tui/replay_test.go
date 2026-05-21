@@ -8,7 +8,6 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/alvarogonjim/fova/internal/assets"
-	"github.com/alvarogonjim/fova/internal/config"
 	"github.com/alvarogonjim/fova/internal/llm"
 	"github.com/alvarogonjim/fova/internal/replay"
 	"github.com/alvarogonjim/fova/internal/tools"
@@ -28,7 +27,7 @@ func replayFixture() []replay.Event {
 func newReplayTestApp(events []replay.Event) *Model {
 	return New(Deps{
 		Registry:     tools.NewRegistry(),
-		Models:       llm.NewModelRegistry(config.DefaultCatalog()),
+		Models:       llm.NewModelRegistry(assets.DefaultCatalog()),
 		SystemPrompt: assets.DefaultSystemPrompt(),
 		ReplayEvents: events,
 		ReplayPace:   false, // tests skip the pacing wait
@@ -100,7 +99,7 @@ func TestReplaySpaceSteps(t *testing.T) {
 	// without error: the goroutine consumes the step signal on its next loop.
 	m := New(Deps{
 		Registry:     tools.NewRegistry(),
-		Models:       llm.NewModelRegistry(config.DefaultCatalog()),
+		Models:       llm.NewModelRegistry(assets.DefaultCatalog()),
 		SystemPrompt: assets.DefaultSystemPrompt(),
 		ReplayEvents: replayFixture(),
 		ReplayPace:   true,

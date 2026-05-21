@@ -5,7 +5,7 @@ import (
 	"os"
 	"sync"
 
-	"github.com/alvarogonjim/fova/internal/config"
+	"github.com/alvarogonjim/fova/internal/assets"
 )
 
 // ModelEntry is one selectable model plus the name of the provider serving it.
@@ -18,7 +18,7 @@ type ModelEntry struct {
 // are safe for concurrent use; mu guards activeID and the clients map.
 type ModelRegistry struct {
 	models    []ModelEntry
-	providers map[string]config.Provider // provider name -> definition
+	providers map[string]assets.Provider // provider name -> definition
 	mu        sync.Mutex
 	activeID  string
 	clients   map[string]Provider // provider name -> built client (lazy)
@@ -27,9 +27,9 @@ type ModelRegistry struct {
 // NewModelRegistry builds the registry from a config catalog. The active model
 // is the first whose provider is ready (its API-key env var is set, or it
 // needs no key); failing that, the first model in the catalog.
-func NewModelRegistry(cat config.Catalog) *ModelRegistry {
+func NewModelRegistry(cat assets.Catalog) *ModelRegistry {
 	mr := &ModelRegistry{
-		providers: map[string]config.Provider{},
+		providers: map[string]assets.Provider{},
 		clients:   map[string]Provider{},
 	}
 	for _, p := range cat.Providers {
@@ -84,10 +84,10 @@ func (mr *ModelRegistry) Models() []ModelEntry { return mr.models }
 // rule used at construction. Cached provider clients are dropped so
 // changes to API keys, endpoints, or provider Kinds take effect on the
 // next Provider() call. Safe for concurrent use.
-func (mr *ModelRegistry) Reload(cat config.Catalog) {
+func (mr *ModelRegistry) Reload(cat assets.Catalog) {
 	mr.mu.Lock()
 	defer mr.mu.Unlock()
-	providers := map[string]config.Provider{}
+	providers := map[string]assets.Provider{}
 	for _, p := range cat.Providers {
 		providers[p.Name] = p
 	}
@@ -160,7 +160,7 @@ func (mr *ModelRegistry) SetModel(id string) error {
 // Model wins; otherwise a named (non-"auto") Provider selects its first model;
 // an empty or "auto" Provider leaves the constructor's ready-provider pick. An
 // unknown model or provider is an error.
-func (mr *ModelRegistry) SelectDefault(d config.DefaultsConfig) error {
+func (mr *ModelRegistry) SelectDefault(d assets.DefaultsConfig) error {
 	if d.Model != "" {
 		return mr.SetModel(d.Model)
 	}

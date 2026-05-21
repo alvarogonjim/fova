@@ -408,7 +408,7 @@ entrypoint      = "boltzgen"
 gpu             = true
 weights_paths   = ["/models"]
 timeout_seconds = 3600
-smoke_test      = "python /opt/_base/verify_gpu.py && boltzgen --help"
+smoke_test      = "python /opt/_base/verify_gpu.py && boltzgen check /opt/_base/boltzgen_example.yaml"
 
 [data.alphafold_params]
 display_name = "AlphaFold2 weights"

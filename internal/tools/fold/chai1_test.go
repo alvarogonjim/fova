@@ -28,3 +28,48 @@ func TestChai1ToolRequiresConfirmation(t *testing.T) {
 		t.Error("fold.chai1 must require confirmation — the agent's spec goes through the gate")
 	}
 }
+
+func TestPreflightChai1(t *testing.T) {
+	cases := []struct {
+		name string
+		req  chai1Request
+		ok   bool
+	}{
+		{"valid protein", chai1Request{Entities: []chai1Entity{
+			{Type: "protein", ID: "A", Sequence: "MKQ"}}}, true},
+		{"valid ligand", chai1Request{Entities: []chai1Entity{
+			{Type: "ligand", ID: "L", SMILES: "CCO"}}}, true},
+		{"valid glycan", chai1Request{Entities: []chai1Entity{
+			{Type: "glycan", ID: "G", Glycan: "NAG"}}}, true},
+		{"no entities", chai1Request{}, false},
+		{"bad type", chai1Request{Entities: []chai1Entity{
+			{Type: "peptide", ID: "A", Sequence: "MKQ"}}}, false},
+		{"empty protein sequence", chai1Request{Entities: []chai1Entity{
+			{Type: "protein", ID: "A"}}}, false},
+		{"ligand without smiles", chai1Request{Entities: []chai1Entity{
+			{Type: "ligand", ID: "L"}}}, false},
+		{"duplicate id", chai1Request{Entities: []chai1Entity{
+			{Type: "protein", ID: "A", Sequence: "MKQ"},
+			{Type: "ligand", ID: "A", SMILES: "CCO"}}}, false},
+		{"restraint bad connection_type", chai1Request{
+			Entities:   []chai1Entity{{Type: "protein", ID: "A", Sequence: "MKQ"}},
+			Restraints: []chai1Restraint{{ConnectionType: "bond", ChainA: "A", ChainB: "A"}}}, false},
+		{"restraint unknown chain", chai1Request{
+			Entities:   []chai1Entity{{Type: "protein", ID: "A", Sequence: "MKQ"}},
+			Restraints: []chai1Restraint{{ConnectionType: "contact", ChainA: "A", ChainB: "Z"}}}, false},
+		{"recycles non-positive", chai1Request{
+			Entities:         []chai1Entity{{Type: "protein", ID: "A", Sequence: "MKQ"}},
+			NumTrunkRecycles: ptrInt(0)}, false},
+	}
+	for _, c := range cases {
+		err := preflightChai1(c.req)
+		if c.ok && err != nil {
+			t.Errorf("%s: want valid, got %v", c.name, err)
+		}
+		if !c.ok && err == nil {
+			t.Errorf("%s: want invalid, got nil", c.name)
+		}
+	}
+}
+
+func ptrInt(v int) *int { return &v }

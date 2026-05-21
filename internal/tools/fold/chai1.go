@@ -3,6 +3,8 @@ package fold
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"strings"
 	"time"
 
 	"github.com/alvarogonjim/fova/internal/backends"
@@ -53,6 +55,117 @@ type chai1Request struct {
 	RecycleMSASubsample *int             `json:"recycle_msa_subsample"`
 	Seed                *int             `json:"seed"`
 	SaveAs              string           `json:"save_as"`
+}
+
+// validSeq reports whether every rune of seq (already upper-cased) is in the
+// given residue alphabet, skipping any parenthesised modified-residue token —
+// an unbalanced or empty "()" run is rejected.
+func validSeq(seq, alphabet string) bool {
+	depth := 0
+	tokenLen := 0
+	for _, ch := range seq {
+		switch {
+		case ch == '(':
+			depth++
+			tokenLen = 0
+		case ch == ')':
+			if depth == 0 || tokenLen == 0 {
+				return false
+			}
+			depth--
+		case depth > 0:
+			tokenLen++
+		case !strings.ContainsRune(alphabet, ch):
+			return false
+		}
+	}
+	return depth == 0
+}
+
+// preflightChai1 validates a request's value shape before any job is
+// submitted. It returns the first violation as a fold.chai1-prefixed error
+// describing the problem and how to fix it, or nil when the request is valid.
+// MSA path existence is NOT checked here — that needs the workspace root and
+// is deferred to Execute.
+func preflightChai1(req chai1Request) error {
+	if len(req.Entities) < 1 {
+		return fmt.Errorf("fold.chai1: at least one entity is required in \"entities\"")
+	}
+	ids := map[string]bool{}
+	for i, e := range req.Entities {
+		switch e.Type {
+		case "protein", "dna", "rna":
+			if e.Sequence == "" {
+				return fmt.Errorf("fold.chai1: entity %d (%s): \"sequence\" must be non-empty", i, e.Type)
+			}
+			var alphabet string
+			switch e.Type {
+			case "protein":
+				alphabet = aminoAcids
+			case "dna":
+				alphabet = dnaBases
+			case "rna":
+				alphabet = rnaBases
+			}
+			if !validSeq(strings.ToUpper(e.Sequence), alphabet) {
+				return fmt.Errorf("fold.chai1: entity %d (%s): \"sequence\" must use only %s "+
+					"(modified residues written inline as parenthesised tokens)", i, e.Type, alphabet)
+			}
+		case "ligand":
+			if e.SMILES == "" {
+				return fmt.Errorf("fold.chai1: entity %d (ligand): \"smiles\" must be non-empty", i)
+			}
+		case "glycan":
+			if e.Glycan == "" {
+				return fmt.Errorf("fold.chai1: entity %d (glycan): \"glycan\" must be non-empty", i)
+			}
+		default:
+			return fmt.Errorf("fold.chai1: entity %d: \"type\" must be protein, dna, rna, "+
+				"ligand, or glycan (got %q)", i, e.Type)
+		}
+		if e.ID == "" {
+			return fmt.Errorf("fold.chai1: entity %d: \"id\" must be a non-empty chain id", i)
+		}
+		if ids[e.ID] {
+			return fmt.Errorf("fold.chai1: chain id %q is used more than once — chain ids must be unique", e.ID)
+		}
+		ids[e.ID] = true
+	}
+	for i, r := range req.Restraints {
+		switch r.ConnectionType {
+		case "contact", "pocket", "covalent":
+		default:
+			return fmt.Errorf("fold.chai1: restraint %d: \"connection_type\" must be "+
+				"contact, pocket, or covalent (got %q)", i, r.ConnectionType)
+		}
+		if !ids[r.ChainA] {
+			return fmt.Errorf("fold.chai1: restraint %d: \"chain_a\" %q does not match any declared entity id", i, r.ChainA)
+		}
+		if !ids[r.ChainB] {
+			return fmt.Errorf("fold.chai1: restraint %d: \"chain_b\" %q does not match any declared entity id", i, r.ChainB)
+		}
+		if r.MinDistance != nil && r.MaxDistance != nil && *r.MaxDistance < *r.MinDistance {
+			return fmt.Errorf("fold.chai1: restraint %d: \"max_distance\" (%g) must be >= \"min_distance\" (%g)",
+				i, *r.MaxDistance, *r.MinDistance)
+		}
+		if r.Confidence != nil && (*r.Confidence < 0 || *r.Confidence > 1) {
+			return fmt.Errorf("fold.chai1: restraint %d: \"confidence\" must be in [0, 1] (got %g)", i, *r.Confidence)
+		}
+	}
+	for name, v := range map[string]*int{
+		"num_trunk_recycles":  req.NumTrunkRecycles,
+		"num_diffn_timesteps": req.NumDiffnTimesteps,
+		"num_diffn_samples":   req.NumDiffnSamples,
+		"num_trunk_samples":   req.NumTrunkSamples,
+	} {
+		if v != nil && *v <= 0 {
+			return fmt.Errorf("fold.chai1: %q must be greater than 0 (got %d)", name, *v)
+		}
+	}
+	if req.RecycleMSASubsample != nil && *req.RecycleMSASubsample < 0 {
+		return fmt.Errorf("fold.chai1: \"recycle_msa_subsample\" must be >= 0 (got %d)", *req.RecycleMSASubsample)
+	}
+	return nil
 }
 
 // chai1Tool is the bespoke agent tool for Chai-1 biomolecular complex

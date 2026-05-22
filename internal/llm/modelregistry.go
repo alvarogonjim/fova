@@ -6,6 +6,7 @@ import (
 	"sync"
 
 	"github.com/alvarogonjim/fova/internal/config"
+	"github.com/alvarogonjim/fova/internal/secrets"
 )
 
 // ModelEntry is one selectable model plus the name of the provider serving it.
@@ -52,6 +53,20 @@ func NewModelRegistry(cat config.Catalog) *ModelRegistry {
 	return mr
 }
 
+// resolveKey returns a provider's API key: the APIKeyEnv environment variable
+// when set, otherwise the value stored in the OS keychain (SPECS §14.3).
+func resolveKey(p config.Provider) string {
+	if p.APIKeyEnv != "" {
+		if v := os.Getenv(p.APIKeyEnv); v != "" {
+			return v
+		}
+	}
+	if v, ok := secrets.Get(secrets.APIKeyName(p.Name)); ok {
+		return v
+	}
+	return ""
+}
+
 // providerReady reports whether a provider can be used: it needs no API key,
 // or its key env var is set.
 func (mr *ModelRegistry) providerReady(name string) bool {
@@ -59,7 +74,7 @@ func (mr *ModelRegistry) providerReady(name string) bool {
 	if !ok {
 		return false
 	}
-	return p.APIKeyEnv == "" || os.Getenv(p.APIKeyEnv) != ""
+	return p.APIKeyEnv == "" || resolveKey(p) != ""
 }
 
 // defaultModelID picks the first model whose provider is ready, else the first.
@@ -206,11 +221,11 @@ func (mr *ModelRegistry) Provider() (Provider, error) {
 	var p Provider
 	switch def.Kind {
 	case "anthropic":
-		p = NewAnthropicProvider(os.Getenv(def.APIKeyEnv))
+		p = NewAnthropicProvider(resolveKey(def))
 	case "google":
-		p = NewGoogleProvider(os.Getenv(def.APIKeyEnv))
+		p = NewGoogleProvider(resolveKey(def))
 	case "openai":
-		key := os.Getenv(def.APIKeyEnv) // "" when APIKeyEnv is unset
+		key := resolveKey(def)
 		if key == "" {
 			key = "none" // OpenAI-compatible local servers ignore auth; the SDK wants a non-empty key
 		}

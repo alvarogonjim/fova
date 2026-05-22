@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/alvarogonjim/fova/internal/config"
+	"github.com/alvarogonjim/fova/internal/secrets"
 )
 
 func TestModelRegistryListsModels(t *testing.T) {
@@ -228,6 +229,33 @@ func TestModelRegistrySelectDefaultAutoIsNoop(t *testing.T) {
 	}
 	if mr.ActiveModel() != before {
 		t.Errorf("auto must not change the active model: %q -> %q", before, mr.ActiveModel())
+	}
+}
+
+func TestResolveKeyEnvWins(t *testing.T) {
+	defer secrets.UseInMemoryKeyring()()
+	_ = secrets.Set("anthropic-api-key", "from-keychain")
+	t.Setenv("TEST_ANTHROPIC_KEY", "from-env")
+	p := config.Provider{Name: "anthropic", APIKeyEnv: "TEST_ANTHROPIC_KEY"}
+	if got := resolveKey(p); got != "from-env" {
+		t.Errorf("resolveKey = %q, want from-env", got)
+	}
+}
+
+func TestResolveKeyFallsBackToKeychain(t *testing.T) {
+	defer secrets.UseInMemoryKeyring()()
+	_ = secrets.Set("anthropic-api-key", "from-keychain")
+	p := config.Provider{Name: "anthropic", APIKeyEnv: "TEST_ANTHROPIC_KEY_UNSET"}
+	if got := resolveKey(p); got != "from-keychain" {
+		t.Errorf("resolveKey = %q, want from-keychain", got)
+	}
+}
+
+func TestResolveKeyNoneAvailable(t *testing.T) {
+	defer secrets.UseInMemoryKeyring()()
+	p := config.Provider{Name: "openai", APIKeyEnv: "TEST_OPENAI_KEY_UNSET"}
+	if got := resolveKey(p); got != "" {
+		t.Errorf("resolveKey = %q, want empty", got)
 	}
 }
 

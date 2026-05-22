@@ -27,7 +27,7 @@ type WizardResult struct {
 }
 
 // wizardDoneMsg is emitted when the wizard finishes (Skipped false) or is
-// skipped (Skipped true).
+// skipped/aborted (Skipped true).
 type wizardDoneMsg struct {
 	Result  WizardResult
 	Skipped bool
@@ -403,6 +403,7 @@ func (m *wizardModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if step.id == "apikey" { // defer: leave the key empty
 			return m, m.advance()
 		}
+		// other steps: Ctrl+S has no effect
 	case tea.KeyEnter:
 		if m.commit() {
 			return m, m.advance()

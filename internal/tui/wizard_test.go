@@ -115,3 +115,54 @@ func TestWizardViewShowsStepTitle(t *testing.T) {
 		t.Error("the view should render the current step's title")
 	}
 }
+
+func TestWizardCtrlSDefersAPIKey(t *testing.T) {
+	w := newWizardModel(NewTheme(), testCatalog(), false)
+	w.gotoStep("provider")
+	w.Update(key(tea.KeyDown))  // move to anthropic (paid)
+	w.Update(key(tea.KeyEnter)) // commit -> lands on apikey
+	if w.steps[w.idx].id != "apikey" {
+		t.Fatalf("setup: expected the apikey step, got %q", w.steps[w.idx].id)
+	}
+	w.Update(key(tea.KeyCtrlS)) // defer the key
+	if w.steps[w.idx].id == "apikey" {
+		t.Error("Ctrl+S should advance past the API-key step")
+	}
+	if w.result.APIKey != "" {
+		t.Error("deferring the API-key step should leave the key empty")
+	}
+}
+
+func TestWizardBackSkipsInactiveAPIKey(t *testing.T) {
+	w := newWizardModel(NewTheme(), testCatalog(), true)
+	w.gotoStep("provider")
+	w.Update(key(tea.KeyEnter)) // ollama (local) -> apikey is inactive -> theme
+	if w.steps[w.idx].id != "theme" {
+		t.Fatalf("setup: expected the theme step, got %q", w.steps[w.idx].id)
+	}
+	w.Update(key(tea.KeyShiftTab)) // back
+	if w.steps[w.idx].id != "provider" {
+		t.Errorf("back from theme should skip the inactive apikey step and land on provider, got %q", w.steps[w.idx].id)
+	}
+}
+
+func TestWizardFolderAcceptsTypedValue(t *testing.T) {
+	w := newWizardModel(NewTheme(), testCatalog(), false)
+	w.gotoStep("folder")
+	w.input.SetValue("")
+	w.Update(runes("/tmp/fova-data"))
+	w.Update(key(tea.KeyEnter))
+	if w.result.DataDir != "/tmp/fova-data" {
+		t.Errorf("the folder step should store the typed path, got %q", w.result.DataDir)
+	}
+}
+
+func TestWizardFolderRejectsEmpty(t *testing.T) {
+	w := newWizardModel(NewTheme(), testCatalog(), false)
+	w.gotoStep("folder")
+	w.input.SetValue("")
+	w.Update(key(tea.KeyEnter))
+	if w.errMsg == "" || w.steps[w.idx].id != "folder" {
+		t.Error("an empty folder path should be rejected with an inline error and not advance")
+	}
+}

@@ -294,6 +294,32 @@ func TestAppPlanCommandPreservesNewlines(t *testing.T) {
 	}
 }
 
+// drainTurn waits for the agent-loop goroutine that startTurn launched (e.g.
+// from /plan approve) to reach its terminal state. Without this, a test
+// returns while that goroutine is still writing the synthetic user message
+// into the persisted session — and t.TempDir cleanup's RemoveAll races those
+// store-directory writes, an intermittent "directory not empty" failure. It
+// reads m.bus until the turn-ending message; the m.running guard skips the
+// wait when no turn was started, and the deadline catches a genuine hang.
+func drainTurn(t *testing.T, m *Model) {
+	t.Helper()
+	if !m.running {
+		return // /plan approve started no agent turn (no provider)
+	}
+	deadline := time.After(5 * time.Second)
+	for {
+		select {
+		case msg := <-m.bus:
+			switch msg.(type) {
+			case agent.TurnDoneMsg, agent.TurnErrorMsg:
+				return
+			}
+		case <-deadline:
+			t.Fatal("drainTurn: agent turn did not settle within 5s")
+		}
+	}
+}
+
 func TestAppPlanApprove(t *testing.T) {
 	st, err := store.Open(filepath.Join(t.TempDir(), "workspace.db"))
 	if err != nil {
@@ -314,6 +340,7 @@ func TestAppPlanApprove(t *testing.T) {
 		Store:        st,
 	})
 	m.runSlashCommand("plan", "approve")
+	drainTurn(t, m) // /plan approve starts an agent turn — let it settle before cleanup
 	out := m.chat.renderEntries()
 	if !contains(out, "p_appr approved") {
 		t.Fatalf("/plan approve should confirm approval:\n%s", out)
@@ -426,6 +453,7 @@ func TestAppPlanShowsBoltzGenSection(t *testing.T) {
 func TestAppPlanApproveBoltzGenValidSpec(t *testing.T) {
 	m, st := newBoltzGenTestApp(t, `{"valid": true}`)
 	m.runSlashCommand("plan", "approve")
+	drainTurn(t, m) // /plan approve starts an agent turn — let it settle before cleanup
 	out := m.chat.renderEntries()
 	if !contains(out, "p_bg approved") {
 		t.Fatalf("a valid-spec BoltzGen plan should be approved:\n%s", out)

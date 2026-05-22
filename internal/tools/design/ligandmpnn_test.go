@@ -1,6 +1,7 @@
 package design
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
 )
@@ -26,5 +27,13 @@ func TestLigandMPNNToolSchema(t *testing.T) {
 func TestLigandMPNNToolRequiresConfirmation(t *testing.T) {
 	if !NewLigandMPNNTool("/ws", nil, nil, nil).RequiresConfirmation(json.RawMessage(`{}`)) {
 		t.Error("design.ligandmpnn must require confirmation — GPU design job")
+	}
+}
+
+func TestLigandMPNNExecuteRejectsBadInput(t *testing.T) {
+	tool := NewLigandMPNNTool(t.TempDir(), nil, nil, nil)
+	// No pdb — Validate rejects before any job/store access.
+	if _, err := tool.Execute(context.Background(), json.RawMessage(`{}`)); err == nil {
+		t.Fatal("expected a validation error when pdb is missing")
 	}
 }

@@ -499,6 +499,12 @@ func TestPlanCreateAcceptsCompatibleApplicationMethod(t *testing.T) {
 					// configuration — at minimum a pdb backbone path.
 					extra = `, "method_params": {"pdb": "bb.pdb"}`
 				}
+				if m == MethodRFantibody {
+					// RFantibody requires method_params carrying its run
+					// configuration — at minimum a target antigen PDB and
+					// the epitope hotspots.
+					extra = `, "method_params": {"target": "ag.pdb", "hotspots": "T10"}`
+				}
 				input := json.RawMessage(`{
 					"target": {"pdb_id": "1ABC"},
 					"application": "` + string(app) + `",
@@ -647,6 +653,46 @@ func TestPlanCreateLigandMPNNMethodConfig(t *testing.T) {
 	// An invalid params object (no pdb) must be rejected.
 	if _, err := applyLigandMPNNParamsErr(`{"method_params":{"model_type":"ligand_mpnn"}}`); err == nil {
 		t.Error("a LigandMPNN plan with no pdb must be rejected")
+	}
+}
+
+// applyRFantibodyParamsErr runs applyRFantibodyMethodConfig against a fresh
+// RFantibody plan and returns the resulting MethodConfig (nil on error) plus
+// the error — mirroring how the LigandMPNN tests exercise the method-config
+// helper. A *CreateTool with no store/installer/registry is enough: the
+// RFantibody config helper touches none of them.
+func applyRFantibodyParamsErr(input string) (*domain.MethodConfig, error) {
+	ct := NewPlanCreateTool(nil, nil)
+	p := domain.DesignPlan{Method: string(MethodRFantibody)}
+	if err := ct.applyRFantibodyMethodConfig(json.RawMessage(input), &p); err != nil {
+		return nil, err
+	}
+	return p.MethodConfig, nil
+}
+
+// applyRFantibodyParams is applyRFantibodyParamsErr for the happy path: it
+// fails the test on any error and returns the populated MethodConfig.
+func applyRFantibodyParams(t *testing.T, input string) *domain.MethodConfig {
+	t.Helper()
+	cfg, err := applyRFantibodyParamsErr(input)
+	if err != nil {
+		t.Fatalf("applyRFantibodyMethodConfig: %v", err)
+	}
+	return cfg
+}
+
+// TestPlanCreateRFantibodyMethodConfig: an RFantibody plan with method_params
+// must land MethodConfig.RFantibody, and an invalid params object is rejected.
+func TestPlanCreateRFantibodyMethodConfig(t *testing.T) {
+	cfg := applyRFantibodyParams(t, `{"method_params":{"target":"ag.pdb","hotspots":"T10"}}`)
+	if cfg == nil || cfg.RFantibody == nil {
+		t.Fatal("MethodConfig.RFantibody must be populated")
+	}
+	if cfg.RFantibody.Target != "ag.pdb" {
+		t.Errorf("target = %q", cfg.RFantibody.Target)
+	}
+	if _, err := applyRFantibodyParamsErr(`{"method_params":{"hotspots":"T10"}}`); err == nil {
+		t.Error("an RFantibody plan with no target must be rejected")
 	}
 }
 

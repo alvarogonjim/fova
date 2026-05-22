@@ -208,6 +208,23 @@ func TestRenderLigandMPNNSection(t *testing.T) {
 	}
 }
 
+// TestRenderRFantibodySection: a plan carrying an RFantibody method-config
+// renders the RFantibody block — the framework, target, and hotspots.
+func TestRenderRFantibodySection(t *testing.T) {
+	p := &domain.DesignPlan{
+		ID: "p_x", Method: "RFantibody",
+		MethodConfig: &domain.MethodConfig{RFantibody: &domain.RFantibodyParams{
+			Framework: "nanobody", Target: "ag.pdb", Hotspots: "T10,T12", NumDesigns: 20,
+		}},
+	}
+	out := RenderPlan(*p)
+	for _, want := range []string{"RFantibody", "nanobody", "ag.pdb", "T10,T12"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("rendered plan missing %q:\n%s", want, out)
+		}
+	}
+}
+
 // TestRenderDoctorLabelledRows asserts /doctor output is one row per tool with
 // aligned columns and at least the System + Local protein tools sections
 // (spec Bug 7).

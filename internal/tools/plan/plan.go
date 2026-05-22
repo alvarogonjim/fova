@@ -305,6 +305,16 @@ func (t *CreateTool) Execute(ctx context.Context, input json.RawMessage) (tools.
 		}
 	}
 
+	// RFantibody folds its run configuration (the RFantibodyParams) into the
+	// plan so /plan can render it and /plan approve can run it. Like LigandMPNN
+	// there is no spec file or external check — method_params alone carries the
+	// 3-stage pipeline configuration.
+	if method == MethodRFantibody {
+		if err := t.applyRFantibodyMethodConfig(input, &p); err != nil {
+			return tools.Result{}, err
+		}
+	}
+
 	// Ground every evidence entry in the corpus. The Citation field is
 	// computed here; any value the caller supplied for it is discarded.
 	if err := t.resolveEvidence(&p); err != nil {
@@ -587,6 +597,31 @@ func (t *CreateTool) applyLigandMPNNMethodConfig(input json.RawMessage, p *domai
 		return err
 	}
 	p.MethodConfig = &domain.MethodConfig{LigandMPNN: envelope.Params}
+	return nil
+}
+
+// applyRFantibodyMethodConfig parses the method_params input into an
+// RFantibodyParams and folds it into DesignPlan.MethodConfig. method_params is
+// required for an RFantibody plan — it carries the run configuration (at
+// minimum the target antigen PDB and the epitope hotspots). The params are
+// value-shape validated via domain.RFantibodyParams.Validate; there is no
+// external check tool.
+func (t *CreateTool) applyRFantibodyMethodConfig(input json.RawMessage, p *domain.DesignPlan) error {
+	var envelope struct {
+		Params *domain.RFantibodyParams `json:"method_params"`
+	}
+	if err := json.Unmarshal(input, &envelope); err != nil {
+		return fmt.Errorf("plan.create: invalid method_params: %w", err)
+	}
+	if envelope.Params == nil {
+		return fmt.Errorf(
+			"plan.create: method RFantibody requires method_params — the " +
+				"RFantibody run configuration (at minimum target and hotspots)")
+	}
+	if err := envelope.Params.Validate(); err != nil {
+		return err
+	}
+	p.MethodConfig = &domain.MethodConfig{RFantibody: envelope.Params}
 	return nil
 }
 

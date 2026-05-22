@@ -650,6 +650,46 @@ func TestPlanCreateLigandMPNNMethodConfig(t *testing.T) {
 	}
 }
 
+// applyRFantibodyParamsErr runs applyRFantibodyMethodConfig against a fresh
+// RFantibody plan and returns the resulting MethodConfig (nil on error) plus
+// the error — mirroring how the LigandMPNN tests exercise the method-config
+// helper. A *CreateTool with no store/installer/registry is enough: the
+// RFantibody config helper touches none of them.
+func applyRFantibodyParamsErr(input string) (*domain.MethodConfig, error) {
+	ct := NewPlanCreateTool(nil, nil)
+	p := domain.DesignPlan{Method: string(MethodRFantibody)}
+	if err := ct.applyRFantibodyMethodConfig(json.RawMessage(input), &p); err != nil {
+		return nil, err
+	}
+	return p.MethodConfig, nil
+}
+
+// applyRFantibodyParams is applyRFantibodyParamsErr for the happy path: it
+// fails the test on any error and returns the populated MethodConfig.
+func applyRFantibodyParams(t *testing.T, input string) *domain.MethodConfig {
+	t.Helper()
+	cfg, err := applyRFantibodyParamsErr(input)
+	if err != nil {
+		t.Fatalf("applyRFantibodyMethodConfig: %v", err)
+	}
+	return cfg
+}
+
+// TestPlanCreateRFantibodyMethodConfig: an RFantibody plan with method_params
+// must land MethodConfig.RFantibody, and an invalid params object is rejected.
+func TestPlanCreateRFantibodyMethodConfig(t *testing.T) {
+	cfg := applyRFantibodyParams(t, `{"method_params":{"target":"ag.pdb","hotspots":"T10"}}`)
+	if cfg == nil || cfg.RFantibody == nil {
+		t.Fatal("MethodConfig.RFantibody must be populated")
+	}
+	if cfg.RFantibody.Target != "ag.pdb" {
+		t.Errorf("target = %q", cfg.RFantibody.Target)
+	}
+	if _, err := applyRFantibodyParamsErr(`{"method_params":{"hotspots":"T10"}}`); err == nil {
+		t.Error("an RFantibody plan with no target must be rejected")
+	}
+}
+
 // TestPlanCreateBoltzGenRequiresSpecPath: a BoltzGen plan with no
 // method_spec_path is rejected before anything is persisted.
 func TestPlanCreateBoltzGenRequiresSpecPath(t *testing.T) {

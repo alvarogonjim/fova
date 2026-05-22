@@ -97,6 +97,8 @@ func newRootCmd() *cobra.Command {
 
 // runTUI builds the registry, model registry, store, and starts the app.
 func runTUI() error {
+	// MUST run before config.LoadConfig: LoadConfig materializes config.toml,
+	// which would flip isFirstRun to false and defeat first-run detection.
 	if err := maybeRunOnboarding(); err != nil {
 		return err
 	}

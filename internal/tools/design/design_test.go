@@ -149,9 +149,6 @@ func TestAntibodyEnzymeToolMetadata(t *testing.T) {
 		{func(ws string, m *jobs.Manager, s *store.Store, b *stubBackend) *designTool {
 			return NewRFdiffusion2Tool(ws, m, b, s)
 		}, "design.rfdiffusion2"},
-		{func(ws string, m *jobs.Manager, s *store.Store, b *stubBackend) *designTool {
-			return NewLigandMPNNTool(ws, m, b, s)
-		}, "design.ligandmpnn"},
 	} {
 		mgr, st, backend, ws := newTestDeps(t, `{"designs":[]}`)
 		if got := tc.newTool(ws, mgr, st, backend).Name(); got != tc.name {

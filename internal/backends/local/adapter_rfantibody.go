@@ -1,6 +1,8 @@
 package local
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -9,6 +11,14 @@ import (
 	"strings"
 
 	"github.com/alvarogonjim/fova/internal/domain"
+)
+
+// Bundled framework PDBs shipped inside the RFantibody image. The "nanobody"
+// framework (also the default) and the "scfv" framework are referenced as-is
+// at these in-image paths; a request's FrameworkPDB overrides both.
+const (
+	rfantibodyNanobodyFramework = "/opt/rfantibody/scripts/examples/example_inputs/h-NbBCII10.pdb"
+	rfantibodyScFvFramework     = "/opt/rfantibody/scripts/examples/example_inputs/hu-4D5-8_Fv.pdb"
 )
 
 // parseRFantibodyOutput reads the RF2 prediction PDBs and the qvscorefile TSV
@@ -183,4 +193,131 @@ func buildRFantibodyDriver(p domain.RFantibodyParams, targetPath, frameworkPath 
 	b.WriteString("uv run --project /opt/rfantibody qvextract /work/predictions.qv -o /work/out\n")
 	b.WriteString("uv run --project /opt/rfantibody qvscorefile /work/predictions.qv > /work/out/scores.tsv\n")
 	return b.String()
+}
+
+// init registers the RFantibody design adapter with the local backend.
+func init() { registerAdapter(rfantibodyAdapter{}) }
+
+// rfantibodyAdapter wires design.rfantibody to the container-mode RFantibody
+// image. RFantibody is a 3-stage pipeline (rfdiffusion → proteinmpnn → rf2),
+// so the adapter writes a bash driver script, overrides the image ENTRYPOINT
+// (which is rfdiffusion-only) with bash, runs all three stages plus quiver
+// extraction in one container invocation against the bind-mounted workdir,
+// and returns the RF2 predictions — with their qvscorefile scores — in the
+// {"designs":[...]} envelope.
+type rfantibodyAdapter struct{}
+
+func (rfantibodyAdapter) AgentTool() string { return "design.rfantibody" }
+func (rfantibodyAdapter) Recipe() string    { return "rfantibody" }
+
+// Invoke stages the target (and any framework override) into the workdir,
+// writes the 3-stage driver script, runs the RFantibody image with the
+// entrypoint overridden to bash, and parses the predictions into the
+// {"designs":[...]} envelope.
+func (rfantibodyAdapter) Invoke(ctx context.Context, env AdapterEnv, request []byte) ([]byte, error) {
+	var req domain.RFantibodyParams
+	if err := json.Unmarshal(request, &req); err != nil {
+		return nil, fmt.Errorf("design.rfantibody: invalid request: %w", err)
+	}
+	// The tool's preflight is the primary input guard; this is the
+	// backend-side backstop against a malformed request reaching the runtime.
+	target := strings.TrimSpace(req.Target)
+	if target == "" {
+		return nil, fmt.Errorf("design.rfantibody: target is required (path to a .pdb target structure)")
+	}
+	if !strings.HasSuffix(target, ".pdb") {
+		return nil, fmt.Errorf("design.rfantibody: target %q must be a .pdb file", target)
+	}
+	if info, err := os.Stat(target); err != nil || info.IsDir() {
+		return nil, fmt.Errorf("design.rfantibody: target %q not found", target)
+	}
+	if env.Registry == nil {
+		return nil, fmt.Errorf("design.rfantibody: adapter registry unavailable")
+	}
+	if env.Recipe.ImageTag == "" {
+		return nil, fmt.Errorf("design.rfantibody: container image is not configured (run /install rfantibody)")
+	}
+
+	// Stage the target into the workdir so the driver references a /work path.
+	targetBase := filepath.Base(target)
+	if err := copyFile(target, filepath.Join(env.WorkDir, targetBase)); err != nil {
+		return nil, fmt.Errorf("design.rfantibody: stage target: %w", err)
+	}
+
+	// Resolve the framework. A FrameworkPDB override is staged into the
+	// workdir and referenced at /work; otherwise the bundled in-image
+	// framework PDB is used as-is.
+	frameworkPath := rfantibodyNanobodyFramework
+	if fp := strings.TrimSpace(req.FrameworkPDB); fp != "" {
+		fpBase := filepath.Base(fp)
+		if err := copyFile(fp, filepath.Join(env.WorkDir, fpBase)); err != nil {
+			return nil, fmt.Errorf("design.rfantibody: stage framework_pdb %q: %w", fp, err)
+		}
+		frameworkPath = "/work/" + fpBase
+	} else {
+		switch req.Framework {
+		case "", "nanobody":
+			frameworkPath = rfantibodyNanobodyFramework
+		case "scfv":
+			frameworkPath = rfantibodyScFvFramework
+		default:
+			return nil, fmt.Errorf("design.rfantibody: unknown framework %q (want nanobody or scfv)", req.Framework)
+		}
+	}
+
+	outDir := filepath.Join(env.WorkDir, "out")
+	if err := os.MkdirAll(outDir, 0o755); err != nil {
+		return nil, err
+	}
+	env.Tick(0.05) // input staged
+
+	rt := Detect()
+	if !rt.Available() {
+		return nil, fmt.Errorf("design.rfantibody: no container runtime — install podman or docker")
+	}
+	if ok, _ := rt.ImageExists(env.Recipe.ImageTag); !ok {
+		return nil, fmt.Errorf(
+			"design.rfantibody: image %s is missing — run /install rfantibody",
+			env.Recipe.ImageTag)
+	}
+
+	// RFantibody weights are fetched at /install time into this cache. A
+	// missing cache means install did not complete, so validate it exists
+	// (os.Stat) rather than creating it.
+	modelsCache := ModelsRoot(env.Registry.Home(), "rfantibody")
+	if info, err := os.Stat(modelsCache); err != nil || !info.IsDir() {
+		return nil, fmt.Errorf(
+			"design.rfantibody: weights cache %s missing — run /install rfantibody",
+			modelsCache)
+	}
+
+	// The image ENTRYPOINT is rfdiffusion only; the 3-stage driver needs bash.
+	driver := filepath.Join(env.WorkDir, "run.sh")
+	script := buildRFantibodyDriver(req, "/work/"+targetBase, frameworkPath)
+	if err := os.WriteFile(driver, []byte(script), 0o755); err != nil {
+		return nil, fmt.Errorf("design.rfantibody: write driver: %w", err)
+	}
+
+	mounts := []Mount{
+		{HostPath: env.WorkDir, ContainerPath: "/work"},
+		{HostPath: modelsCache, ContainerPath: "/models"},
+	}
+	if _, err := rt.RunContainer(ctx, ContainerRunArgs{
+		Image:      env.Recipe.ImageTag,
+		Entrypoint: "bash",
+		Cmd:        []string{"/work/run.sh"},
+		GPU:        env.Recipe.GPU,
+		Mounts:     mounts,
+		Workdir:    "/work",
+		Log:        env.LogWriter(),
+	}); err != nil {
+		return nil, fmt.Errorf("design.rfantibody: container run failed: %w", err)
+	}
+	env.Tick(0.95) // 3-stage pipeline done
+
+	designs, err := parseRFantibodyOutput(outDir)
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(designsEnvelope{Designs: designs})
 }

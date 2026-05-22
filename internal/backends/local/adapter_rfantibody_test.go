@@ -1,6 +1,8 @@
 package local
 
 import (
+	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -8,6 +10,30 @@ import (
 
 	"github.com/alvarogonjim/fova/internal/domain"
 )
+
+// rfantibodyTestEnv builds an AdapterEnv with the container-mode rfantibody
+// recipe and a registry whose ~/.fova/models/rfantibody directory exists on
+// disk. Modelled on boltz2TestEnv.
+func rfantibodyTestEnv(t *testing.T) AdapterEnv {
+	t.Helper()
+	home := t.TempDir()
+	reg, err := LoadRegistry(home)
+	if err != nil {
+		t.Fatalf("LoadRegistry: %v", err)
+	}
+	if err := os.MkdirAll(ModelsRoot(home, "rfantibody"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	rec, ok := reg.Tool("rfantibody")
+	if !ok {
+		t.Fatal("rfantibody missing from registry")
+	}
+	return AdapterEnv{
+		Recipe:   rec,
+		WorkDir:  t.TempDir(),
+		Registry: reg,
+	}
+}
 
 func TestParseRFantibodyOutput(t *testing.T) {
 	outDir := t.TempDir()
@@ -62,5 +88,44 @@ func TestBuildRFantibodyDriver(t *testing.T) {
 		if !strings.Contains(script, want) {
 			t.Errorf("driver missing %q in:\n%s", want, script)
 		}
+	}
+}
+
+func TestRFantibodyAdapterInvoke(t *testing.T) {
+	env := rfantibodyTestEnv(t) // helper modelled on boltz2TestEnv
+	target := filepath.Join(t.TempDir(), "ag.pdb")
+	if err := os.WriteFile(target, []byte("ATOM\nEND\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	stubContainerRuntime(t, func(args []string) error {
+		if len(args) < 2 || args[1] != "run" {
+			return nil
+		}
+		out := filepath.Join(env.WorkDir, "out")
+		if err := os.MkdirAll(out, 0o755); err != nil {
+			return err
+		}
+		_ = os.WriteFile(filepath.Join(out, "scores.tsv"),
+			[]byte("tag\tplddt\tpae\nab_0\t80.0\t8.0\n"), 0o644)
+		return os.WriteFile(filepath.Join(out, "ab_0.pdb"), []byte("ATOM\nEND\n"), 0o644)
+	})
+	body := []byte(`{"target":"` + target + `","hotspots":"T10","framework":"nanobody"}`)
+	out, err := rfantibodyAdapter{}.Invoke(context.Background(), env, body)
+	if err != nil {
+		t.Fatalf("Invoke: %v", err)
+	}
+	var resp designsEnvelope
+	if err := json.Unmarshal(out, &resp); err != nil {
+		t.Fatalf("not a designs envelope: %v", err)
+	}
+	if len(resp.Designs) != 1 || resp.Designs[0].Scores["plddt"] != 80.0 {
+		t.Fatalf("want 1 scored design, got %+v", resp.Designs)
+	}
+}
+
+func TestRFantibodyAdapterInvokeRejectsMissingTarget(t *testing.T) {
+	env := rfantibodyTestEnv(t)
+	if _, err := (rfantibodyAdapter{}).Invoke(context.Background(), env, []byte(`{"hotspots":"T10"}`)); err == nil {
+		t.Fatal("expected an error when target is missing")
 	}
 }

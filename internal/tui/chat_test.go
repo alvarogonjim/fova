@@ -1,12 +1,64 @@
 package tui
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
 
+	tea "github.com/charmbracelet/bubbletea"
+
 	"github.com/alvarogonjim/fova/internal/domain"
 )
+
+func TestChatMouseWheelScrollsUp(t *testing.T) {
+	c := newChatModel(NewTheme(), 40, 4)
+	for i := 0; i < 30; i++ {
+		c.appendAgentDeltaBlock(fmt.Sprintf("line %d", i))
+	}
+	c.viewport.GotoBottom()
+	if !c.viewport.AtBottom() {
+		t.Fatal("setup: chat should start at the bottom")
+	}
+	c.handleMouse(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonWheelUp})
+	if c.viewport.AtBottom() {
+		t.Error("wheel-up should scroll the chat off the bottom")
+	}
+}
+
+func TestChatRefreshKeepsScrollPositionWhenScrolledUp(t *testing.T) {
+	c := newChatModel(NewTheme(), 40, 4)
+	for i := 0; i < 30; i++ {
+		c.appendAgentDeltaBlock(fmt.Sprintf("line %d", i))
+	}
+	c.viewport.GotoTop()
+	c.appendAgentDeltaBlock("new content while scrolled up")
+	if c.viewport.AtBottom() {
+		t.Error("refresh must not snap a scrolled-up reader to the bottom")
+	}
+}
+
+func TestChatRefreshFollowsWhenAtBottom(t *testing.T) {
+	c := newChatModel(NewTheme(), 40, 4)
+	for i := 0; i < 30; i++ {
+		c.appendAgentDeltaBlock(fmt.Sprintf("line %d", i))
+	}
+	if !c.viewport.AtBottom() {
+		t.Error("a reader at the bottom should keep following new content")
+	}
+}
+
+func TestChatAppendUserJumpsToBottom(t *testing.T) {
+	c := newChatModel(NewTheme(), 40, 4)
+	for i := 0; i < 30; i++ {
+		c.appendAgentDeltaBlock(fmt.Sprintf("line %d", i))
+	}
+	c.viewport.GotoTop()
+	c.appendUser("my message")
+	if !c.viewport.AtBottom() {
+		t.Error("sending a message should jump the chat to the bottom")
+	}
+}
 
 func TestChatAppendAndRender(t *testing.T) {
 	c := newChatModel(NewTheme(), 80, 20)

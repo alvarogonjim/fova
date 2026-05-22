@@ -163,7 +163,7 @@ func runTUI() error {
 		AssetReport:        bundle.Report,
 	})
 
-	p := tea.NewProgram(app, tea.WithAltScreen())
+	p := tea.NewProgram(app, tea.WithAltScreen(), tea.WithMouseCellMotion())
 	_, err = p.Run()
 	return err
 }

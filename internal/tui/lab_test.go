@@ -77,6 +77,58 @@ func TestLabPanelClipsToWidth(t *testing.T) {
 	}
 }
 
+func TestLabSelectionMovesAndClamps(t *testing.T) {
+	m := newLabModel(NewTheme())
+	m.setExperiments([]domain.Experiment{{ID: "e1"}, {ID: "e2"}, {ID: "e3"}})
+	m.selectUp()
+	if m.selected != 0 {
+		t.Errorf("selectUp at top: selected = %d, want 0", m.selected)
+	}
+	m.selectDown()
+	m.selectDown()
+	m.selectDown()
+	if m.selected != 2 {
+		t.Errorf("selectDown past end: selected = %d, want 2", m.selected)
+	}
+}
+
+func TestLabSelectedExperiment(t *testing.T) {
+	m := newLabModel(NewTheme())
+	if _, ok := m.selectedExperiment(); ok {
+		t.Error("an empty panel has no selected experiment")
+	}
+	m.setExperiments([]domain.Experiment{{ID: "e1"}, {ID: "e2"}})
+	m.selectDown()
+	e, ok := m.selectedExperiment()
+	if !ok || e.ID != "e2" {
+		t.Errorf("selectedExperiment = %v, %v; want e2, true", e.ID, ok)
+	}
+}
+
+func TestLabSetExperimentsReclampsSelection(t *testing.T) {
+	m := newLabModel(NewTheme())
+	m.setExperiments([]domain.Experiment{{ID: "e1"}, {ID: "e2"}, {ID: "e3"}})
+	m.selectDown()
+	m.selectDown()
+	m.setExperiments([]domain.Experiment{{ID: "e1"}})
+	if m.selected != 0 {
+		t.Errorf("after the list shrank, selected = %d, want 0", m.selected)
+	}
+}
+
+func TestLabFocusedRowHighlight(t *testing.T) {
+	m := newLabModel(NewTheme())
+	m.setWidth(38)
+	m.setExperiments([]domain.Experiment{{ID: "e1"}})
+	if strings.Contains(m.View(), "▸") {
+		t.Error("an unfocused panel must not show the selection marker")
+	}
+	m.setFocused(true)
+	if !strings.Contains(m.View(), "▸") {
+		t.Error("a focused panel should mark the selected row")
+	}
+}
+
 // stripANSI removes ANSI escape sequences so width assertions count only
 // visible runes.
 func stripANSI(s string) string {

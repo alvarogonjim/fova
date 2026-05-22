@@ -112,3 +112,58 @@ func TestJobsRunningJobHasProgressBar(t *testing.T) {
 		t.Errorf("running job with an ETA should render a progress bar: %q", out)
 	}
 }
+
+func TestJobsSelectionMovesAndClamps(t *testing.T) {
+	m := newJobsModel(NewTheme())
+	m.setJobs([]domain.Job{{ID: "j1"}, {ID: "j2"}, {ID: "j3"}})
+	if m.selected != 0 {
+		t.Fatalf("selection starts at 0, got %d", m.selected)
+	}
+	m.selectUp() // clamps at the top
+	if m.selected != 0 {
+		t.Errorf("selectUp at top: selected = %d, want 0", m.selected)
+	}
+	m.selectDown()
+	m.selectDown()
+	m.selectDown() // clamps at the bottom
+	if m.selected != 2 {
+		t.Errorf("selectDown past end: selected = %d, want 2", m.selected)
+	}
+}
+
+func TestJobsSelectedJob(t *testing.T) {
+	m := newJobsModel(NewTheme())
+	if _, ok := m.selectedJob(); ok {
+		t.Error("an empty panel has no selected job")
+	}
+	m.setJobs([]domain.Job{{ID: "j1"}, {ID: "j2"}})
+	m.selectDown()
+	j, ok := m.selectedJob()
+	if !ok || j.ID != "j2" {
+		t.Errorf("selectedJob = %v, %v; want j2, true", j.ID, ok)
+	}
+}
+
+func TestJobsSetJobsReclampsSelection(t *testing.T) {
+	m := newJobsModel(NewTheme())
+	m.setJobs([]domain.Job{{ID: "j1"}, {ID: "j2"}, {ID: "j3"}})
+	m.selectDown()
+	m.selectDown() // selected == 2
+	m.setJobs([]domain.Job{{ID: "j1"}}) // list shrank
+	if m.selected != 0 {
+		t.Errorf("after the list shrank, selected = %d, want 0", m.selected)
+	}
+}
+
+func TestJobsFocusedRowHighlight(t *testing.T) {
+	m := newJobsModel(NewTheme())
+	m.setWidth(38)
+	m.setJobs([]domain.Job{{ID: "j1", Tool: "a", Status: domain.JobRunning}})
+	if strings.Contains(m.View(), "▸") {
+		t.Error("an unfocused panel must not show the selection marker")
+	}
+	m.setFocused(true)
+	if !strings.Contains(m.View(), "▸") {
+		t.Error("a focused panel should mark the selected row")
+	}
+}

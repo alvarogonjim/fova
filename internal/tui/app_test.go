@@ -698,6 +698,36 @@ func TestRunSlashCommandKeysStubbedForNow(t *testing.T) {
 	}
 }
 
+func TestOnboardingCommandOpensWizard(t *testing.T) {
+	t.Setenv("FOVA_CONFIG_DIR", t.TempDir()) // isolate config I/O
+	m := newTestApp()
+	m.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
+	m.runSlashCommand("onboarding", "")
+	if m.overlay != overlayWizard {
+		t.Fatalf("/onboarding should open the wizard overlay, got %v", m.overlay)
+	}
+	if m.wizard == nil {
+		t.Error("/onboarding should construct the wizard model")
+	}
+}
+
+func TestWizardOverlaySkipCloses(t *testing.T) {
+	t.Setenv("FOVA_CONFIG_DIR", t.TempDir()) // isolate config I/O
+	m := newTestApp()
+	m.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
+	m.runSlashCommand("onboarding", "")
+	// Esc inside the overlay produces a command that yields a wizardDoneMsg;
+	// run it and feed the message back so finishWizardOverlay runs.
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if cmd == nil {
+		t.Fatal("Esc in the wizard overlay should produce a command")
+	}
+	m.Update(cmd())
+	if m.overlay != overlayNone {
+		t.Error("skipping the wizard overlay should close it")
+	}
+}
+
 func contains(s, sub string) bool {
 	return len(s) >= len(sub) && (s == sub || indexOf(s, sub) >= 0)
 }

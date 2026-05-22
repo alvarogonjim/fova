@@ -91,6 +91,9 @@ func TestChai1ExecuteSubmitsJob(t *testing.T) {
 		t.Fatalf("Execute: %v", err)
 	}
 	if res.JobID == "" {
-		t.Error("Execute must return a job id")
+		t.Fatal("Execute must return a job id")
 	}
+	// Wait for the submitted job to finish before the test returns —
+	// otherwise t.Cleanup closing the store races the job's goroutine.
+	waitJob(t, mgr, res.JobID)
 }

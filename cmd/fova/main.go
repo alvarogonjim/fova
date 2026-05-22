@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -96,6 +97,18 @@ func newRootCmd() *cobra.Command {
 
 // runTUI builds the registry, model registry, store, and starts the app.
 func runTUI() error {
+	// MUST run before assets.Load: Load materializes config.toml, which would
+	// flip isFirstRun to false and defeat first-run detection.
+	if err := maybeRunOnboarding(); err != nil {
+		return err
+	}
+	bundle, err := assets.Load()
+	if err != nil {
+		return err
+	}
+	cfg := bundle.Config
+	resolvedHome = resolveFovaHome(cfg)
+
 	workspace, err := defaultWorkspace()
 	if err != nil {
 		return err
@@ -112,12 +125,7 @@ func runTUI() error {
 
 	mgr := jobmgr.NewManager(st, nil)
 	mgr.SetLogDir(filepath.Join(fovaHome(), "logs"))
-	bundle, err := assets.Load()
-	if err != nil {
-		return err
-	}
 	models := llm.NewModelRegistry(bundle.Models)
-	cfg := bundle.Config
 	tui.ApplyTheme(cfg.UI.Theme)
 	if err := models.SelectDefault(cfg.Defaults); err != nil {
 		return err
@@ -273,8 +281,20 @@ func buildRegistry(workspace string, st *store.Store, mgr *jobmgr.Manager, model
 	return registry
 }
 
-// fovaHome returns the fova home directory ($FOVA_HOME or ~/fova).
+// resolvedHome holds the fova data directory for this process. runTUI sets it
+// once from config; fovaHome() returns it.
+var resolvedHome string
+
+// fovaHome returns the fova data directory for this process.
 func fovaHome() string {
+	if resolvedHome != "" {
+		return resolvedHome
+	}
+	return defaultFovaHome()
+}
+
+// defaultFovaHome is the data dir absent any config: $FOVA_HOME or ~/fova.
+func defaultFovaHome() string {
 	if h := os.Getenv("FOVA_HOME"); h != "" {
 		return h
 	}
@@ -283,6 +303,28 @@ func fovaHome() string {
 		return "fova"
 	}
 	return filepath.Join(uh, "fova")
+}
+
+// resolveFovaHome resolves the data dir: an explicit $FOVA_HOME wins, then
+// config.toml's [defaults].data_dir, then the ~/fova default.
+func resolveFovaHome(cfg assets.Config) string {
+	if h := os.Getenv("FOVA_HOME"); h != "" {
+		return h
+	}
+	if d := strings.TrimSpace(cfg.Defaults.DataDir); d != "" {
+		return expandTilde(d)
+	}
+	return defaultFovaHome()
+}
+
+// expandTilde expands a leading ~ to the user's home directory.
+func expandTilde(p string) string {
+	if p == "~" || strings.HasPrefix(p, "~/") {
+		if uh, err := os.UserHomeDir(); err == nil {
+			return filepath.Join(uh, strings.TrimPrefix(strings.TrimPrefix(p, "~"), "/"))
+		}
+	}
+	return p
 }
 
 // defaultWorkspace returns $FOVA_HOME/projects/default, creating it.

@@ -119,6 +119,7 @@ var slashCommands = []Command{
 		Arguments: ArgsNone,
 	},
 	{Name: "keys", Description: "show every keybinding", Arguments: ArgsNone},
+	{Name: "onboarding", Description: "re-run the first-run setup wizard", Arguments: ArgsNone},
 	{Name: "help", Description: "show keybindings and commands", Arguments: ArgsNone},
 	{Name: "quit", Description: "save and exit", Arguments: ArgsNone},
 }

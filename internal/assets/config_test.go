@@ -258,6 +258,25 @@ func TestKnowledgeConfigHasNewSPDFields(t *testing.T) {
 	}
 }
 
+func TestConfigDataDirRoundTrip(t *testing.T) {
+	t.Setenv("FOVA_CONFIG_DIR", t.TempDir())
+	c := DefaultConfig()
+	if c.Defaults.DataDir != "" {
+		t.Errorf("the embedded default data_dir should be empty, got %q", c.Defaults.DataDir)
+	}
+	c.Defaults.DataDir = "/home/u/proteins"
+	if err := SaveConfig(c); err != nil {
+		t.Fatalf("SaveConfig: %v", err)
+	}
+	got, err := LoadConfig()
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	if got.Defaults.DataDir != "/home/u/proteins" {
+		t.Errorf("DataDir = %q, want /home/u/proteins", got.Defaults.DataDir)
+	}
+}
+
 func TestKnowledgeConfigParsesOverrides(t *testing.T) {
 	in := `
 [ui]

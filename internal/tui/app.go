@@ -41,6 +41,7 @@ const (
 	overlayPicker
 	overlayDetail
 	overlayKeys
+	overlayWizard
 )
 
 // panelFocus is which pane the Tab focus ring currently targets — the chat
@@ -121,6 +122,8 @@ type Model struct {
 	submit  submitModal // rich Adaptyv submit-confirmation overlay (SPECS §12.2)
 	picker  *pickerModel
 	keys    keysOverlay // /keys overlay state (just a placeholder marker)
+
+	wizard *wizardModel // /onboarding wizard overlay; nil unless open
 
 	// pendingTool / pendingInput hold the tool context from a ConfirmContextMsg
 	// until the paired ConfirmRequestMsg arrives.
@@ -417,6 +420,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case replayDoneMsg:
 		m.updateReplayStatus()
 		return m, m.waitForBus()
+	case wizardDoneMsg:
+		return m.finishWizardOverlay(msg)
 	case editorDoneMsg:
 		if msg.Err != nil {
 			m.chat.appendError("editor: " + msg.Err.Error())
@@ -519,6 +524,13 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 		}
 		return m, nil
+	case overlayWizard:
+		if m.wizard == nil {
+			m.overlay = overlayNone
+			return m, nil
+		}
+		_, cmd := m.wizard.Update(msg)
+		return m, cmd
 	}
 
 	// When a side panel holds focus, it owns the keyboard: arrows move the
@@ -828,6 +840,8 @@ func (m *Model) runSlashCommand(cmd, arg string) (tea.Model, tea.Cmd) {
 		return m.cmdConfig(arg)
 	case "keys":
 		return m.cmdKeys()
+	case "onboarding":
+		return m.cmdOnboarding()
 	case "jobs", "designs", "lab", "export", "cost", "project":
 		m.chat.appendAgentDeltaBlock("/" + cmd + " arrives in a later fova milestone.")
 		return m, nil
@@ -1084,6 +1098,39 @@ func (m *Model) cmdKeys() (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// cmdOnboarding opens the onboarding wizard as an overlay.
+func (m *Model) cmdOnboarding() (tea.Model, tea.Cmd) {
+	cat := assets.DefaultCatalog()
+	if c, err := assets.LoadModels(); err == nil {
+		cat = c
+	}
+	m.wizard = newWizardModel(m.theme, cat, probeOllama("http://localhost:11434"))
+	m.wizard.width, m.wizard.height = m.width, m.height
+	m.overlay = overlayWizard
+	return m, m.wizard.Init()
+}
+
+// finishWizardOverlay applies a completed wizard result, reloads config so the
+// live-applicable settings take effect, and closes the overlay.
+func (m *Model) finishWizardOverlay(msg wizardDoneMsg) (tea.Model, tea.Cmd) {
+	m.overlay = overlayNone
+	m.wizard = nil
+	if msg.Skipped {
+		return m, nil
+	}
+	if err := ApplyWizardResult(msg.Result); err != nil {
+		m.chat.appendError("onboarding: " + err.Error())
+		return m, nil
+	}
+	m.cmdReload() // re-read config.toml / models.toml; applies theme, provider, budget
+	m.chat.appendAgentDeltaBlock("Setup saved.")
+	if msg.Result.DataDir != "" {
+		m.chat.appendAgentDeltaBlock(
+			"The data folder change takes effect the next time you start fova.")
+	}
+	return m, nil
+}
+
 // buildSubmitModal parses a lab.submit_experiment tool input into the rich
 // confirmation overlay (SPECS §12.2). defaultURL is shown when the request
 // carries no webhook_url of its own.
@@ -1313,6 +1360,10 @@ func (m *Model) View() string {
 		return m.detail.View()
 	case overlayKeys:
 		return base + "\n" + m.keys.view(m.theme, m.width)
+	case overlayWizard:
+		if m.wizard != nil {
+			return m.wizard.View()
+		}
 	}
 	return base
 }

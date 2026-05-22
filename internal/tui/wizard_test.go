@@ -1,12 +1,15 @@
 package tui
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/alvarogonjim/fova/internal/config"
+	"github.com/alvarogonjim/fova/internal/secrets"
 )
 
 // testCatalog is a minimal provider catalog for wizard tests.
@@ -164,5 +167,42 @@ func TestWizardFolderRejectsEmpty(t *testing.T) {
 	w.Update(key(tea.KeyEnter))
 	if w.errMsg == "" || w.steps[w.idx].id != "folder" {
 		t.Error("an empty folder path should be rejected with an inline error and not advance")
+	}
+}
+
+func TestApplyWizardResultWritesConfig(t *testing.T) {
+	t.Setenv("FOVA_CONFIG_DIR", t.TempDir())
+	defer secrets.UseInMemoryKeyring()()
+	err := ApplyWizardResult(WizardResult{
+		Provider: "anthropic", Theme: "dark", ComputeBackend: "modal",
+		KnowledgeEmail: "a@b.com", BudgetUSD: 9,
+		APIKeyProvider: "anthropic", APIKeyEnv: "ANTHROPIC_API_KEY", APIKey: "sk-test",
+	})
+	if err != nil {
+		t.Fatalf("ApplyWizardResult: %v", err)
+	}
+	cfg, err := config.LoadConfig()
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	if cfg.Defaults.Provider != "anthropic" || cfg.UI.Theme != "dark" ||
+		cfg.Defaults.ComputeBackend != "modal" || cfg.Knowledge.Mailto != "a@b.com" ||
+		cfg.Budget.SessionSoftLimitUSD != 9 {
+		t.Errorf("config not written as expected: %+v", cfg)
+	}
+	if got, ok := secrets.Get(secrets.APIKeyName("anthropic")); !ok || got != "sk-test" {
+		t.Errorf("API key not stored: %q %v", got, ok)
+	}
+}
+
+func TestApplyWizardResultCreatesDataDir(t *testing.T) {
+	t.Setenv("FOVA_CONFIG_DIR", t.TempDir())
+	defer secrets.UseInMemoryKeyring()()
+	dir := filepath.Join(t.TempDir(), "newhome")
+	if err := ApplyWizardResult(WizardResult{DataDir: dir, Theme: "auto", ComputeBackend: "local"}); err != nil {
+		t.Fatalf("ApplyWizardResult: %v", err)
+	}
+	if _, err := os.Stat(dir); err != nil {
+		t.Errorf("data dir not created: %v", err)
 	}
 }

@@ -11,6 +11,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/alvarogonjim/fova/internal/config"
+	"github.com/alvarogonjim/fova/internal/secrets"
 )
 
 // WizardResult is the set of choices the onboarding wizard collected.
@@ -526,4 +527,87 @@ func (m *wizardModel) footer(step wizardStep) string {
 		parts = append([]string{"enter next"}, parts...)
 	}
 	return strings.Join(parts, "  ·  ")
+}
+
+// ApplyWizardResult writes the wizard's choices: config.toml fields, the API
+// key into the OS keychain, and the data directory. A keychain failure is not
+// fatal — the key is applied to the process environment so the current
+// session still works.
+func ApplyWizardResult(r WizardResult) error {
+	cfg, err := config.LoadConfig()
+	if err != nil {
+		return err
+	}
+	if r.Theme != "" {
+		cfg.UI.Theme = r.Theme
+	}
+	if r.Provider != "" {
+		cfg.Defaults.Provider = r.Provider
+	}
+	if r.ComputeBackend != "" {
+		cfg.Defaults.ComputeBackend = r.ComputeBackend
+	}
+	if r.DataDir != "" {
+		cfg.Defaults.DataDir = r.DataDir
+	}
+	cfg.Knowledge.Mailto = r.KnowledgeEmail
+	if r.BudgetUSD > 0 {
+		cfg.Budget.SessionSoftLimitUSD = r.BudgetUSD
+	}
+	if err := config.SaveConfig(cfg); err != nil {
+		return err
+	}
+	if r.APIKey != "" && r.APIKeyProvider != "" {
+		if err := secrets.Set(secrets.APIKeyName(r.APIKeyProvider), r.APIKey); err != nil {
+			// Keychain unavailable (headless box, no secret service): fall back
+			// to the process environment so this session still works.
+			if r.APIKeyEnv != "" {
+				_ = os.Setenv(r.APIKeyEnv, r.APIKey)
+			}
+		}
+	}
+	if r.DataDir != "" {
+		if err := os.MkdirAll(wizardExpandTilde(r.DataDir), 0o755); err != nil {
+			return fmt.Errorf("create data dir: %w", err)
+		}
+	}
+	return nil
+}
+
+// wizardExpandTilde expands a leading ~ to the user's home directory.
+func wizardExpandTilde(p string) string {
+	if p == "~" || strings.HasPrefix(p, "~/") {
+		if uh, err := os.UserHomeDir(); err == nil {
+			return uh + strings.TrimPrefix(p, "~")
+		}
+	}
+	return p
+}
+
+// onboardingProgram wraps the wizard as a standalone Bubble Tea program: it
+// turns the wizard's wizardDoneMsg into tea.Quit.
+type onboardingProgram struct{ wizard *wizardModel }
+
+func (o *onboardingProgram) Init() tea.Cmd { return o.wizard.Init() }
+
+func (o *onboardingProgram) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if _, ok := msg.(wizardDoneMsg); ok {
+		return o, tea.Quit
+	}
+	_, cmd := o.wizard.Update(msg)
+	return o, cmd
+}
+
+func (o *onboardingProgram) View() string { return o.wizard.View() }
+
+// RunOnboarding runs the first-run wizard as a standalone program. ok is true
+// when the user finished it (false when skipped).
+func RunOnboarding(cat config.Catalog) (result WizardResult, ok bool, err error) {
+	w := newWizardModel(NewTheme(), cat, probeOllama("http://localhost:11434"))
+	final, runErr := tea.NewProgram(&onboardingProgram{wizard: w}, tea.WithAltScreen()).Run()
+	if runErr != nil {
+		return WizardResult{}, false, runErr
+	}
+	op := final.(*onboardingProgram)
+	return op.wizard.result, op.wizard.finished, nil
 }

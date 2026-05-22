@@ -27,6 +27,9 @@ type DefaultsConfig struct {
 	Provider       string `toml:"provider"`
 	Model          string `toml:"model"`
 	ComputeBackend string `toml:"compute_backend"`
+	// DataDir is the fova data folder ($FOVA_HOME equivalent). Empty means the
+	// ~/fova default. An explicit $FOVA_HOME environment variable overrides it.
+	DataDir string `toml:"data_dir"`
 }
 
 // KnowledgeConfig is the [knowledge] section of config.toml.

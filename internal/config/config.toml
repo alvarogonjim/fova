@@ -6,6 +6,7 @@ inline_graphics = "auto"     # auto | kitty | sixel | iterm2 | off
 provider = "auto"            # auto | a provider name from models.toml
 model = ""                   # empty → the registry's automatic pick
 compute_backend = "local"    # local | modal
+data_dir        = ""             # fova data folder; empty = ~/fova
 
 [knowledge]
 mailto = ""                  # your email for the OpenAlex polite pool

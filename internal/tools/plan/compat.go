@@ -27,7 +27,6 @@ const (
 	MethodProteinMPNN  Method = "ProteinMPNN"
 	MethodLigandMPNN   Method = "LigandMPNN"
 	MethodRFantibody   Method = "RFantibody"
-	MethodChai2        Method = "Chai2"
 	// BoltzGen — Stark et al. (2026), "Toward Universal Binder Design".
 	// PyRosetta-free generative binder design that runs on aarch64 (Grace);
 	// added as the SPECS-documented alternative when BindCraft is blocked
@@ -56,7 +55,6 @@ var compat = map[domain.Application][]Method{
 		MethodRFdiffusion,
 		MethodRFdiffusion2,
 		MethodProteinMPNN,
-		MethodChai2,
 	},
 	domain.AppAntibody: {
 		MethodRFantibody,
@@ -123,9 +121,6 @@ var methodAliases = map[string]Method{
 	// RFantibody
 	"rfantibody":        MethodRFantibody,
 	"design.rfantibody": MethodRFantibody,
-	// Chai2 (no separate tools.toml entry — runs via chai1 weights + design head)
-	"chai2":        MethodChai2,
-	"design.chai2": MethodChai2,
 	// BoltzGen
 	"boltzgen":        MethodBoltzGen,
 	"design.boltzgen": MethodBoltzGen,
@@ -143,7 +138,7 @@ func parseMethod(s string) (Method, bool) {
 	// goes through the alias map (lowercased) rather than failing here.
 	for _, m := range []Method{
 		MethodBindCraft, MethodRFdiffusion, MethodRFdiffusion2,
-		MethodProteinMPNN, MethodLigandMPNN, MethodRFantibody, MethodChai2,
+		MethodProteinMPNN, MethodLigandMPNN, MethodRFantibody,
 		MethodBoltzGen,
 	} {
 		if string(m) == s {
@@ -174,10 +169,6 @@ func toolForMethod(m Method) string {
 		return "ligandmpnn"
 	case MethodRFantibody:
 		return "rfantibody"
-	case MethodChai2:
-		// Chai2 piggybacks on the chai1 weights; the install probe targets
-		// the chai1 image (the only on-disk artefact).
-		return "chai1"
 	case MethodBoltzGen:
 		return "boltzgen"
 	}
@@ -186,10 +177,10 @@ func toolForMethod(m Method) string {
 
 // designToolForMethod returns the registered design.* agent-tool name that
 // executes method m. This is distinct from toolForMethod, which returns the
-// install-probe key (e.g. Chai2 installs via "chai1" but runs as the
-// "design.chai2" tool). plan.create uses it to reject a method that is
-// blessed in compat.go and installed locally but never wired into the tools
-// registry. Returns "" for an unknown method.
+// install-probe key (the tools.toml recipe name); the two usually coincide
+// but need not. plan.create uses it to reject a method that is blessed in
+// compat.go and installed locally but never wired into the tools registry.
+// Returns "" for an unknown method.
 func designToolForMethod(m Method) string {
 	switch m {
 	case MethodBindCraft:
@@ -206,8 +197,6 @@ func designToolForMethod(m Method) string {
 		return "design.ligandmpnn"
 	case MethodRFantibody:
 		return "design.rfantibody"
-	case MethodChai2:
-		return "design.chai2"
 	}
 	return ""
 }

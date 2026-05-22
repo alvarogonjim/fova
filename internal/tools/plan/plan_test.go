@@ -549,7 +549,7 @@ func TestCheckRegisteredRejectsUnwiredMethod(t *testing.T) {
 func TestDesignToolForMethodIsTotal(t *testing.T) {
 	for _, m := range []Method{
 		MethodBindCraft, MethodBoltzGen, MethodRFdiffusion, MethodRFdiffusion2,
-		MethodProteinMPNN, MethodLigandMPNN, MethodRFantibody, MethodChai2,
+		MethodProteinMPNN, MethodLigandMPNN, MethodRFantibody,
 	} {
 		if got := designToolForMethod(m); got == "" {
 			t.Errorf("designToolForMethod(%q) is empty — add it to compat.go", m)

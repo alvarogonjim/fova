@@ -126,7 +126,6 @@ func TestDesignToolsImplementToolInterface(t *testing.T) {
 	var _ tools.Tool = NewRFdiffusionTool(ws, mgr, backend, st)
 	var _ tools.Tool = NewProteinMPNNTool(ws, mgr, backend, st)
 	var _ tools.Tool = NewRFAntibodyTool(ws, mgr, backend, st)
-	var _ tools.Tool = NewChai2Tool(ws, mgr, backend, st)
 	var _ tools.Tool = NewRFdiffusion2Tool(ws, mgr, backend, st)
 	var _ tools.Tool = NewLigandMPNNTool(ws, mgr, backend, st)
 }
@@ -143,9 +142,6 @@ func TestAntibodyEnzymeToolMetadata(t *testing.T) {
 		{func(ws string, m *jobs.Manager, s *store.Store, b *stubBackend) *designTool {
 			return NewRFAntibodyTool(ws, m, b, s)
 		}, "design.rfantibody"},
-		{func(ws string, m *jobs.Manager, s *store.Store, b *stubBackend) *designTool {
-			return NewChai2Tool(ws, m, b, s)
-		}, "design.chai2"},
 		{func(ws string, m *jobs.Manager, s *store.Store, b *stubBackend) *designTool {
 			return NewRFdiffusion2Tool(ws, m, b, s)
 		}, "design.rfdiffusion2"},

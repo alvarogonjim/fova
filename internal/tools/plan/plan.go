@@ -109,7 +109,7 @@ func (*CreateTool) InputSchema() map[string]any {
 				"type": "string",
 				"description": "The primary design method/tool to run. Accepted: " +
 					"BindCraft, BoltzGen, RFdiffusion, RFdiffusion2, ProteinMPNN, " +
-					"LigandMPNN, RFantibody, Chai2 (the design.* registered " +
+					"LigandMPNN, RFantibody (the design.* registered " +
 					"name and lowercase tool name are also accepted). The " +
 					"method must be compatible with the chosen application " +
 					"and the underlying tool must be installed locally " +
@@ -261,7 +261,7 @@ func (t *CreateTool) Execute(ctx context.Context, input json.RawMessage) (tools.
 		return tools.Result{}, fmt.Errorf(
 			"plan.create: method %q is not a known design method — accepted "+
 				"names: BindCraft, BoltzGen, RFdiffusion, RFdiffusion2, ProteinMPNN, "+
-				"LigandMPNN, RFantibody, Chai2 (lower-case and design.* "+
+				"LigandMPNN, RFantibody (lower-case and design.* "+
 				"forms also accepted)", p.Method)
 	}
 	if !methodAllowed(p.Application, method) {

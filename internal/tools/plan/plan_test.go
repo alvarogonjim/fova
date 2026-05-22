@@ -494,6 +494,11 @@ func TestPlanCreateAcceptsCompatibleApplicationMethod(t *testing.T) {
 					// design.boltzgen_check gate is skipped (nil-registry path).
 					extra = `, "method_spec_path": "specs/binder.yaml"`
 				}
+				if m == MethodLigandMPNN {
+					// LigandMPNN requires method_params carrying its run
+					// configuration — at minimum a pdb backbone path.
+					extra = `, "method_params": {"pdb": "bb.pdb"}`
+				}
 				input := json.RawMessage(`{
 					"target": {"pdb_id": "1ABC"},
 					"application": "` + string(app) + `",
@@ -601,6 +606,48 @@ func boltzGenPlanInput(specPath string) json.RawMessage {
 		"method_spec_path": "` + specPath + `",
 		"method_params": {"protocol": "protein-anything", "num_designs": 100, "budget": 10}
 	}`)
+}
+
+// applyLigandMPNNParamsErr runs applyLigandMPNNMethodConfig against a fresh
+// LigandMPNN plan and returns the resulting MethodConfig (nil on error) plus
+// the error — mirroring how the BoltzGen tests exercise the method-config
+// helper. A *CreateTool with no store/installer/registry is enough: the
+// LigandMPNN config helper touches none of them.
+func applyLigandMPNNParamsErr(input string) (*domain.MethodConfig, error) {
+	ct := NewPlanCreateTool(nil, nil)
+	p := domain.DesignPlan{Method: string(MethodLigandMPNN)}
+	if err := ct.applyLigandMPNNMethodConfig(json.RawMessage(input), &p); err != nil {
+		return nil, err
+	}
+	return p.MethodConfig, nil
+}
+
+// applyLigandMPNNParams is applyLigandMPNNParamsErr for the happy path: it
+// fails the test on any error and returns the populated MethodConfig.
+func applyLigandMPNNParams(t *testing.T, input string) *domain.MethodConfig {
+	t.Helper()
+	cfg, err := applyLigandMPNNParamsErr(input)
+	if err != nil {
+		t.Fatalf("applyLigandMPNNMethodConfig: %v", err)
+	}
+	return cfg
+}
+
+// TestPlanCreateLigandMPNNMethodConfig: a LigandMPNN plan with method_params
+// must land MethodConfig.LigandMPNN, and an invalid params object is rejected.
+func TestPlanCreateLigandMPNNMethodConfig(t *testing.T) {
+	// A LigandMPNN plan with method_params must land MethodConfig.LigandMPNN.
+	cfg := applyLigandMPNNParams(t, `{"method_params":{"pdb":"bb.pdb","model_type":"ligand_mpnn"}}`)
+	if cfg == nil || cfg.LigandMPNN == nil {
+		t.Fatal("MethodConfig.LigandMPNN must be populated")
+	}
+	if cfg.LigandMPNN.PDB != "bb.pdb" {
+		t.Errorf("pdb = %q", cfg.LigandMPNN.PDB)
+	}
+	// An invalid params object (no pdb) must be rejected.
+	if _, err := applyLigandMPNNParamsErr(`{"method_params":{"model_type":"ligand_mpnn"}}`); err == nil {
+		t.Error("a LigandMPNN plan with no pdb must be rejected")
+	}
 }
 
 // TestPlanCreateBoltzGenRequiresSpecPath: a BoltzGen plan with no

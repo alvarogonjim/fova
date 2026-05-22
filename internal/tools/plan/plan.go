@@ -154,7 +154,10 @@ func (*CreateTool) InputSchema() map[string]any {
 				"type": "object",
 				"description": "Method-specific run configuration. For BoltzGen " +
 					"these are the BoltzGenParams run flags folded into the plan " +
-					"for /plan review and /plan approve. Ignored for other methods.",
+					"for /plan review and /plan approve. For LigandMPNN these are " +
+					"the LigandMPNNParams run flags (at minimum a pdb backbone " +
+					"path); method_params is REQUIRED for a LigandMPNN method. " +
+					"Ignored for other methods.",
 				"properties": map[string]any{
 					"protocol": map[string]any{
 						"type": "string",
@@ -288,6 +291,16 @@ func (t *CreateTool) Execute(ctx context.Context, input json.RawMessage) (tools.
 	// registration guards above — an invalid spec rejects the plan).
 	if method == MethodBoltzGen {
 		if err := t.applyBoltzGenMethodConfig(ctx, input, &p); err != nil {
+			return tools.Result{}, err
+		}
+	}
+
+	// LigandMPNN folds its run configuration (the LigandMPNNParams) into the
+	// plan so /plan can render it and /plan approve can run it. Unlike
+	// BoltzGen there is no spec file or external check — method_params alone
+	// carries the configuration.
+	if method == MethodLigandMPNN {
+		if err := t.applyLigandMPNNMethodConfig(input, &p); err != nil {
 			return tools.Result{}, err
 		}
 	}
@@ -550,6 +563,30 @@ func (t *CreateTool) applyBoltzGenMethodConfig(ctx context.Context, input json.R
 	}
 
 	p.MethodConfig = mc
+	return nil
+}
+
+// applyLigandMPNNMethodConfig parses the method_params input into a
+// LigandMPNNParams and folds it into DesignPlan.MethodConfig. method_params is
+// required for a LigandMPNN plan — it carries the run configuration (at
+// minimum a pdb backbone path). The params are value-shape validated via
+// domain.LigandMPNNParams.Validate; there is no external check tool.
+func (t *CreateTool) applyLigandMPNNMethodConfig(input json.RawMessage, p *domain.DesignPlan) error {
+	var envelope struct {
+		Params *domain.LigandMPNNParams `json:"method_params"`
+	}
+	if err := json.Unmarshal(input, &envelope); err != nil {
+		return fmt.Errorf("plan.create: invalid method_params: %w", err)
+	}
+	if envelope.Params == nil {
+		return fmt.Errorf(
+			"plan.create: method LigandMPNN requires method_params — the " +
+				"LigandMPNN run configuration (at minimum a pdb backbone path)")
+	}
+	if err := envelope.Params.Validate(); err != nil {
+		return err
+	}
+	p.MethodConfig = &domain.MethodConfig{LigandMPNN: envelope.Params}
 	return nil
 }
 

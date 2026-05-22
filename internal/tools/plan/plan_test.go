@@ -499,6 +499,12 @@ func TestPlanCreateAcceptsCompatibleApplicationMethod(t *testing.T) {
 					// configuration — at minimum a pdb backbone path.
 					extra = `, "method_params": {"pdb": "bb.pdb"}`
 				}
+				if m == MethodRFantibody {
+					// RFantibody requires method_params carrying its run
+					// configuration — at minimum a target antigen PDB and
+					// the epitope hotspots.
+					extra = `, "method_params": {"target": "ag.pdb", "hotspots": "T10"}`
+				}
 				input := json.RawMessage(`{
 					"target": {"pdb_id": "1ABC"},
 					"application": "` + string(app) + `",

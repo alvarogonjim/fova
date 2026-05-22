@@ -3,7 +3,10 @@ package local
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+
+	"github.com/alvarogonjim/fova/internal/domain"
 )
 
 func TestParseRFantibodyOutput(t *testing.T) {
@@ -38,5 +41,26 @@ func TestParseRFantibodyOutput(t *testing.T) {
 func TestParseRFantibodyOutputEmptyErrors(t *testing.T) {
 	if _, err := parseRFantibodyOutput(t.TempDir()); err == nil {
 		t.Fatal("expected an error when no prediction PDBs are present")
+	}
+}
+
+func TestBuildRFantibodyDriver(t *testing.T) {
+	tmp := 0.2
+	script := buildRFantibodyDriver(domain.RFantibodyParams{
+		NumDesigns: 20, Hotspots: "T305,T456", DesignLoops: "H3:5-13",
+		SeqsPerStruct: 4, Temperature: &tmp,
+	}, "/work/target.pdb", "/work/framework.pdb")
+	for _, want := range []string{
+		"uv run --project /opt/rfantibody rfdiffusion",
+		"-t /work/target.pdb", "-f /work/framework.pdb",
+		"-h T305,T456", "-n 20", "-l H3:5-13",
+		"uv run --project /opt/rfantibody proteinmpnn",
+		"-n 4", "-t 0.2",
+		"uv run --project /opt/rfantibody rf2",
+		"qvextract /work/predictions.qv", "qvscorefile /work/predictions.qv",
+	} {
+		if !strings.Contains(script, want) {
+			t.Errorf("driver missing %q in:\n%s", want, script)
+		}
 	}
 }

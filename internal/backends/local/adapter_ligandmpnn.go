@@ -2,6 +2,8 @@ package local
 
 import (
 	"bytes"
+	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -175,4 +177,164 @@ func ligandMPNNStructureFile(outDir, stem string, i int) string {
 		return packed
 	}
 	return ""
+}
+
+// sideChainPackerCheckpoint is the checkpoint filename for the LigandMPNN
+// side-chain packing model — passed as --checkpoint_path_sc when the request
+// enables pack_side_chains. It is one of the [[tools.ligandmpnn.weights]]
+// path= entries in tools.toml.
+const sideChainPackerCheckpoint = "ligandmpnn_sc_v_32_002_16.pt"
+
+// init registers the LigandMPNN design adapter with the local backend.
+func init() { registerAdapter(ligandMPNNAdapter{}) }
+
+// ligandMPNNAdapter wires design.ligandmpnn to the container-mode LigandMPNN
+// image: it compiles the agent's typed run configuration into run.py flags,
+// stages the input PDB and any per-residue bias/omit JSON files into the
+// workdir, runs run.py inside the tool image with the install-time weights
+// cache bind-mounted at /models, and returns the designed sequences — with
+// their FASTA-header confidence scores — in the {"designs":[...]} envelope.
+type ligandMPNNAdapter struct{}
+
+func (ligandMPNNAdapter) AgentTool() string { return "design.ligandmpnn" }
+func (ligandMPNNAdapter) Recipe() string    { return "ligandmpnn" }
+
+// Invoke runs LigandMPNN for one backbone: stage the PDB (and any bias/omit
+// JSON files), compile the typed request into run.py flags, run the container,
+// then parse the FASTA output into the {"designs":[...]} envelope. The image's
+// ENTRYPOINT is `python /opt/ligandmpnn/run.py`, so Cmd carries the flags only.
+func (ligandMPNNAdapter) Invoke(ctx context.Context, env AdapterEnv, request []byte) ([]byte, error) {
+	var req domain.LigandMPNNParams
+	if err := json.Unmarshal(request, &req); err != nil {
+		return nil, fmt.Errorf("design.ligandmpnn: invalid request: %w", err)
+	}
+	// The tool's preflight is the primary input guard; this is the
+	// backend-side backstop against a malformed request reaching the runtime.
+	pdb := strings.TrimSpace(req.PDB)
+	if pdb == "" {
+		return nil, fmt.Errorf("design.ligandmpnn: pdb is required (path to a .pdb backbone)")
+	}
+	if !strings.HasSuffix(pdb, ".pdb") {
+		return nil, fmt.Errorf("design.ligandmpnn: pdb %q must be a .pdb file", pdb)
+	}
+	if info, err := os.Stat(pdb); err != nil || info.IsDir() {
+		return nil, fmt.Errorf("design.ligandmpnn: pdb %q not found", pdb)
+	}
+	if checkpointForModelType(req.ModelType) == "" {
+		return nil, fmt.Errorf("design.ligandmpnn: unknown model_type %q", req.ModelType)
+	}
+	if env.Registry == nil {
+		return nil, fmt.Errorf("design.ligandmpnn: adapter registry unavailable")
+	}
+	if env.Recipe.ImageTag == "" {
+		return nil, fmt.Errorf("design.ligandmpnn: container image is not configured (run /install ligandmpnn)")
+	}
+
+	// Stage the input PDB into the workdir so the container flag references a
+	// path resolvable at /work.
+	pdbBase := filepath.Base(pdb)
+	if err := copyFile(pdb, filepath.Join(env.WorkDir, pdbBase)); err != nil {
+		return nil, fmt.Errorf("design.ligandmpnn: stage pdb: %w", err)
+	}
+	// Stage the per-residue bias/omit JSON files when set, remembering the
+	// staged base names so the flags can be rewritten to /work paths.
+	stagedBiasJSON := ""
+	if req.BiasAAPerResidue != "" {
+		base := filepath.Base(req.BiasAAPerResidue)
+		if err := copyFile(req.BiasAAPerResidue, filepath.Join(env.WorkDir, base)); err != nil {
+			return nil, fmt.Errorf("design.ligandmpnn: stage bias_AA_per_residue %q: %w", req.BiasAAPerResidue, err)
+		}
+		stagedBiasJSON = base
+	}
+	stagedOmitJSON := ""
+	if req.OmitAAPerResidue != "" {
+		base := filepath.Base(req.OmitAAPerResidue)
+		if err := copyFile(req.OmitAAPerResidue, filepath.Join(env.WorkDir, base)); err != nil {
+			return nil, fmt.Errorf("design.ligandmpnn: stage omit_AA_per_residue %q: %w", req.OmitAAPerResidue, err)
+		}
+		stagedOmitJSON = base
+	}
+
+	outDir := filepath.Join(env.WorkDir, "out")
+	if err := os.MkdirAll(outDir, 0o755); err != nil {
+		return nil, err
+	}
+	env.Tick(0.05) // input staged
+
+	rt := Detect()
+	if !rt.Available() {
+		return nil, fmt.Errorf("design.ligandmpnn: no container runtime — install podman or docker")
+	}
+	if ok, _ := rt.ImageExists(env.Recipe.ImageTag); !ok {
+		return nil, fmt.Errorf(
+			"design.ligandmpnn: image %s is missing — run /install ligandmpnn",
+			env.Recipe.ImageTag)
+	}
+
+	// LigandMPNN checkpoints (~1.5 GB) are fetched at /install time into this
+	// cache. A missing cache means install did not complete, so validate it
+	// exists (os.Stat) rather than creating it (spec §2).
+	modelsCache := ModelsRoot(env.Registry.Home(), "ligandmpnn")
+	if info, err := os.Stat(modelsCache); err != nil || !info.IsDir() {
+		return nil, fmt.Errorf(
+			"design.ligandmpnn: weights cache %s missing — run /install ligandmpnn",
+			modelsCache)
+	}
+
+	// fova-owned flags: input PDB, output folder, the model checkpoint, and a
+	// disabled stats dump. The ENTRYPOINT is `python /opt/ligandmpnn/run.py`,
+	// so Cmd is the flags only.
+	cmd := []string{
+		"--pdb_path", "/work/" + pdbBase,
+		"--out_folder", "/work/out",
+		"--checkpoint_" + checkpointModelKey(req.ModelType),
+		"/models/" + checkpointForModelType(req.ModelType),
+		"--save_stats", "0",
+	}
+	if req.PackSideChains != nil && *req.PackSideChains {
+		cmd = append(cmd, "--checkpoint_path_sc", "/models/"+sideChainPackerCheckpoint)
+	}
+	// Append the agent-facing flags, rewriting any staged JSON-file flag values
+	// to their /work paths.
+	for _, a := range ligandMPNNArgs(req) {
+		switch {
+		case a == req.BiasAAPerResidue && stagedBiasJSON != "":
+			cmd = append(cmd, "/work/"+stagedBiasJSON)
+		case a == req.OmitAAPerResidue && stagedOmitJSON != "":
+			cmd = append(cmd, "/work/"+stagedOmitJSON)
+		default:
+			cmd = append(cmd, a)
+		}
+	}
+
+	mounts := []Mount{
+		{HostPath: env.WorkDir, ContainerPath: "/work"},
+		{HostPath: modelsCache, ContainerPath: "/models"},
+	}
+	if _, err := rt.RunContainer(ctx, ContainerRunArgs{
+		Image:   env.Recipe.ImageTag,
+		Cmd:     cmd,
+		GPU:     env.Recipe.GPU,
+		Mounts:  mounts,
+		Workdir: "/work",
+		Log:     env.LogWriter(),
+	}); err != nil {
+		return nil, fmt.Errorf("design.ligandmpnn: container run failed: %w", err)
+	}
+	env.Tick(0.95) // run.py done
+
+	designs, err := parseLigandMPNNOutput(outDir)
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(designsEnvelope{Designs: designs})
+}
+
+// checkpointModelKey returns the run.py --checkpoint_<key> suffix for a
+// model_type — the model_type itself, defaulting to ligand_mpnn when empty.
+func checkpointModelKey(modelType string) string {
+	if modelType == "" {
+		return "ligand_mpnn"
+	}
+	return modelType
 }

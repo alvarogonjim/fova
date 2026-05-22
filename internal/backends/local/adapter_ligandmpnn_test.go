@@ -1,6 +1,8 @@
 package local
 
 import (
+	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -8,6 +10,30 @@ import (
 
 	"github.com/alvarogonjim/fova/internal/domain"
 )
+
+// ligandMPNNTestEnv builds an AdapterEnv with the container-mode ligandmpnn
+// recipe and a registry whose ~/.fova/models/ligandmpnn directory exists on
+// disk (the install-time weights cache the adapter os.Stats).
+func ligandMPNNTestEnv(t *testing.T) AdapterEnv {
+	t.Helper()
+	home := t.TempDir()
+	reg, err := LoadRegistry(home)
+	if err != nil {
+		t.Fatalf("LoadRegistry: %v", err)
+	}
+	if err := os.MkdirAll(ModelsRoot(home, "ligandmpnn"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	rec, ok := reg.Tool("ligandmpnn")
+	if !ok {
+		t.Fatal("ligandmpnn missing from registry")
+	}
+	return AdapterEnv{
+		Recipe:   rec,
+		WorkDir:  t.TempDir(),
+		Registry: reg,
+	}
+}
 
 func TestParseLigandMPNNOutput(t *testing.T) {
 	out := t.TempDir()
@@ -71,5 +97,43 @@ func TestCheckpointForModelType(t *testing.T) {
 	}
 	if got := checkpointForModelType(""); got != checkpointForModelType("ligand_mpnn") {
 		t.Error("empty model_type must default to the ligand_mpnn checkpoint")
+	}
+}
+
+func TestLigandMPNNAdapterInvoke(t *testing.T) {
+	env := ligandMPNNTestEnv(t)
+	pdb := filepath.Join(t.TempDir(), "bb.pdb")
+	if err := os.WriteFile(pdb, []byte("ATOM\nEND\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	stubContainerRuntime(t, func(args []string) error {
+		if len(args) < 2 || args[1] != "run" {
+			return nil
+		}
+		seqs := filepath.Join(env.WorkDir, "out", "seqs")
+		if err := os.MkdirAll(seqs, 0o755); err != nil {
+			return err
+		}
+		return os.WriteFile(filepath.Join(seqs, "bb.fa"),
+			[]byte(">bb, native\nMKQ\n>bb, id=1, overall_confidence=0.7\nMRD\n"), 0o644)
+	})
+	body := []byte(`{"pdb":"` + pdb + `","model_type":"ligand_mpnn"}`)
+	out, err := ligandMPNNAdapter{}.Invoke(context.Background(), env, body)
+	if err != nil {
+		t.Fatalf("Invoke: %v", err)
+	}
+	var resp designsEnvelope
+	if err := json.Unmarshal(out, &resp); err != nil {
+		t.Fatalf("not a designs envelope: %v", err)
+	}
+	if len(resp.Designs) != 1 || resp.Designs[0].Scores["overall_confidence"] != 0.7 {
+		t.Fatalf("want 1 scored design, got %+v", resp.Designs)
+	}
+}
+
+func TestLigandMPNNAdapterInvokeRejectsMissingPDB(t *testing.T) {
+	env := ligandMPNNTestEnv(t)
+	if _, err := (ligandMPNNAdapter{}).Invoke(context.Background(), env, []byte(`{}`)); err == nil {
+		t.Fatal("expected an error when pdb is missing")
 	}
 }

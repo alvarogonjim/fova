@@ -138,6 +138,33 @@ func TestRunTUIWiresLabTools(t *testing.T) {
 	}
 }
 
+func TestResolveFovaHomeEnvWins(t *testing.T) {
+	t.Setenv("FOVA_HOME", "/tmp/env-home")
+	cfg := config.DefaultConfig()
+	cfg.Defaults.DataDir = "/tmp/config-home"
+	if got := resolveFovaHome(cfg); got != "/tmp/env-home" {
+		t.Errorf("resolveFovaHome = %q, want /tmp/env-home", got)
+	}
+}
+
+func TestResolveFovaHomeUsesConfig(t *testing.T) {
+	t.Setenv("FOVA_HOME", "")
+	cfg := config.DefaultConfig()
+	cfg.Defaults.DataDir = "/tmp/config-home"
+	if got := resolveFovaHome(cfg); got != "/tmp/config-home" {
+		t.Errorf("resolveFovaHome = %q, want /tmp/config-home", got)
+	}
+}
+
+func TestResolveFovaHomeDefault(t *testing.T) {
+	t.Setenv("FOVA_HOME", "")
+	cfg := config.DefaultConfig() // DataDir is ""
+	got := resolveFovaHome(cfg)
+	if got == "" || got == "/tmp/config-home" {
+		t.Errorf("resolveFovaHome with no override = %q, want the ~/fova default", got)
+	}
+}
+
 func TestVersionCommandPrints(t *testing.T) {
 	root := newRootCmd()
 	var buf bytes.Buffer

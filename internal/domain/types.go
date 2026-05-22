@@ -221,10 +221,46 @@ type BoltzGenParams struct {
 }
 
 // MethodConfig carries method-specific run configuration on a DesignPlan.
-// Populated only for methods that need it (currently BoltzGen).
+// Populated only for methods that need it (BoltzGen, LigandMPNN).
 type MethodConfig struct {
-	SpecPath string          `json:"spec_path,omitempty"` // workspace-relative spec YAML
-	BoltzGen *BoltzGenParams `json:"boltzgen,omitempty"`  // run params
+	SpecPath   string            `json:"spec_path,omitempty"`  // workspace-relative spec YAML
+	BoltzGen   *BoltzGenParams   `json:"boltzgen,omitempty"`   // BoltzGen run params
+	LigandMPNN *LigandMPNNParams `json:"ligandmpnn,omitempty"` // LigandMPNN run params
+}
+
+// LigandMPNNParams is the agent-facing LigandMPNN run configuration. Every
+// field maps to a `run.py` flag; fova owns the infra flags separately.
+// Pointer fields distinguish "unset" (omit the flag, use run.py's default)
+// from a real zero value. It lives in internal/domain so a DesignPlan's
+// MethodConfig can carry it without an import cycle; internal/tools/design
+// references it under a package-local alias.
+type LigandMPNNParams struct {
+	ModelType                 string   `json:"model_type,omitempty"`
+	PDB                       string   `json:"pdb"`
+	NumDesigns                int      `json:"num_designs,omitempty"`
+	BatchSize                 int      `json:"batch_size,omitempty"`
+	Temperature               *float64 `json:"temperature,omitempty"`
+	Seed                      *int     `json:"seed,omitempty"`
+	RedesignedResidues        string   `json:"redesigned_residues,omitempty"`
+	FixedResidues             string   `json:"fixed_residues,omitempty"`
+	ChainsToDesign            string   `json:"chains_to_design,omitempty"`
+	BiasAA                    string   `json:"bias_AA,omitempty"`
+	OmitAA                    string   `json:"omit_AA,omitempty"`
+	BiasAAPerResidue          string   `json:"bias_AA_per_residue,omitempty"`
+	OmitAAPerResidue          string   `json:"omit_AA_per_residue,omitempty"`
+	LigandUseAtomContext      *bool    `json:"ligand_use_atom_context,omitempty"`
+	LigandUseSideChainContext *bool    `json:"ligand_use_side_chain_context,omitempty"`
+	LigandCutoff              *float64 `json:"ligand_cutoff,omitempty"`
+	SymmetryResidues          string   `json:"symmetry_residues,omitempty"`
+	SymmetryWeights           string   `json:"symmetry_weights,omitempty"`
+	HomoOligomer              *bool    `json:"homo_oligomer,omitempty"`
+	GlobalTransmembraneLabel  *int     `json:"global_transmembrane_label,omitempty"`
+	TransmembraneBuried       string   `json:"transmembrane_buried,omitempty"`
+	TransmembraneInterface    string   `json:"transmembrane_interface,omitempty"`
+	PackSideChains            *bool    `json:"pack_side_chains,omitempty"`
+	NumberOfPacksPerDesign    int      `json:"number_of_packs_per_design,omitempty"`
+	PackWithLigandContext     *bool    `json:"pack_with_ligand_context,omitempty"`
+	RepackEverything          *bool    `json:"repack_everything,omitempty"`
 }
 
 // EvidenceEntry is one literature reference attached to a DesignPlan. Every

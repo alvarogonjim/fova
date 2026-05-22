@@ -17,8 +17,8 @@ func TestLoadMaterializesAndParses(t *testing.T) {
 	if len(b.Models.Models) == 0 {
 		t.Error("Bundle.Models is empty")
 	}
-	if len(b.Skills) != 10 {
-		t.Errorf("want 10 built-in skills, got %d", len(b.Skills))
+	if len(b.Skills) != 11 {
+		t.Errorf("want 11 built-in skills, got %d", len(b.Skills))
 	}
 	if b.SystemPrompt == "" {
 		t.Error("Bundle.SystemPrompt is empty")
@@ -36,7 +36,7 @@ func TestLoadMaterializesAndParses(t *testing.T) {
 func TestLoadReportsBadSkillButKeepsGoing(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("FOVA_CONFIG_DIR", dir)
-	if _, err := Load(); err != nil { // first run materializes the 10 built-ins
+	if _, err := Load(); err != nil { // first run materializes the 11 built-ins
 		t.Fatal(err)
 	}
 	bad := filepath.Join(dir, "skills", "Bad Name.md")
@@ -47,8 +47,8 @@ func TestLoadReportsBadSkillButKeepsGoing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load must not hard-fail on a bad skill: %v", err)
 	}
-	if len(b.Skills) != 10 {
-		t.Errorf("the 10 good skills should still load, got %d", len(b.Skills))
+	if len(b.Skills) != 11 {
+		t.Errorf("the 11 good skills should still load, got %d", len(b.Skills))
 	}
 	if b.Report.OK() {
 		t.Error("expected a Report error for the bad skill file")

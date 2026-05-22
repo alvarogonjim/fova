@@ -97,6 +97,9 @@ func newRootCmd() *cobra.Command {
 
 // runTUI builds the registry, model registry, store, and starts the app.
 func runTUI() error {
+	if err := maybeRunOnboarding(); err != nil {
+		return err
+	}
 	cfg, err := config.LoadConfig()
 	if err != nil {
 		return err

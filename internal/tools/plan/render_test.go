@@ -191,6 +191,23 @@ func TestRenderPlanNoBoltzGenSectionWithoutMethodConfig(t *testing.T) {
 	}
 }
 
+// TestRenderLigandMPNNSection: a plan carrying a LigandMPNN method-config
+// renders the LigandMPNN block — the model type and the input PDB.
+func TestRenderLigandMPNNSection(t *testing.T) {
+	p := domain.DesignPlan{
+		ID: "p_x", Method: "LigandMPNN",
+		MethodConfig: &domain.MethodConfig{LigandMPNN: &domain.LigandMPNNParams{
+			ModelType: "ligand_mpnn", PDB: "bb.pdb", NumDesigns: 8,
+		}},
+	}
+	out := RenderPlan(p)
+	for _, want := range []string{"LigandMPNN", "ligand_mpnn", "bb.pdb"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("rendered plan missing %q:\n%s", want, out)
+		}
+	}
+}
+
 // TestRenderDoctorLabelledRows asserts /doctor output is one row per tool with
 // aligned columns and at least the System + Local protein tools sections
 // (spec Bug 7).

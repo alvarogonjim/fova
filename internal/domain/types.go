@@ -221,11 +221,33 @@ type BoltzGenParams struct {
 }
 
 // MethodConfig carries method-specific run configuration on a DesignPlan.
-// Populated only for methods that need it (BoltzGen, LigandMPNN).
+// Populated only for methods that need it (BoltzGen, LigandMPNN, RFantibody).
 type MethodConfig struct {
 	SpecPath   string            `json:"spec_path,omitempty"`  // workspace-relative spec YAML
 	BoltzGen   *BoltzGenParams   `json:"boltzgen,omitempty"`   // BoltzGen run params
 	LigandMPNN *LigandMPNNParams `json:"ligandmpnn,omitempty"` // LigandMPNN run params
+	RFantibody *RFantibodyParams `json:"rfantibody,omitempty"` // RFantibody run params
+}
+
+// RFantibodyParams is the agent-facing RFantibody run configuration. It drives
+// RFantibody's 3-stage pipeline (rfdiffusion → proteinmpnn → rf2); pointer
+// fields distinguish "unset" (omit the flag, use the stage's default) from a
+// real zero value. It lives in internal/domain so a DesignPlan's MethodConfig
+// can carry it without an import cycle; internal/tools/design references it
+// under a package-local alias.
+type RFantibodyParams struct {
+	Target          string   `json:"target"`
+	Hotspots        string   `json:"hotspots"`
+	Framework       string   `json:"framework,omitempty"`     // "nanobody" (default) | "scfv"
+	FrameworkPDB    string   `json:"framework_pdb,omitempty"` // workspace path; overrides Framework
+	DesignLoops     string   `json:"design_loops,omitempty"`  // e.g. "H1:7,H3:5-13,L3:9-11"
+	NumDesigns      int      `json:"num_designs,omitempty"`
+	Deterministic   *bool    `json:"deterministic,omitempty"`
+	SeqsPerStruct   int      `json:"seqs_per_struct,omitempty"`
+	Temperature     *float64 `json:"temperature,omitempty"`
+	NumRecycles     *int     `json:"num_recycles,omitempty"`
+	Seed            *int     `json:"seed,omitempty"`
+	HotspotShowProp *float64 `json:"hotspot_show_prop,omitempty"`
 }
 
 // LigandMPNNParams is the agent-facing LigandMPNN run configuration. Every

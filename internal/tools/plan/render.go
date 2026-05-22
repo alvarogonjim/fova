@@ -92,8 +92,13 @@ func RenderPlanWithOpts(p domain.DesignPlan, opts RenderPlanOpts) string {
 		}
 	}
 
-	if p.MethodConfig != nil {
-		renderBoltzGenSection(&b, p.MethodConfig, opts)
+	if mc := p.MethodConfig; mc != nil {
+		switch {
+		case mc.BoltzGen != nil || mc.SpecPath != "":
+			renderBoltzGenSection(&b, mc, opts)
+		case mc.LigandMPNN != nil:
+			renderLigandMPNNSection(&b, mc.LigandMPNN)
+		}
 	}
 
 	return strings.TrimRight(b.String(), "\n")
@@ -135,6 +140,39 @@ func renderBoltzGenSection(b *strings.Builder, mc *domain.MethodConfig, opts Ren
 
 	if opts.Check != nil {
 		b.WriteString("  Check: " + formatBoltzGenCheck(*opts.Check) + "\n")
+	}
+}
+
+// renderLigandMPNNSection appends the LigandMPNN method-config block to b: the
+// model type, the input backbone PDB, and the run parameters that are set. It
+// is emitted for a plan whose MethodConfig carries LigandMPNN params. Unlike
+// the BoltzGen section there is no spec file or check result to fold in.
+func renderLigandMPNNSection(b *strings.Builder, lm *domain.LigandMPNNParams) {
+	b.WriteString("\n  LigandMPNN design configuration\n")
+
+	modelType := lm.ModelType
+	if modelType == "" {
+		modelType = "ligand_mpnn (default)"
+	}
+	labelRow(b, "Model type", modelType)
+	labelRow(b, "Input PDB", lm.PDB)
+	labelRow(b, "Num designs", fmt.Sprintf("%d", lm.NumDesigns))
+
+	if lm.Temperature != nil {
+		labelRow(b, "Temperature", fmt.Sprintf("%g", *lm.Temperature))
+	}
+	if lm.RedesignedResidues != "" {
+		labelRow(b, "Redesigned", lm.RedesignedResidues)
+	}
+	if lm.FixedResidues != "" {
+		labelRow(b, "Fixed", lm.FixedResidues)
+	}
+	if lm.PackSideChains != nil {
+		packing := "off"
+		if *lm.PackSideChains {
+			packing = "on"
+		}
+		labelRow(b, "Side chains", packing)
 	}
 }
 

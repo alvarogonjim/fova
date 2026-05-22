@@ -12,14 +12,15 @@ import (
 // ContainerRunArgs is the set of options Runtime.RunContainer consumes. The
 // caller is responsible for filling Cmd with the templated entrypoint+args.
 type ContainerRunArgs struct {
-	Name    string            // job/container name, used for cancellation
-	Image   string            // full image tag, e.g. fova/proteinmpnn:v1.0.1
-	Cmd     []string          // entrypoint + args, already templated
-	Mounts  []Mount           // bind mounts
-	GPU     bool              // request all GPUs
-	Env     map[string]string // extra environment variables for the container
-	Workdir string            // working directory inside the container
-	Log     io.Writer         // stream stdout+stderr here; nil = io.Discard
+	Name       string            // job/container name, used for cancellation
+	Image      string            // full image tag, e.g. fova/proteinmpnn:v1.0.1
+	Cmd        []string          // entrypoint + args, already templated
+	Mounts     []Mount           // bind mounts
+	GPU        bool              // request all GPUs
+	Env        map[string]string // extra environment variables for the container
+	Workdir    string            // working directory inside the container
+	Entrypoint string            // override the image ENTRYPOINT; empty = keep the image default
+	Log        io.Writer         // stream stdout+stderr here; nil = io.Discard
 }
 
 // Mount describes one bind mount into the container.
@@ -97,6 +98,9 @@ func (r Runtime) RunContainer(ctx context.Context, a ContainerRunArgs) (string, 
 	}
 	if a.Workdir != "" {
 		args = append(args, "-w", a.Workdir)
+	}
+	if a.Entrypoint != "" {
+		args = append(args, "--entrypoint", a.Entrypoint)
 	}
 	args = append(args, a.Image)
 	args = append(args, a.Cmd...)

@@ -98,6 +98,8 @@ func RenderPlanWithOpts(p domain.DesignPlan, opts RenderPlanOpts) string {
 			renderBoltzGenSection(&b, mc, opts)
 		case mc.LigandMPNN != nil:
 			renderLigandMPNNSection(&b, mc.LigandMPNN)
+		case mc.RFantibody != nil:
+			renderRFantibodySection(&b, mc.RFantibody)
 		}
 	}
 
@@ -173,6 +175,31 @@ func renderLigandMPNNSection(b *strings.Builder, lm *domain.LigandMPNNParams) {
 			packing = "on"
 		}
 		labelRow(b, "Side chains", packing)
+	}
+}
+
+// renderRFantibodySection appends the RFantibody method-config block to b: the
+// framework choice, the target antigen, the epitope hotspots, the backbone
+// count, and the per-CDR design-loop spec when one is set. It is emitted for a
+// plan whose MethodConfig carries RFantibody params. Like the LigandMPNN
+// section there is no spec file or check result to fold in.
+func renderRFantibodySection(b *strings.Builder, ra *domain.RFantibodyParams) {
+	b.WriteString("\n  RFantibody design configuration\n")
+
+	framework := ra.Framework
+	switch {
+	case ra.FrameworkPDB != "":
+		framework = ra.FrameworkPDB
+	case framework == "":
+		framework = "nanobody (default)"
+	}
+	labelRow(b, "Framework", framework)
+	labelRow(b, "Target", ra.Target)
+	labelRow(b, "Hotspots", ra.Hotspots)
+	labelRow(b, "Num designs", fmt.Sprintf("%d", ra.NumDesigns))
+
+	if ra.DesignLoops != "" {
+		labelRow(b, "Design loops", ra.DesignLoops)
 	}
 }
 

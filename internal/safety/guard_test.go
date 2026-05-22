@@ -39,7 +39,6 @@ func TestGuardInspectsAllDesignTools(t *testing.T) {
 		"design.bindcraft",
 		"design.ligandmpnn",
 		"design.rfantibody",
-		"design.chai2",
 	} {
 		in := json.RawMessage(`{"target_sequence":"GSHM` + banSig + `AAA"}`)
 		r, refused := g.Inspect(name, in)

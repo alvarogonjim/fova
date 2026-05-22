@@ -109,7 +109,7 @@ func (*CreateTool) InputSchema() map[string]any {
 				"type": "string",
 				"description": "The primary design method/tool to run. Accepted: " +
 					"BindCraft, BoltzGen, RFdiffusion, RFdiffusion2, ProteinMPNN, " +
-					"LigandMPNN, RFantibody, Chai2 (the design.* registered " +
+					"LigandMPNN, RFantibody (the design.* registered " +
 					"name and lowercase tool name are also accepted). The " +
 					"method must be compatible with the chosen application " +
 					"and the underlying tool must be installed locally " +
@@ -261,7 +261,7 @@ func (t *CreateTool) Execute(ctx context.Context, input json.RawMessage) (tools.
 		return tools.Result{}, fmt.Errorf(
 			"plan.create: method %q is not a known design method — accepted "+
 				"names: BindCraft, BoltzGen, RFdiffusion, RFdiffusion2, ProteinMPNN, "+
-				"LigandMPNN, RFantibody, Chai2 (lower-case and design.* "+
+				"LigandMPNN, RFantibody (lower-case and design.* "+
 				"forms also accepted)", p.Method)
 	}
 	if !methodAllowed(p.Application, method) {
@@ -301,6 +301,16 @@ func (t *CreateTool) Execute(ctx context.Context, input json.RawMessage) (tools.
 	// carries the configuration.
 	if method == MethodLigandMPNN {
 		if err := t.applyLigandMPNNMethodConfig(input, &p); err != nil {
+			return tools.Result{}, err
+		}
+	}
+
+	// RFantibody folds its run configuration (the RFantibodyParams) into the
+	// plan so /plan can render it and /plan approve can run it. Like LigandMPNN
+	// there is no spec file or external check — method_params alone carries the
+	// 3-stage pipeline configuration.
+	if method == MethodRFantibody {
+		if err := t.applyRFantibodyMethodConfig(input, &p); err != nil {
 			return tools.Result{}, err
 		}
 	}
@@ -587,6 +597,31 @@ func (t *CreateTool) applyLigandMPNNMethodConfig(input json.RawMessage, p *domai
 		return err
 	}
 	p.MethodConfig = &domain.MethodConfig{LigandMPNN: envelope.Params}
+	return nil
+}
+
+// applyRFantibodyMethodConfig parses the method_params input into an
+// RFantibodyParams and folds it into DesignPlan.MethodConfig. method_params is
+// required for an RFantibody plan — it carries the run configuration (at
+// minimum the target antigen PDB and the epitope hotspots). The params are
+// value-shape validated via domain.RFantibodyParams.Validate; there is no
+// external check tool.
+func (t *CreateTool) applyRFantibodyMethodConfig(input json.RawMessage, p *domain.DesignPlan) error {
+	var envelope struct {
+		Params *domain.RFantibodyParams `json:"method_params"`
+	}
+	if err := json.Unmarshal(input, &envelope); err != nil {
+		return fmt.Errorf("plan.create: invalid method_params: %w", err)
+	}
+	if envelope.Params == nil {
+		return fmt.Errorf(
+			"plan.create: method RFantibody requires method_params — the " +
+				"RFantibody run configuration (at minimum target and hotspots)")
+	}
+	if err := envelope.Params.Validate(); err != nil {
+		return err
+	}
+	p.MethodConfig = &domain.MethodConfig{RFantibody: envelope.Params}
 	return nil
 }
 

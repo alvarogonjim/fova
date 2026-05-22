@@ -218,7 +218,6 @@ func buildRegistry(workspace string, st *store.Store, mgr *jobmgr.Manager, model
 	registry.Register(designtools.NewRFdiffusionTool(workspace, mgr, backend, st))
 	registry.Register(designtools.NewProteinMPNNTool(workspace, mgr, backend, st))
 	registry.Register(designtools.NewRFAntibodyTool(workspace, mgr, backend, st))
-	registry.Register(designtools.NewChai2Tool(workspace, mgr, backend, st))
 	registry.Register(designtools.NewRFdiffusion2Tool(workspace, mgr, backend, st))
 	registry.Register(designtools.NewLigandMPNNTool(workspace, mgr, backend, st))
 	registry.Register(fold.NewBoltz2(workspace, mgr, backend))

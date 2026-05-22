@@ -78,7 +78,6 @@ func TestParseMethodNormalises(t *testing.T) {
 		{"design.rfantibody", MethodRFantibody},
 		{"LigandMPNN", MethodLigandMPNN},
 		{"RFdiffusion2", MethodRFdiffusion2},
-		{"Chai2", MethodChai2},
 	}
 	for _, tc := range cases {
 		got, ok := parseMethod(tc.in)

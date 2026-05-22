@@ -77,7 +77,7 @@ func TestRunTUIWiresDesignAndScoreTools(t *testing.T) {
 	reg := buildRegistry(t.TempDir(), st, jobmgr.NewManager(st, nil), llm.NewModelRegistry(assets.DefaultCatalog()), assets.DefaultConfig(), newTestInstaller(t), skills.NewLoader(nil))
 	for _, name := range []string{
 		"design.bindcraft", "design.rfdiffusion", "design.proteinmpnn",
-		"design.rfantibody", "design.chai2", "design.rfdiffusion2", "design.ligandmpnn",
+		"design.rfantibody", "design.rfdiffusion2", "design.ligandmpnn",
 		"fold.boltz2", "fold.chai1",
 		"score.filter", "score.metrics", "score.ipsae",
 	} {

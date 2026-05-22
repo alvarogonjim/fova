@@ -39,12 +39,12 @@ const (
 	overlayConfirm
 	overlaySubmit
 	overlayPicker
-	overlayJobLog
+	overlayDetail
 	overlayKeys
 )
 
-// panelFocus is which pane Tab-cycling currently targets (used for the
-// narrow-terminal single-pane layout).
+// panelFocus is which pane the Tab focus ring currently targets — the chat
+// or one of the three side panels.
 type panelFocus int
 
 const (
@@ -78,8 +78,9 @@ type Model struct {
 	lab     labModel
 	focus   panelFocus
 
-	jobLog       jobLogView   // full-screen log view for the Tab-focused job
-	jobLogID     string       // ID of the job shown in jobLog ("" = none)
+	detail       detailView   // full-screen log view for the Tab-focused job
+	detailID     string       // ID of the job shown in detail ("" = none)
+	detailKind   panelFocus   // which panel the open detail view came from
 	sessionStart time.Time    // jobs created before this aren't blocked into chat
 	sessionCost  float64      // running LLM cost for this TUI session, in USD
 	budgetLimit  float64      // [budget].session_soft_limit_usd; 0 = no limit
@@ -193,7 +194,7 @@ func New(d Deps) *Model {
 	m.jobs = newJobsModel(th)
 	m.designs = newDesignsModel(th)
 	m.lab = newLabModel(th)
-	m.jobLog = newJobLogView(th)
+	m.detail = newDetailView(th)
 	m.keys = newKeysOverlay()
 	m.slashMenu = newSlashMenu()
 	m.sessionStart = time.Now().UTC()
@@ -223,6 +224,7 @@ func New(d Deps) *Model {
 			_ = lab.StartReceiver(context.Background(), d.WebhookPort, d.Store, m.bus)
 		}()
 	}
+	m.syncPanelFocus()
 	return m
 }
 
@@ -339,6 +341,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case refreshMsg:
 		m.reloadPanels()
 		m.refreshJobLogs()
+		m.refreshDetail()
 		return m, m.scheduleRefresh()
 
 	case spinnerTickMsg:
@@ -347,6 +350,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.thinking.tick()
 			return m, spinnerTick()
 		}
+		return m, nil
+
+	case tea.MouseMsg:
+		m.chat.handleMouse(msg)
 		return m, nil
 
 	// --- agent bus messages ---
@@ -484,12 +491,13 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 		}
 		return m, nil
-	case overlayJobLog:
+	case overlayDetail:
 		switch msg.Type {
-		case tea.KeyTab:
-			m.cycleFocus()
 		case tea.KeyEsc:
-			m.overlay, m.focus, m.jobLogID = overlayNone, focusChat, ""
+			m.overlay = overlayNone // keep the originating panel focus
+		case tea.KeyTab:
+			m.overlay = overlayNone
+			m.cycleFocus()
 		case tea.KeyCtrlD:
 			return m, tea.Quit
 		case tea.KeyCtrlC:
@@ -498,7 +506,7 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.chat.appendError("cancelled")
 			}
 		default:
-			m.jobLog = m.jobLog.update(msg)
+			m.detail = m.detail.update(msg)
 		}
 		return m, nil
 	case overlayKeys:
@@ -511,6 +519,42 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 		}
 		return m, nil
+	}
+
+	// When a side panel holds focus, it owns the keyboard: arrows move the
+	// row selection, Tab/Esc move focus, Enter opens the detail view. The
+	// message input is inactive.
+	if m.focus != focusChat {
+		switch msg.Type {
+		case tea.KeyUp:
+			m.panelSelectUp()
+			return m, nil
+		case tea.KeyDown:
+			m.panelSelectDown()
+			return m, nil
+		case tea.KeyEnter:
+			return m, m.openDetail()
+		case tea.KeyTab:
+			m.cycleFocus()
+			return m, nil
+		case tea.KeyEsc:
+			m.focus = focusChat
+			m.syncPanelFocus()
+			return m, nil
+		case tea.KeyCtrlD:
+			return m, tea.Quit
+		case tea.KeyCtrlC:
+			if m.running && m.turnCancel != nil {
+				m.turnCancel()
+				m.chat.appendError("cancelled")
+			}
+			return m, nil
+		}
+		if msg.Type == tea.KeyRunes && len(msg.Runes) == 1 && msg.Runes[0] == '?' {
+			m.overlay = overlayKeys
+			return m, nil
+		}
+		return m, nil // swallow every other key — the input is inactive
 	}
 
 	// The slash-command autocomplete popup, when open, captures navigation keys.
@@ -745,6 +789,8 @@ func (m *Model) runSlashCommand(cmd, arg string) (tea.Model, tea.Cmd) {
 		m.chat = newChatModel(m.theme, m.chatWidth(), m.chatHeight())
 		m.session = agent.NewSession(m.systemPrompt)
 		m.beginPersistedSession()
+		m.focus = focusChat // reset focus to the chat
+		m.layout()          // re-size the chat for the panel column
 		return m, nil
 	case "model":
 		if arg != "" {
@@ -1086,17 +1132,6 @@ func (m *Model) applyModel(id string) {
 	m.chat.appendAgentDeltaBlock("Switched to " + m.status.model + " (" + m.status.provider + ").")
 }
 
-// runningJobIDs returns the IDs of currently-running jobs, in panel order.
-func (m *Model) runningJobIDs() []string {
-	var ids []string
-	for _, j := range m.jobs.jobs {
-		if j.Status == domain.JobRunning {
-			ids = append(ids, string(j.ID))
-		}
-	}
-	return ids
-}
-
 // refreshJobLogs upserts an in-chat log block for every job submitted during
 // this session, and refreshes the full-screen view when one is open.
 func (m *Model) refreshJobLogs() {
@@ -1106,65 +1141,130 @@ func (m *Model) refreshJobLogs() {
 		}
 		m.chat.upsertJobLog(string(j.ID), j.Tool, j.Status, j.Started, tailLines(j.LogFile, 6))
 	}
-	if m.overlay == overlayJobLog && m.jobLogID != "" {
-		m.openJobLog(m.jobLogID)
-	}
 }
 
-// openJobLog loads job id's complete log into the full-screen view.
-func (m *Model) openJobLog(id string) {
-	var job domain.Job
-	for _, j := range m.jobs.jobs {
-		if string(j.ID) == id {
-			job = j
-			break
+// openDetail builds the full-screen detail view for the focused panel's
+// selected row and shows it. It is a no-op when the focused panel is empty or
+// the chat is focused. Returns a tea.Cmd (always nil today) so it slots into
+// the handleKey return contract.
+func (m *Model) openDetail() tea.Cmd {
+	var header, body string
+	switch m.focus {
+	case focusJobs:
+		j, ok := m.jobs.selectedJob()
+		if !ok {
+			return nil
 		}
+		header, body = renderJobDetail(m.theme, j)
+		m.detailID = string(j.ID)
+	case focusDesigns:
+		d, ok := m.designs.selectedDesign()
+		if !ok {
+			return nil
+		}
+		header, body = renderDesignDetail(m.theme, d)
+		m.detailID = string(d.ID)
+	case focusLab:
+		e, ok := m.lab.selectedExperiment()
+		if !ok {
+			return nil
+		}
+		header, body = renderExperimentDetail(m.theme, e)
+		m.detailID = string(e.ID)
+	default:
+		return nil
 	}
-	body := readLog(job.LogFile)
-	if strings.TrimSpace(body) == "" {
-		body = "(no output yet)"
-	}
-	m.jobLog.setSize(m.width, m.height)
-	m.jobLog.setContent(glyph(job.Status)+" "+job.Tool+" · "+id, body)
+	m.detailKind = m.focus
+	m.detail.setSize(m.width, m.height)
+	m.detail.setContent(header, body)
+	m.overlay = overlayDetail
+	return nil
 }
 
-// cycleFocus advances the unified Tab focus ring: chat → each running job's
-// full-screen log → the jobs / designs / lab panels → back to chat.
-func (m *Model) cycleFocus() {
-	jobs := m.runningJobIDs()
-	total := 1 + len(jobs) + 3 // chat + running jobs + 3 panels
-	cur := 0
-	switch {
-	case m.overlay == overlayJobLog:
-		for i, id := range jobs {
-			if id == m.jobLogID {
-				cur = 1 + i
+// refreshDetail rebuilds the open detail overlay from current panel data so a
+// running job's progress and log update live. It closes the overlay if the
+// open item has disappeared.
+func (m *Model) refreshDetail() {
+	if m.overlay != overlayDetail {
+		return
+	}
+	var header, body string
+	found := false
+	switch m.detailKind {
+	case focusJobs:
+		for _, j := range m.jobs.jobs {
+			if string(j.ID) == m.detailID {
+				header, body = renderJobDetail(m.theme, j)
+				found = true
 			}
 		}
-	case m.focus == focusJobs:
-		cur = 1 + len(jobs)
-	case m.focus == focusDesigns:
-		cur = 2 + len(jobs)
-	case m.focus == focusLab:
-		cur = 3 + len(jobs)
-	}
-	switch next := (cur + 1) % total; {
-	case next == 0:
-		m.overlay, m.focus, m.jobLogID = overlayNone, focusChat, ""
-	case next <= len(jobs):
-		m.jobLogID = jobs[next-1]
-		m.overlay = overlayJobLog
-		m.openJobLog(m.jobLogID)
-	default:
-		m.overlay, m.jobLogID = overlayNone, ""
-		switch next - 1 - len(jobs) {
-		case 0:
-			m.focus = focusJobs
-		case 1:
-			m.focus = focusDesigns
-		default:
-			m.focus = focusLab
+	case focusDesigns:
+		for _, d := range m.designs.designs {
+			if string(d.ID) == m.detailID {
+				header, body = renderDesignDetail(m.theme, d)
+				found = true
+			}
 		}
+	case focusLab:
+		for _, e := range m.lab.experiments {
+			if string(e.ID) == m.detailID {
+				header, body = renderExperimentDetail(m.theme, e)
+				found = true
+			}
+		}
+	}
+	if !found {
+		m.overlay = overlayNone
+		return
+	}
+	m.detail.setContent(header, body)
+}
+
+// cycleFocus advances the Tab focus ring: chat → jobs → designs → lab → chat.
+func (m *Model) cycleFocus() {
+	switch m.focus {
+	case focusChat:
+		m.focus = focusJobs
+	case focusJobs:
+		m.focus = focusDesigns
+	case focusDesigns:
+		m.focus = focusLab
+	default:
+		m.focus = focusChat
+	}
+	m.syncPanelFocus()
+}
+
+// syncPanelFocus pushes m.focus into the panels and the input bar so their
+// rendering matches: the focused panel highlights; the input dims whenever a
+// panel (not the chat) holds focus.
+func (m *Model) syncPanelFocus() {
+	m.jobs.setFocused(m.focus == focusJobs)
+	m.designs.setFocused(m.focus == focusDesigns)
+	m.lab.setFocused(m.focus == focusLab)
+	m.cmdbar.setActive(m.focus == focusChat)
+}
+
+// panelSelectUp / panelSelectDown move the selection in the focused panel.
+func (m *Model) panelSelectUp() {
+	switch m.focus {
+	case focusJobs:
+		m.jobs.selectUp()
+	case focusDesigns:
+		m.designs.selectUp()
+	case focusLab:
+		m.lab.selectUp()
+	}
+}
+
+func (m *Model) panelSelectDown() {
+	switch m.focus {
+	case focusJobs:
+		m.jobs.selectDown()
+	case focusDesigns:
+		m.designs.selectDown()
+	case focusLab:
+		m.lab.selectDown()
 	}
 }
 
@@ -1175,6 +1275,7 @@ func (m *Model) View() string {
 	if m.width == 0 {
 		return "starting fova…"
 	}
+	m.status.chatScrolledUp = !m.chat.atBottom()
 	var body string
 	if m.width >= 100 {
 		right := lipgloss.JoinVertical(lipgloss.Left,
@@ -1208,8 +1309,8 @@ func (m *Model) View() string {
 		return base + "\n" + m.submit.view(m.theme, m.width)
 	case overlayPicker:
 		return base + "\n" + m.picker.view(m.theme, m.width)
-	case overlayJobLog:
-		return m.jobLog.View()
+	case overlayDetail:
+		return m.detail.View()
 	case overlayKeys:
 		return base + "\n" + m.keys.view(m.theme, m.width)
 	}
@@ -1227,7 +1328,7 @@ func (m *Model) layout() {
 	m.jobs.setWidth(panelW)
 	m.designs.setWidth(panelW)
 	m.lab.setWidth(panelW)
-	m.jobLog.setSize(m.width, m.height)
+	m.detail.setSize(m.width, m.height)
 	chatW := m.width
 	if panelW > 0 {
 		chatW = m.width - panelW - 2 // 2 spaces of gap

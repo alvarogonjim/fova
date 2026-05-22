@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/charmbracelet/bubbles/viewport"
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/lipgloss"
 
@@ -92,6 +93,7 @@ func (c *chatModel) resize(width, height int) {
 func (c *chatModel) appendUser(text string) {
 	c.entries = append(c.entries, chatEntry{kind: entryUser, text: text})
 	c.refresh()
+	c.viewport.GotoBottom()
 }
 
 // appendAgentDelta appends to the last agent entry, or starts a new one.
@@ -321,11 +323,24 @@ func (c *chatModel) renderEntries() string {
 }
 
 func (c *chatModel) refresh() {
+	follow := c.viewport.AtBottom()
 	c.viewport.SetContent(c.renderEntries())
-	c.viewport.GotoBottom()
+	if follow {
+		c.viewport.GotoBottom()
+	}
 }
 
+// atBottom reports whether the chat is scrolled to the latest entry.
+func (c *chatModel) atBottom() bool { return c.viewport.AtBottom() }
+
 func (c *chatModel) View() string { return c.viewport.View() }
+
+// handleMouse forwards a mouse event to the chat viewport. The viewport's
+// built-in MouseWheelEnabled handling scrolls it on wheel-up / wheel-down;
+// non-wheel events (clicks, motion) are ignored by the viewport.
+func (c *chatModel) handleMouse(msg tea.MouseMsg) {
+	c.viewport, _ = c.viewport.Update(msg)
+}
 
 // formatToolDur renders an elapsed duration compactly for a tool-trace header.
 func formatToolDur(d time.Duration) string {

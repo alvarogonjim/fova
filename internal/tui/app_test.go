@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -26,6 +27,19 @@ func newTestApp() *Model {
 		Models:       llm.NewModelRegistry(assets.DefaultCatalog()),
 		SystemPrompt: assets.DefaultSystemPrompt(),
 	})
+}
+
+func TestAppMouseWheelScrollsChat(t *testing.T) {
+	m := newTestApp()
+	m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	for i := 0; i < 40; i++ {
+		m.chat.appendAgentDeltaBlock(fmt.Sprintf("entry %d", i))
+	}
+	m.chat.viewport.GotoBottom()
+	m.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonWheelUp})
+	if m.chat.viewport.AtBottom() {
+		t.Error("a MouseMsg wheel-up should scroll the chat")
+	}
 }
 
 func TestAppHeaderShowsWorkspacePath(t *testing.T) {
@@ -521,21 +535,43 @@ func TestAppRefreshShowsJobLogBlock(t *testing.T) {
 	}
 }
 
-func TestAppTabFocusesRunningJob(t *testing.T) {
+func TestTabCyclesPanelFocus(t *testing.T) {
 	m := newTestApp()
 	m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
-	started := time.Now().UTC()
-	m.jobs.setJobs([]domain.Job{{
-		ID: "j_run", Tool: "design.bindcraft", Status: domain.JobRunning,
-		Created: time.Now().UTC(), Started: &started, LogFile: "",
-	}})
-	m.Update(tea.KeyMsg{Type: tea.KeyTab}) // chat → the running job
-	if m.overlay != overlayJobLog || m.jobLogID != "j_run" {
-		t.Fatalf("Tab should focus the running job's log overlay; overlay=%v jobLogID=%q", m.overlay, m.jobLogID)
+	want := []panelFocus{focusJobs, focusDesigns, focusLab, focusChat}
+	for i, w := range want {
+		m.Update(tea.KeyMsg{Type: tea.KeyTab})
+		if m.focus != w {
+			t.Errorf("Tab #%d: focus = %v, want %v", i+1, m.focus, w)
+		}
 	}
-	m.Update(tea.KeyMsg{Type: tea.KeyEsc}) // overlay → back to chat
-	if m.overlay != overlayNone {
-		t.Fatalf("Esc should close the job-log overlay, got %v", m.overlay)
+}
+
+func TestFocusedPanelArrowsMoveSelection(t *testing.T) {
+	m := newTestApp()
+	m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	m.jobs.setJobs([]domain.Job{{ID: "j1"}, {ID: "j2"}, {ID: "j3"}})
+	m.Update(tea.KeyMsg{Type: tea.KeyTab}) // focus jobs
+	m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	if m.jobs.selected != 1 {
+		t.Errorf("after Down, jobs.selected = %d, want 1", m.jobs.selected)
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyUp})
+	if m.jobs.selected != 0 {
+		t.Errorf("after Up, jobs.selected = %d, want 0", m.jobs.selected)
+	}
+}
+
+func TestFocusedPanelDimsInput(t *testing.T) {
+	m := newTestApp()
+	m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	m.Update(tea.KeyMsg{Type: tea.KeyTab}) // focus jobs
+	if m.cmdbar.active {
+		t.Error("the input should be inactive while a panel is focused")
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyEsc}) // back to chat
+	if !m.cmdbar.active {
+		t.Error("Esc should return focus to the chat and reactivate the input")
 	}
 }
 
@@ -754,5 +790,141 @@ func TestRenderStructureRendererErrorAppendsError(t *testing.T) {
 	m.RenderStructure("/tmp/x.pdb")
 	if !strings.Contains(m.chat.renderEntries(), "pymol exploded") {
 		t.Errorf("chat does not surface the renderer error; view = %q", m.chat.renderEntries())
+	}
+}
+
+func TestEnterOpensDetailOverlay(t *testing.T) {
+	m := newTestApp()
+	m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	m.jobs.setJobs([]domain.Job{
+		{ID: "j1", Tool: "design.bindcraft", Status: domain.JobRunning, Created: time.Now()},
+	})
+	m.Update(tea.KeyMsg{Type: tea.KeyTab})   // focus jobs
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter}) // open detail
+	if m.overlay != overlayDetail {
+		t.Fatalf("Enter on a focused panel should open the detail overlay, got %v", m.overlay)
+	}
+	if !strings.Contains(m.View(), "design.bindcraft") {
+		t.Error("the detail overlay should show the selected job")
+	}
+}
+
+func TestDetailOverlayEscClosesKeepsFocus(t *testing.T) {
+	m := newTestApp()
+	m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	m.jobs.setJobs([]domain.Job{{ID: "j1", Tool: "t", Status: domain.JobRunning, Created: time.Now()}})
+	m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if m.overlay != overlayNone {
+		t.Error("Esc should close the detail overlay")
+	}
+	if m.focus != focusJobs {
+		t.Error("Esc should keep the originating panel focus")
+	}
+}
+
+func TestEnterOnEmptyPanelIsNoop(t *testing.T) {
+	m := newTestApp()
+	m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	m.Update(tea.KeyMsg{Type: tea.KeyTab}) // focus jobs (empty)
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if m.overlay != overlayNone {
+		t.Error("Enter on an empty panel must not open an overlay")
+	}
+}
+
+func TestClearKeepsPanelsVisible(t *testing.T) {
+	m := newTestApp()
+	m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	m.focus = focusJobs
+	m.runSlashCommand("clear", "")
+	wantChatW := 120 - 38 - 2 // full width minus the panel column and gap
+	if m.chat.width != wantChatW {
+		t.Errorf("after /clear chat width = %d, want %d (panels pushed off-screen)", m.chat.width, wantChatW)
+	}
+	if m.focus != focusChat {
+		t.Error("/clear should return focus to the chat")
+	}
+}
+
+func TestDetailOverlayRefreshesLive(t *testing.T) {
+	m := newTestApp()
+	m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	m.jobs.setJobs([]domain.Job{
+		{ID: "j1", Tool: "design.bindcraft", Status: domain.JobRunning, Created: time.Now()},
+	})
+	m.Update(tea.KeyMsg{Type: tea.KeyTab})   // focus jobs
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter}) // open detail
+	// The job finishes; the panels reload with its new status.
+	m.jobs.setJobs([]domain.Job{
+		{ID: "j1", Tool: "design.bindcraft", Status: domain.JobSucceeded, Created: time.Now()},
+	})
+	m.refreshDetail()
+	if !strings.Contains(m.View(), "succeeded") {
+		t.Error("an open job detail should refresh to the job's new status")
+	}
+}
+
+func TestDetailOverlayClosesWhenItemGone(t *testing.T) {
+	m := newTestApp()
+	m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	m.jobs.setJobs([]domain.Job{{ID: "j1", Tool: "t", Status: domain.JobRunning, Created: time.Now()}})
+	m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m.jobs.setJobs(nil) // the job disappears from the panel
+	m.refreshDetail()
+	if m.overlay != overlayNone {
+		t.Error("the detail overlay should close when its item disappears")
+	}
+}
+
+func TestEnterOpensDesignDetail(t *testing.T) {
+	m := newTestApp()
+	m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	m.designs.setDesigns([]domain.Design{
+		{ID: "d-xyz", Origin: domain.OriginBindCraft, Created: time.Now()},
+	})
+	m.Update(tea.KeyMsg{Type: tea.KeyTab}) // focus jobs
+	m.Update(tea.KeyMsg{Type: tea.KeyTab}) // focus designs
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if m.overlay != overlayDetail {
+		t.Fatalf("Enter on the designs panel should open the detail overlay, got %v", m.overlay)
+	}
+	if !strings.Contains(m.View(), "d-xyz") {
+		t.Error("the detail overlay should show the selected design")
+	}
+}
+
+func TestEnterOpensLabDetail(t *testing.T) {
+	m := newTestApp()
+	m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	m.lab.setExperiments([]domain.Experiment{
+		{ID: "e1", TargetName: "PD-L1", AssayType: "binding", Status: "in_progress"},
+	})
+	m.Update(tea.KeyMsg{Type: tea.KeyTab}) // focus jobs
+	m.Update(tea.KeyMsg{Type: tea.KeyTab}) // focus designs
+	m.Update(tea.KeyMsg{Type: tea.KeyTab}) // focus lab
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if m.overlay != overlayDetail {
+		t.Fatalf("Enter on the lab panel should open the detail overlay, got %v", m.overlay)
+	}
+	if !strings.Contains(m.View(), "PD-L1") {
+		t.Error("the detail overlay should show the selected experiment")
+	}
+}
+
+func TestDetailOverlayTabAdvancesFocus(t *testing.T) {
+	m := newTestApp()
+	m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	m.jobs.setJobs([]domain.Job{{ID: "j1", Tool: "t", Status: domain.JobRunning, Created: time.Now()}})
+	m.Update(tea.KeyMsg{Type: tea.KeyTab})   // focus jobs
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter}) // open detail
+	m.Update(tea.KeyMsg{Type: tea.KeyTab})   // close detail + advance focus
+	if m.overlay != overlayNone {
+		t.Error("Tab in the detail overlay should close it")
+	}
+	if m.focus != focusDesigns {
+		t.Errorf("Tab in the detail overlay should advance focus to designs, got %v", m.focus)
 	}
 }

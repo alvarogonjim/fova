@@ -42,6 +42,7 @@ type commandBarModel struct {
 
 	theme    Theme
 	focused  bool
+	active   bool // the input has the keyboard (false while a panel is focused)
 	running  bool
 	awaiting bool // a confirmation modal is open and waiting on the user
 }
@@ -59,6 +60,7 @@ func newCommandBarModel(th Theme, width int) commandBarModel {
 		width:   width,
 		theme:   th,
 		focused: true,
+		active:  true,
 	}
 	m.applyPromptStyle()
 	return m
@@ -98,6 +100,10 @@ func (m *commandBarModel) refreshHeight() bool {
 
 // setFocused records whether the message input currently holds keyboard focus.
 func (m *commandBarModel) setFocused(f bool) { m.focused = f }
+
+// setActive records whether the message input currently has the keyboard.
+// While a side panel holds focus the input is inactive and renders dimmed.
+func (m *commandBarModel) setActive(a bool) { m.active = a }
 
 // setRunning records whether a turn is in flight (the agent has the floor).
 func (m *commandBarModel) setRunning(r bool) {
@@ -171,5 +177,8 @@ func (m commandBarModel) inputLabel() string {
 func (m commandBarModel) View() string {
 	box := m.inputBorderStyle().Render(m.ta.View())
 	label := m.theme.Muted.Render(m.inputLabel())
+	if !m.active {
+		label = m.theme.Subtle.Render(m.inputLabel() + " · panel focus — esc to type")
+	}
 	return label + "\n" + box
 }

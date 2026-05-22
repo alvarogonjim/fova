@@ -22,10 +22,10 @@ func keybindings() []keyBinding {
 		// SPECS §10.4 — shipped in v0.4.
 		{"Ctrl+C", "cancel", "Cancel the running turn"},
 		{"Ctrl+D", "quit", "Save and exit"},
-		{"Tab", "focus", "Cycle focus between panels"},
+		{"Tab", "focus", "Cycle focus: chat → jobs → designs → lab"},
 		{"Esc", "dismiss", "Close modal / dismiss overlay"},
-		{"↑/↓", "navigate", "Navigate within the focused panel"},
-		{"Enter", "send", "Send the message / activate"},
+		{"↑/↓", "navigate", "Move the selection in the focused panel"},
+		{"Enter", "send", "Send the message, or open the selected panel row"},
 		{"Alt+Enter", "newline", "Insert a newline in the input"},
 
 		// SP-A additions (v0.5).

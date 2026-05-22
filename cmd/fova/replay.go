@@ -96,7 +96,7 @@ var runReplayTUI = func(path string) error {
 		ReplayEvents: doc.Events,
 		ReplayPace:   true,
 	})
-	p := tea.NewProgram(app, tea.WithAltScreen())
+	p := tea.NewProgram(app, tea.WithAltScreen(), tea.WithMouseCellMotion())
 	_, err = p.Run()
 	return err
 }

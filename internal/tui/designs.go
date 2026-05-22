@@ -18,15 +18,46 @@ const ShortlistIpSAE = 0.70
 // / ipTM / Lab columns (SPECS §10.2). Top-N rows (those with ipSAE >=
 // ShortlistIpSAE) are highlighted per rebrand spec §3.5.
 type designsModel struct {
-	theme   Theme
-	designs []domain.Design
-	width   int
+	theme    Theme
+	designs  []domain.Design
+	width    int
+	focused  bool // this panel currently holds keyboard focus
+	selected int  // highlighted row index, clamped to [0, len-1]
 }
 
 func newDesignsModel(th Theme) designsModel { return designsModel{theme: th, width: 36} }
 
-// setDesigns replaces the panel's designs.
-func (m *designsModel) setDesigns(designs []domain.Design) { m.designs = designs }
+// setDesigns replaces the panel's designs, re-clamping the selection cursor.
+func (m *designsModel) setDesigns(designs []domain.Design) {
+	m.designs = designs
+	m.clampSelection()
+}
+
+// setFocused records whether this panel currently holds keyboard focus.
+func (m *designsModel) setFocused(f bool) { m.focused = f }
+
+// clampSelection keeps selected within [0, len-1] (0 when the panel is empty).
+func (m *designsModel) clampSelection() {
+	if m.selected >= len(m.designs) {
+		m.selected = len(m.designs) - 1
+	}
+	if m.selected < 0 {
+		m.selected = 0
+	}
+}
+
+// selectUp / selectDown move the selection cursor and clamp it.
+func (m *designsModel) selectUp()   { m.selected--; m.clampSelection() }
+func (m *designsModel) selectDown() { m.selected++; m.clampSelection() }
+
+// selectedDesign returns the highlighted design, or false when empty.
+func (m *designsModel) selectedDesign() (domain.Design, bool) {
+	if len(m.designs) == 0 {
+		return domain.Design{}, false
+	}
+	m.clampSelection()
+	return m.designs[m.selected], true
+}
 
 // setWidth sets the panel's render width.
 func (m *designsModel) setWidth(w int) { m.width = w }
@@ -66,13 +97,14 @@ func RenderSectionRule(theme Theme, label string, width int, attention bool) str
 	return prefix + muted.Render(clipLine(line, width-prefixWidth))
 }
 
-// View renders the designs panel. The header uses RenderSectionRule (rebrand
-// §3.3); rows route through one of three style branches based on whether the
-// design is in the wet-lab shortlist (spec §3.5).
+// View renders the designs panel. The header is rendered by panelHeader
+// (accent-coloured when the panel is focused); each row renders via the
+// focused-selection branch when it is the selected row of a focused panel,
+// otherwise via the wet-lab-shortlist styling (spec §3.5).
 func (m designsModel) View() string {
 	var b strings.Builder
-	b.WriteString(RenderSectionRule(m.theme,
-		fmt.Sprintf("designs · %d", len(m.designs)), m.width, false))
+	b.WriteString(panelHeader(
+		fmt.Sprintf("designs · %d", len(m.designs)), m.width, m.theme, m.focused))
 	b.WriteString("\n")
 	header := fmt.Sprintf("  %-11s %6s %6s %6s %3s", "ID", "pLDDT", "ipSAE", "ipTM", "Lab")
 	b.WriteString(m.theme.ToolTrace.Render(clipLine(header, m.width)))
@@ -85,13 +117,21 @@ func (m designsModel) View() string {
 	mossStyle := lipgloss.NewStyle().Foreground(m.theme.Palette.Primary)
 	saffronStyle := lipgloss.NewStyle().Foreground(m.theme.Palette.Accent)
 	sandStyle := lipgloss.NewStyle().Foreground(m.theme.Palette.Fg)
-	for _, d := range m.designs {
+	for i, d := range m.designs {
 		// Lab results arrive with the Adaptyv integration (v0.4); show a dash for now.
 		id := shortID(string(d.ID))
 		plddt := score(d, "plddt_mean")
 		ipsae := score(d, "ipsae")
 		iptm := score(d, "iptm")
 		lab := "—"
+
+		if m.focused && i == m.selected {
+			line := fmt.Sprintf("%-11s %6s %6s %6s %3s",
+				id, plddt, ipsae, iptm, lab)
+			b.WriteString(saffronStyle.Render("▸ " + clipLine(line, m.width-2)))
+			b.WriteString("\n")
+			continue
+		}
 
 		if isShortlisted(d) {
 			// Spec §3.5: ID in moss (Primary), ipSAE in saffron (Accent),

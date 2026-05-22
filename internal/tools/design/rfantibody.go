@@ -3,7 +3,11 @@ package design
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"io"
 	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/alvarogonjim/fova/internal/backends"
 	"github.com/alvarogonjim/fova/internal/domain"
@@ -133,8 +137,86 @@ func (*rfantibodyTool) RequiresConfirmation(json.RawMessage) bool       { return
 func (*rfantibodyTool) EstimatedCostUSD(json.RawMessage) float64        { return 5.0 }
 func (*rfantibodyTool) EstimatedDuration(json.RawMessage) time.Duration { return 60 * time.Minute }
 
-// Execute is the design.rfantibody entry point. Task A2 fills in validation,
-// workspace-path resolution, job submission, and design persistence.
+// Execute validates the request, resolves the workspace path inputs, submits
+// a background job, and returns its ID immediately. The job runs the backend,
+// parses the designs, and persists them.
 func (t *rfantibodyTool) Execute(_ context.Context, input json.RawMessage) (tools.Result, error) {
-	return tools.Result{}, nil
+	var params RFantibodyParams
+	if err := json.Unmarshal(input, &params); err != nil {
+		return tools.Result{}, fmt.Errorf("invalid design.rfantibody request: %w", err)
+	}
+	if err := params.Validate(); err != nil {
+		return tools.Result{}, err
+	}
+	// Resolve every workspace-relative path input against the workspace root.
+	if t.workspaceRoot != "" {
+		for _, ref := range []*string{&params.Target, &params.FrameworkPDB} {
+			if *ref == "" {
+				continue
+			}
+			resolved, err := tools.ResolveWorkspacePath(t.workspaceRoot, *ref)
+			if err != nil {
+				return tools.Result{}, fmt.Errorf("design.rfantibody: %w", err)
+			}
+			if resolved != "" {
+				*ref = resolved
+			}
+		}
+	}
+	resolved, err := json.Marshal(params)
+	if err != nil {
+		return tools.Result{}, fmt.Errorf("design.rfantibody: %w", err)
+	}
+	jobID, err := t.mgr.Submit(jobs.Spec{
+		Kind:    domain.JobCompute,
+		Tool:    "design.rfantibody",
+		Backend: t.backend.Name(),
+		Input:   resolved,
+		Run: func(ctx context.Context, progress func(float64), log io.Writer) ([]byte, error) {
+			out, err := t.backend.Run(ctx, "design.rfantibody", resolved, log, progress)
+			if err != nil {
+				return nil, err
+			}
+			progress(0.95)
+			if _, perr := t.persist(out); perr != nil {
+				return out, perr
+			}
+			return out, nil
+		},
+	})
+	if err != nil {
+		return tools.Result{}, err
+	}
+	return tools.Result{
+		JobID: jobID,
+		Display: fmt.Sprintf("started design.rfantibody job %s — poll jobs.result for the designs",
+			jobID),
+		Provenance: domain.NewToolCallRef("design.rfantibody", input),
+	}, nil
+}
+
+// persist parses the backend's design-list output and writes each design to
+// the store. A response with no "designs" array persists nothing.
+func (t *rfantibodyTool) persist(out []byte) (int, error) {
+	var bo backendOutput
+	if err := json.Unmarshal(out, &bo); err != nil {
+		return 0, fmt.Errorf("design.rfantibody output is not valid JSON: %w", err)
+	}
+	for _, d := range bo.Designs {
+		design := domain.Design{
+			ID:            domain.DesignID("d_" + uuid.NewString()),
+			ProjectID:     store.DefaultProjectID,
+			Created:       time.Now().UTC(),
+			Origin:        domain.OriginRFAntibody,
+			Application:   domain.AppAntibody,
+			Sequence:      domain.Sequence{Chains: d.Sequence},
+			StructureFile: d.StructureFile,
+			Scores:        d.Scores,
+			Provenance:    []domain.ToolCallRef{domain.NewToolCallRef("design.rfantibody", nil)},
+		}
+		if err := t.store.InsertDesign(design); err != nil {
+			return 0, err
+		}
+	}
+	return len(bo.Designs), nil
 }

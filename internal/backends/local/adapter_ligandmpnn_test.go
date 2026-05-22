@@ -3,7 +3,10 @@ package local
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+
+	"github.com/alvarogonjim/fova/internal/domain"
 )
 
 func TestParseLigandMPNNOutput(t *testing.T) {
@@ -38,5 +41,35 @@ func TestParseLigandMPNNOutput(t *testing.T) {
 func TestParseLigandMPNNOutputEmptyErrors(t *testing.T) {
 	if _, err := parseLigandMPNNOutput(t.TempDir()); err == nil {
 		t.Fatal("expected an error when no seqs/*.fa are present")
+	}
+}
+
+func TestLigandMPNNArgs(t *testing.T) {
+	temp := 0.2
+	got := ligandMPNNArgs(domain.LigandMPNNParams{
+		ModelType: "ligand_mpnn", NumDesigns: 8, Temperature: &temp,
+		RedesignedResidues: "A23 A24",
+	})
+	joined := strings.Join(got, " ")
+	for _, want := range []string{
+		"--model_type ligand_mpnn", "--number_of_batches 8",
+		"--temperature 0.2", "--redesigned_residues A23 A24",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("args missing %q in %q", want, joined)
+		}
+	}
+	// Unset optionals omit their flags.
+	if strings.Contains(strings.Join(ligandMPNNArgs(domain.LigandMPNNParams{}), " "), "--seed") {
+		t.Error("an unset seed must omit the flag")
+	}
+}
+
+func TestCheckpointForModelType(t *testing.T) {
+	if got := checkpointForModelType("ligand_mpnn"); got == "" {
+		t.Error("ligand_mpnn must map to a checkpoint filename")
+	}
+	if got := checkpointForModelType(""); got != checkpointForModelType("ligand_mpnn") {
+		t.Error("empty model_type must default to the ligand_mpnn checkpoint")
 	}
 }

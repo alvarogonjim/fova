@@ -140,9 +140,6 @@ func TestAntibodyEnzymeToolMetadata(t *testing.T) {
 		name    string
 	}{
 		{func(ws string, m *jobs.Manager, s *store.Store, b *stubBackend) *designTool {
-			return NewRFAntibodyTool(ws, m, b, s)
-		}, "design.rfantibody"},
-		{func(ws string, m *jobs.Manager, s *store.Store, b *stubBackend) *designTool {
 			return NewRFdiffusion2Tool(ws, m, b, s)
 		}, "design.rfdiffusion2"},
 	} {
@@ -154,16 +151,13 @@ func TestAntibodyEnzymeToolMetadata(t *testing.T) {
 
 	const stubOut = `{"designs":[{"sequence":{"A":"MAQVQL"},"structure_file":"d.pdb","scores":{"ipsae":0.7}}]}`
 
-	// One antibody tool and one enzyme tool must persist designs tagged with
-	// the matching origin and application.
+	// One enzyme tool must persist designs tagged with the matching origin and
+	// application. (design.rfantibody has its own bespoke-tool test coverage.)
 	for _, tc := range []struct {
 		newTool func(string, *jobs.Manager, *store.Store, *stubBackend) *designTool
 		origin  domain.DesignOrigin
 		app     domain.Application
 	}{
-		{func(ws string, m *jobs.Manager, s *store.Store, b *stubBackend) *designTool {
-			return NewRFAntibodyTool(ws, m, b, s)
-		}, domain.OriginRFAntibody, domain.AppAntibody},
 		{func(ws string, m *jobs.Manager, s *store.Store, b *stubBackend) *designTool {
 			return NewRFdiffusion2Tool(ws, m, b, s)
 		}, domain.OriginRFDiff2MPNN, domain.AppEnzyme},

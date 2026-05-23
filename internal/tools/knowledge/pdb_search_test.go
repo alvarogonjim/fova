@@ -173,3 +173,34 @@ func TestPDBSearchExecute_WithFilters(t *testing.T) {
 		}
 	}
 }
+
+func TestPDBSearchExecute_ZeroHits(t *testing.T) {
+	searchSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer searchSrv.Close()
+
+	graphqlSrv := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
+		t.Error("GraphQL must not be called when search returns 204")
+	}))
+	defer graphqlSrv.Close()
+
+	tool := NewPDBSearch()
+	tool.SearchURL = searchSrv.URL
+	tool.GraphQLURL = graphqlSrv.URL
+
+	res, err := tool.Execute(context.Background(), json.RawMessage(`{"query":"nonsense xyz"}`))
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	var out pdbSearchOutput
+	if err := json.Unmarshal(res.Output, &out); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if out.Count != 0 || out.TotalHits != 0 {
+		t.Errorf("output = %+v, want zero counts", out)
+	}
+	if len(out.Results) != 0 {
+		t.Errorf("results not empty: %+v", out.Results)
+	}
+}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"time"
 
 	"github.com/google/uuid"
@@ -14,8 +15,6 @@ import (
 	"github.com/alvarogonjim/fova/internal/store"
 	"github.com/alvarogonjim/fova/internal/tools"
 )
-
-// (The "io" import is added in A2 when Execute's job-Run callback needs io.Writer.)
 
 // RFdiffusion2Params is the agent-facing RFdiffusion2 run configuration. It is
 // an alias of domain.RFdiffusion2Params — the type lives in internal/domain so
@@ -125,11 +124,57 @@ func (*rfdiffusion2Tool) RequiresConfirmation(json.RawMessage) bool       { retu
 func (*rfdiffusion2Tool) EstimatedCostUSD(json.RawMessage) float64        { return 5.0 }
 func (*rfdiffusion2Tool) EstimatedDuration(json.RawMessage) time.Duration { return 60 * time.Minute }
 
-// Execute is the A2 implementation — stubbed in A1 so the tool compiles
-// against tools.Tool. A2 adds validation, path resolution, job submission, and
-// the persist callback.
-func (t *rfdiffusion2Tool) Execute(_ context.Context, _ json.RawMessage) (tools.Result, error) {
-	return tools.Result{}, nil
+// Execute validates the request, resolves the workspace path input, submits
+// a background job, and returns its ID immediately. The job runs the backend,
+// parses the designs, and persists them.
+func (t *rfdiffusion2Tool) Execute(_ context.Context, input json.RawMessage) (tools.Result, error) {
+	var params RFdiffusion2Params
+	if err := json.Unmarshal(input, &params); err != nil {
+		return tools.Result{}, fmt.Errorf("invalid design.rfdiffusion2 request: %w", err)
+	}
+	if err := params.Validate(); err != nil {
+		return tools.Result{}, err
+	}
+	// Resolve the one workspace-relative path input against the workspace root.
+	if t.workspaceRoot != "" && params.MotifPDB != "" {
+		resolved, err := tools.ResolveWorkspacePath(t.workspaceRoot, params.MotifPDB)
+		if err != nil {
+			return tools.Result{}, fmt.Errorf("design.rfdiffusion2: %w", err)
+		}
+		if resolved != "" {
+			params.MotifPDB = resolved
+		}
+	}
+	resolved, err := json.Marshal(params)
+	if err != nil {
+		return tools.Result{}, fmt.Errorf("design.rfdiffusion2: %w", err)
+	}
+	jobID, err := t.mgr.Submit(jobs.Spec{
+		Kind:    domain.JobCompute,
+		Tool:    "design.rfdiffusion2",
+		Backend: t.backend.Name(),
+		Input:   resolved,
+		Run: func(ctx context.Context, progress func(float64), log io.Writer) ([]byte, error) {
+			out, err := t.backend.Run(ctx, "design.rfdiffusion2", resolved, log, progress)
+			if err != nil {
+				return nil, err
+			}
+			progress(0.95)
+			if _, perr := t.persist(out); perr != nil {
+				return out, perr
+			}
+			return out, nil
+		},
+	})
+	if err != nil {
+		return tools.Result{}, err
+	}
+	return tools.Result{
+		JobID: jobID,
+		Display: fmt.Sprintf("started design.rfdiffusion2 job %s — poll jobs.result for the designs",
+			jobID),
+		Provenance: domain.NewToolCallRef("design.rfdiffusion2", input),
+	}, nil
 }
 
 // persist parses the backend's design-list output and writes each design to

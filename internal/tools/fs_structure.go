@@ -28,6 +28,7 @@ func (fsReadStructure) InputSchema() map[string]any {
 		"path": strProp("Path within the workspace to a .pdb, .cif or .mmcif file"),
 	}, "path")
 }
+func (fsReadStructure) Concurrent() bool                                { return true }
 func (fsReadStructure) RequiresConfirmation(json.RawMessage) bool       { return false }
 func (fsReadStructure) EstimatedCostUSD(json.RawMessage) float64        { return 0 }
 func (fsReadStructure) EstimatedDuration(json.RawMessage) time.Duration { return 50 * time.Millisecond }

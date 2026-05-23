@@ -25,7 +25,8 @@ func NewEuropePMC(r *Results) *EuropePMC {
 	return &EuropePMC{BaseURL: europePMCEndpoint, results: r}
 }
 
-func (*EuropePMC) Name() string { return "knowledge.europepmc" }
+func (*EuropePMC) Name() string     { return "knowledge.europepmc" }
+func (*EuropePMC) Concurrent() bool { return true }
 func (*EuropePMC) Description() string {
 	return "Search the biomedical literature via the free Europe PMC REST API."
 }

@@ -59,6 +59,7 @@ func (fsRead) InputSchema() map[string]any {
 		"path": strProp("Path within the workspace"),
 	}, "path")
 }
+func (fsRead) Concurrent() bool                                { return true }
 func (fsRead) RequiresConfirmation(json.RawMessage) bool       { return false }
 func (fsRead) EstimatedCostUSD(json.RawMessage) float64        { return 0 }
 func (fsRead) EstimatedDuration(json.RawMessage) time.Duration { return 50 * time.Millisecond }

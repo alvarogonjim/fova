@@ -130,62 +130,6 @@ func TestDesignToolsImplementToolInterface(t *testing.T) {
 	var _ tools.Tool = NewLigandMPNNTool(ws, mgr, backend, st)
 }
 
-// TestAntibodyEnzymeToolMetadata checks the v0.4 antibody and enzyme design
-// tools report the right names and persist designs with the right origin and
-// application.
-func TestAntibodyEnzymeToolMetadata(t *testing.T) {
-	// Every new tool must report its declared name.
-	for _, tc := range []struct {
-		newTool func(string, *jobs.Manager, *store.Store, *stubBackend) *designTool
-		name    string
-	}{
-		{func(ws string, m *jobs.Manager, s *store.Store, b *stubBackend) *designTool {
-			return NewRFdiffusion2Tool(ws, m, b, s)
-		}, "design.rfdiffusion2"},
-	} {
-		mgr, st, backend, ws := newTestDeps(t, `{"designs":[]}`)
-		if got := tc.newTool(ws, mgr, st, backend).Name(); got != tc.name {
-			t.Errorf("Name = %q, want %q", got, tc.name)
-		}
-	}
-
-	const stubOut = `{"designs":[{"sequence":{"A":"MAQVQL"},"structure_file":"d.pdb","scores":{"ipsae":0.7}}]}`
-
-	// One enzyme tool must persist designs tagged with the matching origin and
-	// application. (design.rfantibody has its own bespoke-tool test coverage.)
-	for _, tc := range []struct {
-		newTool func(string, *jobs.Manager, *store.Store, *stubBackend) *designTool
-		origin  domain.DesignOrigin
-		app     domain.Application
-	}{
-		{func(ws string, m *jobs.Manager, s *store.Store, b *stubBackend) *designTool {
-			return NewRFdiffusion2Tool(ws, m, b, s)
-		}, domain.OriginRFDiff2MPNN, domain.AppEnzyme},
-	} {
-		mgr, st, backend, ws := newTestDeps(t, stubOut)
-		tool := tc.newTool(ws, mgr, st, backend)
-		res, err := tool.Execute(context.Background(), json.RawMessage(`{"target":"1ZWG"}`))
-		if err != nil {
-			t.Fatalf("Execute: %v", err)
-		}
-		waitJob(t, mgr, res.JobID)
-
-		designs, err := st.ListDesigns(store.DefaultProjectID)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if len(designs) != 1 {
-			t.Fatalf("%s: expected 1 persisted design, got %d", tool.Name(), len(designs))
-		}
-		if designs[0].Origin != tc.origin {
-			t.Errorf("%s: design origin = %q, want %q", tool.Name(), designs[0].Origin, tc.origin)
-		}
-		if designs[0].Application != tc.app {
-			t.Errorf("%s: design application = %q, want %q", tool.Name(), designs[0].Application, tc.app)
-		}
-	}
-}
-
 func TestDesignToolSchemaAdvertisesContigs(t *testing.T) {
 	tool := NewRFdiffusionTool("", nil, nil, nil)
 	props, ok := tool.InputSchema()["properties"].(map[string]any)

@@ -505,6 +505,12 @@ func TestPlanCreateAcceptsCompatibleApplicationMethod(t *testing.T) {
 					// the epitope hotspots.
 					extra = `, "method_params": {"target": "ag.pdb", "hotspots": "T10"}`
 				}
+				if m == MethodRFdiffusion2 {
+					// RFdiffusion2 requires method_params carrying its
+					// pipeline-run configuration — at minimum the benchmark
+					// choice.
+					extra = `, "method_params": {"benchmark": "active_site_demo"}`
+				}
 				input := json.RawMessage(`{
 					"target": {"pdb_id": "1ABC"},
 					"application": "` + string(app) + `",
@@ -693,6 +699,46 @@ func TestPlanCreateRFantibodyMethodConfig(t *testing.T) {
 	}
 	if _, err := applyRFantibodyParamsErr(`{"method_params":{"hotspots":"T10"}}`); err == nil {
 		t.Error("an RFantibody plan with no target must be rejected")
+	}
+}
+
+// applyRFdiffusion2ParamsErr runs applyRFdiffusion2MethodConfig against a fresh
+// RFdiffusion2 plan and returns the resulting MethodConfig (nil on error) plus
+// the error. Helper.
+func applyRFdiffusion2ParamsErr(input string) (*domain.MethodConfig, error) {
+	ct := &CreateTool{}
+	p := domain.DesignPlan{Method: string(MethodRFdiffusion2)}
+	if err := ct.applyRFdiffusion2MethodConfig(json.RawMessage(input), &p); err != nil {
+		return nil, err
+	}
+	return p.MethodConfig, nil
+}
+
+// applyRFdiffusion2Params is applyRFdiffusion2ParamsErr for the happy path: it
+// fails the test on any error and returns the resulting MethodConfig.
+func applyRFdiffusion2Params(t *testing.T, input string) *domain.MethodConfig {
+	t.Helper()
+	cfg, err := applyRFdiffusion2ParamsErr(input)
+	if err != nil {
+		t.Fatalf("applyRFdiffusion2MethodConfig: %v", err)
+	}
+	return cfg
+}
+
+// TestPlanCreateRFdiffusion2MethodConfig: an RFdiffusion2 plan with
+// method_params must land MethodConfig.RFdiffusion2, and an invalid params
+// object is rejected.
+func TestPlanCreateRFdiffusion2MethodConfig(t *testing.T) {
+	cfg := applyRFdiffusion2Params(t, `{"method_params":{"benchmark":"active_site_demo"}}`)
+	if cfg == nil || cfg.RFdiffusion2 == nil {
+		t.Fatal("MethodConfig.RFdiffusion2 must be populated")
+	}
+	if cfg.RFdiffusion2.Benchmark != "active_site_demo" {
+		t.Errorf("benchmark = %q", cfg.RFdiffusion2.Benchmark)
+	}
+	if _, err := applyRFdiffusion2ParamsErr(
+		`{"method_params":{"motif_pdb":"triad.pdb"}}`); err == nil {
+		t.Error("an RFdiffusion2 plan with motif_pdb and no contigs must be rejected")
 	}
 }
 

@@ -33,6 +33,7 @@ func (*MetricsTool) InputSchema() map[string]any {
 		"required": []string{"structure_file"},
 	}
 }
+func (*MetricsTool) Concurrent() bool                                { return true }
 func (*MetricsTool) RequiresConfirmation(json.RawMessage) bool       { return false }
 func (*MetricsTool) EstimatedCostUSD(json.RawMessage) float64        { return 0 }
 func (*MetricsTool) EstimatedDuration(json.RawMessage) time.Duration { return 100 * time.Millisecond }

@@ -13,6 +13,12 @@ import (
 	"github.com/alvarogonjim/fova/internal/domain"
 )
 
+// mdRenderer renders markdown to terminal output. A small interface so tests
+// can substitute a counting fake.
+type mdRenderer interface {
+	Render(string) (string, error)
+}
+
 // entryKind classifies a chat entry.
 type entryKind int
 
@@ -50,6 +56,8 @@ type chatEntry struct {
 	dur     time.Duration // elapsed time, recorded by appendToolDone
 	hasDur  bool          // true once a duration has been recorded
 
+	toolCallID string // for entryTool: the tool-call ID; matches ToolStartMsg → ToolDoneMsg.
+
 	// Job-log fields (entryJobLog, design §4.4): a compact, auto-updating block
 	// per job showing the tail of its log file.
 	jobID      string           // the job's ID, used to update the block in place
@@ -57,6 +65,11 @@ type chatEntry struct {
 	jobStatus  domain.JobStatus // current job status, drives the header glyph
 	jobStarted *time.Time       // wall-clock start, used for the elapsed column
 	jobTail    []string         // the last ~6 log lines
+
+	// rendered caches the styled output this entry contributes to the
+	// viewport, including the trailing "\n\n" separator. Empty means
+	// "needs render"; cleared by each append site that mutates the entry.
+	rendered string
 }
 
 // chatModel renders the scrolling conversation.
@@ -64,7 +77,7 @@ type chatModel struct {
 	theme    Theme
 	viewport viewport.Model
 	entries  []chatEntry
-	renderer *glamour.TermRenderer
+	renderer mdRenderer
 	width    int
 }
 
@@ -87,6 +100,18 @@ func (c *chatModel) resize(width, height int) {
 		glamour.WithWordWrap(width),
 	)
 	c.renderer = r
+	for i := range c.entries {
+		c.entries[i].rendered = ""
+	}
+	c.refresh()
+}
+
+// invalidateRenderCache clears every entry's cached render. Call it when an
+// external change (theme switch, etc.) makes existing cached output stale.
+func (c *chatModel) invalidateRenderCache() {
+	for i := range c.entries {
+		c.entries[i].rendered = ""
+	}
 	c.refresh()
 }
 
@@ -100,6 +125,7 @@ func (c *chatModel) appendUser(text string) {
 func (c *chatModel) appendAgentDelta(delta string) {
 	if n := len(c.entries); n > 0 && c.entries[n-1].kind == entryAgent {
 		c.entries[n-1].text += delta
+		c.entries[n-1].rendered = ""
 	} else {
 		c.entries = append(c.entries, chatEntry{kind: entryAgent, text: delta})
 	}
@@ -112,11 +138,16 @@ func (c *chatModel) appendError(text string) {
 }
 
 func (c *chatModel) appendToolStart(name string) {
+	c.appendToolStartWithID("", name)
+}
+
+func (c *chatModel) appendToolStartWithID(id, name string) {
 	c.entries = append(c.entries, chatEntry{
-		kind:    entryTool,
-		text:    name,
-		done:    false,
-		started: time.Now(),
+		kind:       entryTool,
+		text:       name,
+		toolCallID: id,
+		done:       false,
+		started:    time.Now(),
 	})
 	c.refresh()
 }
@@ -125,27 +156,47 @@ func (c *chatModel) appendToolStart(name string) {
 // string with an `error:` prefix (how app.go formats failures) marks the entry
 // as an error so it renders the ✗ glyph.
 func (c *chatModel) appendToolDone(name, display string) {
+	c.appendToolDoneWithID("", name, display)
+}
+
+func (c *chatModel) appendToolDoneWithID(id, name, display string) {
 	toolErr := strings.HasPrefix(display, "error:")
 	for i := len(c.entries) - 1; i >= 0; i-- {
-		if c.entries[i].kind == entryTool && !c.entries[i].done {
-			c.entries[i].text = name
-			c.entries[i].result = display
-			c.entries[i].toolErr = toolErr
-			c.entries[i].done = true
-			if !c.entries[i].started.IsZero() {
-				c.entries[i].dur = time.Since(c.entries[i].started)
-				c.entries[i].hasDur = true
-			}
-			c.refresh()
-			return
+		e := &c.entries[i]
+		if e.kind != entryTool || e.done {
+			continue
 		}
+		// Match by ID when both sides carry one; otherwise fall back to
+		// name-only. The fallback is conservative: if Start has an ID but
+		// Done does not, we match by name (may pick the wrong entry under
+		// same-name concurrency) rather than producing an orphan Done.
+		// Today's only id="" caller is the session-replay path.
+		if id != "" && e.toolCallID != "" {
+			if id != e.toolCallID {
+				continue
+			}
+		} else if e.text != name {
+			continue
+		}
+		e.text = name
+		e.result = display
+		e.toolErr = toolErr
+		e.done = true
+		if !e.started.IsZero() {
+			e.dur = time.Since(e.started)
+			e.hasDur = true
+		}
+		e.rendered = ""
+		c.refresh()
+		return
 	}
 	c.entries = append(c.entries, chatEntry{
-		kind:    entryTool,
-		text:    name,
-		result:  display,
-		toolErr: toolErr,
-		done:    true,
+		kind:       entryTool,
+		text:       name,
+		toolCallID: id,
+		result:     display,
+		toolErr:    toolErr,
+		done:       true,
 	})
 	c.refresh()
 }
@@ -184,6 +235,7 @@ func (c *chatModel) upsertJobLog(id, tool string, status domain.JobStatus, start
 			c.entries[i].jobStatus = status
 			c.entries[i].jobStarted = started
 			c.entries[i].jobTail = tail
+			c.entries[i].rendered = ""
 			c.refresh()
 			return
 		}
@@ -285,39 +337,51 @@ func (c *chatModel) renderToolEntry(e chatEntry) string {
 	return b.String()
 }
 
-// renderEntries returns the full conversation as a string (used by tests).
+// renderEntry renders one entry's styled output (without the trailing
+// "\n\n" separator). Callers that build the full transcript add the
+// separator themselves.
+func (c *chatModel) renderEntry(e *chatEntry) string {
+	var b strings.Builder
+	switch e.kind {
+	case entryUser:
+		b.WriteString(c.theme.UserText.Render("› " + e.text))
+	case entryAgent:
+		md, err := c.renderer.Render(e.text)
+		if err != nil {
+			md = e.text
+		}
+		b.WriteString(c.theme.AgentText.Render(strings.TrimRight(md, "\n")))
+	case entrySlash:
+		lines := strings.Split(e.text, "\n")
+		for i, line := range lines {
+			if i > 0 {
+				b.WriteString("\n")
+			}
+			b.WriteString(c.theme.AgentText.Render(line))
+		}
+	case entryTool:
+		b.WriteString(c.renderToolEntry(*e))
+	case entryJobLog:
+		b.WriteString(c.renderJobLogEntry(*e))
+	case entryError:
+		b.WriteString(c.theme.Error.Render("✗ " + e.text))
+	case entryRaw:
+		b.WriteString(e.text)
+	}
+	return b.String()
+}
+
+// renderEntries returns the full conversation as a string. Each entry is
+// rendered once and cached; subsequent calls reuse the cache until the
+// entry's text or state changes.
 func (c *chatModel) renderEntries() string {
 	var b strings.Builder
-	for _, e := range c.entries {
-		switch e.kind {
-		case entryUser:
-			b.WriteString(c.theme.UserText.Render("› " + e.text))
-		case entryAgent:
-			md, err := c.renderer.Render(e.text)
-			if err != nil {
-				md = e.text
-			}
-			b.WriteString(c.theme.AgentText.Render(strings.TrimRight(md, "\n")))
-		case entrySlash:
-			// Per-line agent styling preserves the original line breaks (the
-			// glamour markdown path would collapse them — see entrySlash docs).
-			lines := strings.Split(e.text, "\n")
-			for i, line := range lines {
-				if i > 0 {
-					b.WriteString("\n")
-				}
-				b.WriteString(c.theme.AgentText.Render(line))
-			}
-		case entryTool:
-			b.WriteString(c.renderToolEntry(e))
-		case entryJobLog:
-			b.WriteString(c.renderJobLogEntry(e))
-		case entryError:
-			b.WriteString(c.theme.Error.Render("✗ " + e.text))
-		case entryRaw:
-			b.WriteString(e.text)
+	for i := range c.entries {
+		e := &c.entries[i]
+		if e.rendered == "" {
+			e.rendered = c.renderEntry(e) + "\n\n"
 		}
-		b.WriteString("\n\n")
+		b.WriteString(e.rendered)
 	}
 	return b.String()
 }

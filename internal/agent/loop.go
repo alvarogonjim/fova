@@ -189,6 +189,8 @@ func (l *Loop) executeBatch(ctx context.Context, calls []llm.ToolCall) []string 
 			serialIdx = append(serialIdx, i)
 			continue
 		}
+		// json.Marshal on map[string]any never returns an error for well-formed
+		// inputs; the error is ignored here as elsewhere in this file.
 		input, _ := json.Marshal(tc.Input)
 		if tools.IsConcurrent(t) && !t.RequiresConfirmation(input) {
 			concurrentIdx = append(concurrentIdx, i)

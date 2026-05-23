@@ -364,12 +364,12 @@ func TestLoopPreservesOrderingOfToolResults(t *testing.T) {
 
 func TestLoopSerialFallbackForNonConcurrentTools(t *testing.T) {
 	reg := tools.NewRegistry()
-	// fake.serial is non-concurrent and sleeps 80ms; fake.par is concurrent
-	// but sleeps 10ms. The two must not overlap because fake.serial does NOT
+	// fake.serial is non-concurrent and sleeps 120ms; fake.par is concurrent
+	// but sleeps 15ms. The two must not overlap because fake.serial does NOT
 	// opt into Concurrent, so it runs in the serial bucket — wall-clock
-	// should be ~90ms (sum), not ~80ms (max).
-	reg.Register(serialFake{name: "fake.serial", sleep: 80 * time.Millisecond, display: "S"})
-	reg.Register(concurrentFake{name: "fake.par", sleep: 10 * time.Millisecond, display: "P"})
+	// should be ~135ms (sum), not ~120ms (max).
+	reg.Register(serialFake{name: "fake.serial", sleep: 120 * time.Millisecond, display: "S"})
+	reg.Register(concurrentFake{name: "fake.par", sleep: 15 * time.Millisecond, display: "P"})
 
 	prov := &mockProvider{responses: []llm.ChatResponse{
 		{ToolCalls: []llm.ToolCall{
@@ -386,10 +386,10 @@ func TestLoopSerialFallbackForNonConcurrentTools(t *testing.T) {
 	drain(bus)
 	elapsed := time.Since(start)
 
-	// Wall-clock must be near the sum (~90ms). If the implementation
+	// Wall-clock must be near the sum (~135ms). If the implementation
 	// accidentally parallelised the serial-fake too, elapsed would
-	// collapse to ~80ms (the max). Lower bound of 85ms catches that.
-	if elapsed < 85*time.Millisecond {
-		t.Errorf("expected serial total ~90ms, got %v (looks parallelised)", elapsed)
+	// collapse to ~120ms (the max). Lower bound of 125ms catches that.
+	if elapsed < 125*time.Millisecond {
+		t.Errorf("expected serial total ~135ms, got %v (looks parallelised)", elapsed)
 	}
 }

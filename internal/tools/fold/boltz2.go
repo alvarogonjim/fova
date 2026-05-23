@@ -235,6 +235,23 @@ func (*boltz2Tool) RequiresConfirmation(json.RawMessage) bool       { return tru
 func (*boltz2Tool) EstimatedCostUSD(json.RawMessage) float64        { return 0.25 }
 func (*boltz2Tool) EstimatedDuration(json.RawMessage) time.Duration { return 3 * time.Minute }
 
+// Validate satisfies tools.Validator: the editable confirmation gate calls
+// this after a user edit and rejects the edit (re-opening the editor with
+// the error pinned at the top of the pending-input file) when it returns
+// non-nil. The implementation mirrors Execute's own JSON+preflight prelude
+// so what the user sees on edit matches what Execute would have rejected.
+func (*boltz2Tool) Validate(input json.RawMessage) error {
+	var req boltz2Request
+	if err := json.Unmarshal(input, &req); err != nil {
+		return fmt.Errorf("fold.boltz2: invalid JSON: %w", err)
+	}
+	return preflightBoltz2(req)
+}
+
+// Compile-time assertion: boltz2Tool opts into the editable-confirmation
+// pre-execution validation sidecar.
+var _ tools.Validator = (*boltz2Tool)(nil)
+
 // isMSAFile reports whether an entity's MSA value names a workspace file —
 // i.e. it is neither empty, the "empty" mode, nor the "server" mode.
 func isMSAFile(msa string) bool {

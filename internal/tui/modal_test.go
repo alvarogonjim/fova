@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -92,5 +93,61 @@ func TestModalViewRendersKeyRow(t *testing.T) {
 	}
 	if !strings.Contains(out, "[y]") || !strings.Contains(out, "[n]") {
 		t.Errorf("modal action row should use [y] / [n] bracket format: %q", out)
+	}
+}
+
+// TestRenderJSONModal_short locks in the spec §3.5 baseline: a small input
+// renders the `Run <name>?` header, the four-key editable row, and no
+// `(edited)` hint or truncation tail.
+func TestRenderJSONModal_short(t *testing.T) {
+	th := NewTheme()
+	input := json.RawMessage(`{"sequence":"MAQVQL"}`)
+	out := renderJSONModal("fold.boltz2", input, false, th, 80, 15)
+	for _, want := range []string{
+		"Run fold.boltz2?",
+		"sequence",
+		"MAQVQL",
+		"[y]", "[e]", "[n]", "[esc]",
+		"accept", "edit", "decline", "cancel turn",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("renderJSONModal output missing %q in:\n%s", want, out)
+		}
+	}
+	for _, never := range []string{"(edited)", "… [e] to edit"} {
+		if strings.Contains(out, never) {
+			t.Errorf("renderJSONModal output should not contain %q in:\n%s", never, out)
+		}
+	}
+}
+
+// TestRenderJSONModal_truncated covers the spec §3.5 truncation tail.
+// A body that exceeds maxLines rows must show the `[e] to edit` hint.
+func TestRenderJSONModal_truncated(t *testing.T) {
+	th := NewTheme()
+	// Build an object with enough keys to push past five JSON lines once
+	// pretty-printed (each `"kN": N,` is one line plus the outer braces).
+	parts := make([]string, 0, 20)
+	for i := 0; i < 20; i++ {
+		parts = append(parts, `"k`+string(rune('A'+i))+`":`+string(rune('0'+(i%10))))
+	}
+	input := json.RawMessage("{" + strings.Join(parts, ",") + "}")
+	out := renderJSONModal("design.bindcraft", input, false, th, 80, 5)
+	if !strings.Contains(out, "… [e] to edit") {
+		t.Errorf("truncated render missing the tail hint:\n%s", out)
+	}
+}
+
+// TestRenderJSONModal_edited verifies the `(edited)` hint flips on when the
+// caller passes edited=true. This is what tells the user "you're about to
+// submit your bytes, not the agent's".
+func TestRenderJSONModal_edited(t *testing.T) {
+	th := NewTheme()
+	out := renderJSONModal("fold.chai1", json.RawMessage(`{"a":1}`), true, th, 80, 15)
+	if !strings.Contains(out, "(edited)") {
+		t.Errorf("edited=true render missing `(edited)` hint:\n%s", out)
+	}
+	if !strings.Contains(out, "Run fold.chai1?") {
+		t.Errorf("edited render missing the header:\n%s", out)
 	}
 }

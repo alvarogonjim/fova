@@ -51,6 +51,19 @@ type Result struct {
 	Provenance domain.ToolCallRef // lineage record
 }
 
+// Validator is implemented by tools that want their input revalidated after
+// the user edits a proposed tool call on the editable confirmation gate,
+// before Execute runs. Tools that don't implement it accept any well-formed
+// JSON the user produces; Execute is still the last line of defense.
+//
+// The contract: return nil for a runnable input; return a non-nil error
+// describing the first problem otherwise. The error message is shown to the
+// user inline and pinned at the top of the pending-input file on retry, so
+// it should read as a fix-it hint, not a stack trace.
+type Validator interface {
+	Validate(input json.RawMessage) error
+}
+
 // Registry holds and dispatches tools.
 type Registry struct {
 	tools map[string]Tool

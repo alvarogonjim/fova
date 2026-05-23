@@ -56,6 +56,8 @@ type chatEntry struct {
 	dur     time.Duration // elapsed time, recorded by appendToolDone
 	hasDur  bool          // true once a duration has been recorded
 
+	toolCallID string // for entryTool: the tool-call ID; matches ToolStartMsg → ToolDoneMsg.
+
 	// Job-log fields (entryJobLog, design §4.4): a compact, auto-updating block
 	// per job showing the tail of its log file.
 	jobID      string           // the job's ID, used to update the block in place
@@ -136,11 +138,16 @@ func (c *chatModel) appendError(text string) {
 }
 
 func (c *chatModel) appendToolStart(name string) {
+	c.appendToolStartWithID("", name)
+}
+
+func (c *chatModel) appendToolStartWithID(id, name string) {
 	c.entries = append(c.entries, chatEntry{
-		kind:    entryTool,
-		text:    name,
-		done:    false,
-		started: time.Now(),
+		kind:       entryTool,
+		text:       name,
+		toolCallID: id,
+		done:       false,
+		started:    time.Now(),
 	})
 	c.refresh()
 }
@@ -149,28 +156,43 @@ func (c *chatModel) appendToolStart(name string) {
 // string with an `error:` prefix (how app.go formats failures) marks the entry
 // as an error so it renders the ✗ glyph.
 func (c *chatModel) appendToolDone(name, display string) {
+	c.appendToolDoneWithID("", name, display)
+}
+
+func (c *chatModel) appendToolDoneWithID(id, name, display string) {
 	toolErr := strings.HasPrefix(display, "error:")
 	for i := len(c.entries) - 1; i >= 0; i-- {
-		if c.entries[i].kind == entryTool && !c.entries[i].done {
-			c.entries[i].text = name
-			c.entries[i].result = display
-			c.entries[i].toolErr = toolErr
-			c.entries[i].done = true
-			if !c.entries[i].started.IsZero() {
-				c.entries[i].dur = time.Since(c.entries[i].started)
-				c.entries[i].hasDur = true
-			}
-			c.entries[i].rendered = ""
-			c.refresh()
-			return
+		e := &c.entries[i]
+		if e.kind != entryTool || e.done {
+			continue
 		}
+		// Prefer ID match; if either side is empty, fall back to name.
+		if id != "" && e.toolCallID != "" {
+			if id != e.toolCallID {
+				continue
+			}
+		} else if e.text != name {
+			continue
+		}
+		e.text = name
+		e.result = display
+		e.toolErr = toolErr
+		e.done = true
+		if !e.started.IsZero() {
+			e.dur = time.Since(e.started)
+			e.hasDur = true
+		}
+		e.rendered = ""
+		c.refresh()
+		return
 	}
 	c.entries = append(c.entries, chatEntry{
-		kind:    entryTool,
-		text:    name,
-		result:  display,
-		toolErr: toolErr,
-		done:    true,
+		kind:       entryTool,
+		text:       name,
+		toolCallID: id,
+		result:     display,
+		toolErr:    toolErr,
+		done:       true,
 	})
 	c.refresh()
 }

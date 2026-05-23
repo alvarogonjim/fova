@@ -31,14 +31,18 @@ type TextDeltaMsg struct{ Delta string }
 // surface it in a collapsible block.
 type ReasoningDeltaMsg struct{ Delta string }
 
-// ToolStartMsg announces a tool call is about to run.
+// ToolStartMsg announces a tool call is about to run. ID is the tool-call's
+// unique identifier (from the LLM response); chat trace matching uses it so
+// concurrently-running tools don't collide.
 type ToolStartMsg struct {
+	ID    string
 	Name  string
 	Input json.RawMessage
 }
 
-// ToolDoneMsg reports a finished tool call.
+// ToolDoneMsg reports a finished tool call. ID matches its ToolStartMsg.
 type ToolDoneMsg struct {
+	ID      string
 	Name    string
 	Display string
 	Err     error
@@ -171,22 +175,22 @@ func (l *Loop) Run(ctx context.Context, userInput string) {
 // will see. Errors are returned as text so the model can recover.
 func (l *Loop) executeTool(ctx context.Context, tc llm.ToolCall) string {
 	input, _ := json.Marshal(tc.Input)
-	l.bus <- ToolStartMsg{Name: tc.Name, Input: input}
+	l.bus <- ToolStartMsg{ID: tc.ID, Name: tc.Name, Input: input}
 
 	tool, ok := l.registry.Get(tc.Name)
 	if !ok {
 		msg := "error: unknown tool " + tc.Name
-		l.bus <- ToolDoneMsg{Name: tc.Name, Display: msg, Err: fmt.Errorf("unknown tool %q", tc.Name)}
+		l.bus <- ToolDoneMsg{ID: tc.ID, Name: tc.Name, Display: msg, Err: fmt.Errorf("unknown tool %q", tc.Name)}
 		return msg
 	}
 	if err := ctx.Err(); err != nil {
-		l.bus <- ToolDoneMsg{Name: tc.Name, Display: "cancelled", Err: err}
+		l.bus <- ToolDoneMsg{ID: tc.ID, Name: tc.Name, Display: "cancelled", Err: err}
 		return "error: cancelled by user"
 	}
 	if tool.RequiresConfirmation(input) {
 		l.bus <- ConfirmContextMsg{Tool: tc.Name, Input: input}
 		if !l.confirm("Run " + tc.Name + "? " + string(input)) {
-			l.bus <- ToolDoneMsg{Name: tc.Name, Display: "declined by user"}
+			l.bus <- ToolDoneMsg{ID: tc.ID, Name: tc.Name, Display: "declined by user"}
 			return "error: user declined to run " + tc.Name
 		}
 	}
@@ -197,7 +201,7 @@ func (l *Loop) executeTool(ctx context.Context, tc llm.ToolCall) string {
 	if l.guard != nil {
 		if r, refused := l.guard.Inspect(tc.Name, input); refused {
 			msg := "refused by biosecurity guard: " + r.Reason
-			l.bus <- ToolDoneMsg{Name: tc.Name, Display: msg, Err: ErrBiosecurity}
+			l.bus <- ToolDoneMsg{ID: tc.ID, Name: tc.Name, Display: msg, Err: ErrBiosecurity}
 			return msg
 		}
 	}
@@ -205,9 +209,9 @@ func (l *Loop) executeTool(ctx context.Context, tc llm.ToolCall) string {
 	res, err := l.registry.Execute(ctx, tc.Name, input)
 	if err != nil {
 		msg := "error: " + err.Error()
-		l.bus <- ToolDoneMsg{Name: tc.Name, Display: msg, Err: err}
+		l.bus <- ToolDoneMsg{ID: tc.ID, Name: tc.Name, Display: msg, Err: err}
 		return msg
 	}
-	l.bus <- ToolDoneMsg{Name: tc.Name, Display: res.Display}
+	l.bus <- ToolDoneMsg{ID: tc.ID, Name: tc.Name, Display: res.Display}
 	return res.Display
 }

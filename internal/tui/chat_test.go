@@ -312,6 +312,22 @@ func TestChatCacheInvalidatedOnUpsertJobLog(t *testing.T) {
 	}
 }
 
+func TestChatAppendToolDoneMatchesByID(t *testing.T) {
+	c := newChatModel(NewTheme(), 80, 20)
+	c.appendToolStartWithID("call-a", "fs.read")
+	c.appendToolStartWithID("call-b", "knowledge.uniprot")
+
+	// Complete the second one first.
+	c.appendToolDoneWithID("call-b", "knowledge.uniprot", "ok B")
+
+	if !c.entries[1].done {
+		t.Errorf("entry for call-b should be done")
+	}
+	if c.entries[0].done {
+		t.Errorf("entry for call-a should still be running")
+	}
+}
+
 func TestChatCacheStreamingHotPathIsOPerEntry(t *testing.T) {
 	c := newChatModel(NewTheme(), 80, 20)
 	cr := &countingRenderer{inner: c.renderer}

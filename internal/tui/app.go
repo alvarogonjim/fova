@@ -365,13 +365,13 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.waitForBus()
 	case agent.ToolStartMsg:
 		m.thinking.verb = verbForTool(msg.Name)
-		m.chat.appendToolStart(msg.Name)
+		m.chat.appendToolStartWithID(msg.ID, msg.Name)
 		return m, m.waitForBus()
 	case agent.ToolDoneMsg:
 		if msg.Err != nil {
-			m.chat.appendToolDone(msg.Name, "error: "+msg.Err.Error())
+			m.chat.appendToolDoneWithID(msg.ID, msg.Name, "error: "+msg.Err.Error())
 		} else {
-			m.chat.appendToolDone(msg.Name, msg.Display)
+			m.chat.appendToolDoneWithID(msg.ID, msg.Name, msg.Display)
 		}
 		return m, m.waitForBus()
 	case agent.ConfirmContextMsg:

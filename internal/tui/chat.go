@@ -79,6 +79,18 @@ type chatModel struct {
 	entries  []chatEntry
 	renderer mdRenderer
 	width    int
+
+	// pendingDelta accumulates streaming agent tokens between flushes.
+	// appendAgentDelta appends here; flushPendingDelta drains it into the
+	// last agent entry and refreshes once. Batch 2 §6 (30 FPS coalescer):
+	// per-token refresh was repaying the viewport copy + lipgloss + redraw
+	// cost on every token; coalescing caps that work at the flush rate.
+	pendingDelta string
+	// pendingDirty is true when pendingDelta has unflushed content. A bool
+	// flag (rather than `len(pendingDelta) > 0`) lets a future caller flush
+	// an empty-string delta if needed without ambiguity, and matches the
+	// streamFlushScheduled flag on Model for symmetry.
+	pendingDirty bool
 }
 
 func newChatModel(th Theme, width, height int) *chatModel {
@@ -121,8 +133,27 @@ func (c *chatModel) appendUser(text string) {
 	c.viewport.GotoBottom()
 }
 
-// appendAgentDelta appends to the last agent entry, or starts a new one.
+// appendAgentDelta accumulates a streaming agent token into the pending
+// buffer. The buffer is drained by flushPendingDelta (called from the
+// app's streamFlushMsg handler ~30 FPS and at TurnDoneMsg/TurnErrorMsg).
+// Per-token refresh would re-copy the viewport for every token; this caps
+// viewport copies at the flush rate. See perf-batch-2 spec §6.
 func (c *chatModel) appendAgentDelta(delta string) {
+	c.pendingDelta += delta
+	c.pendingDirty = true
+}
+
+// flushPendingDelta drains pendingDelta into the last agent entry (creating
+// one if needed), invalidates that entry's cache, and refreshes the viewport.
+// No-op when pendingDirty is false.
+func (c *chatModel) flushPendingDelta() {
+	if !c.pendingDirty {
+		return
+	}
+	delta := c.pendingDelta
+	c.pendingDelta = ""
+	c.pendingDirty = false
+
 	if n := len(c.entries); n > 0 && c.entries[n-1].kind == entryAgent {
 		c.entries[n-1].text += delta
 		c.entries[n-1].rendered = ""

@@ -65,6 +65,10 @@ func TestChatAppendAndRender(t *testing.T) {
 	c.appendUser("fold MAQ")
 	c.appendAgentDelta("Folding ")
 	c.appendAgentDelta("now.")
+	// appendAgentDelta now coalesces tokens into pendingDelta; the canonical
+	// chat entries are only updated by flushPendingDelta. Force a flush so
+	// renderEntries sees the streamed text.
+	c.flushPendingDelta()
 	out := c.renderEntries()
 	if !strings.Contains(out, "fold MAQ") {
 		t.Errorf("user message missing: %q", out)
@@ -350,35 +354,81 @@ func TestChatAppendToolDoneMatchesByIDSameName(t *testing.T) {
 }
 
 func TestChatCacheStreamingHotPathIsOPerEntry(t *testing.T) {
+	// Batch 2 §6: appendAgentDelta coalesces tokens into pendingDelta; the
+	// chat's render cache (and the renderer itself) only runs on
+	// flushPendingDelta. The cache-O(1)-per-flush property is what we now
+	// assert: 50 tokens stream into the buffer with zero Renders, and a
+	// single flush produces exactly one Render for the streaming entry.
 	c := newChatModel(NewTheme(), 80, 20)
 	cr := &countingRenderer{inner: c.renderer}
 	c.renderer = cr
 
-	// First streaming token creates the entry; subsequent deltas append to it.
-	c.appendAgentDelta("tok-0 ")
-	baseline := cr.calls
-	if baseline == 0 {
-		t.Fatalf("first token did not render the entry")
-	}
-
-	// Stream 49 more tokens into the same entry.
-	for i := 1; i < 50; i++ {
+	// Stream 50 tokens — none of them should hit the renderer.
+	for i := 0; i < 50; i++ {
 		c.appendAgentDelta("tok-" + fmt.Sprint(i) + " ")
 	}
+	if cr.calls != 0 {
+		t.Errorf("streaming renders = %d, want 0 (all buffered until flush)",
+			cr.calls)
+	}
 
-	// Each delta invalidates that one entry's cache and triggers exactly one
-	// glamour Render call. Other entries (none, here) stay cached.
-	// Total renders should be 50 (one per delta on the same entry), not >50.
-	if cr.calls != baseline+49 {
-		t.Errorf("streaming renders = %d, want %d (one per delta)",
-			cr.calls, baseline+49)
+	// A single flush drains the buffer; exactly one Render for the one
+	// streaming agent entry.
+	c.flushPendingDelta()
+	if cr.calls != 1 {
+		t.Errorf("renders after flush = %d, want 1", cr.calls)
 	}
 
 	// Now append a second, separate entry. That should cost exactly one
 	// additional render (the new entry); the first entry stays cached.
 	c.appendAgentDeltaBlock("a separate block")
-	if cr.calls != baseline+49+1 {
-		t.Errorf("new entry rendered = %d, want %d (one new entry only)",
-			cr.calls, baseline+49+1)
+	if cr.calls != 2 {
+		t.Errorf("new entry rendered = %d, want 2 (one streamed + one new)",
+			cr.calls)
+	}
+}
+
+// TestChatAppendAgentDeltaIsCoalesced verifies the per-token streaming path
+// no longer touches the renderer; only flushPendingDelta does. Batch 2 §6:
+// a 30 FPS tick drains the buffer instead of refreshing per token.
+func TestChatAppendAgentDeltaIsCoalesced(t *testing.T) {
+	c := newChatModel(NewTheme(), 80, 20)
+	cr := &countingRenderer{inner: c.renderer}
+	c.renderer = cr
+
+	// 50 deltas — none should render the agent text yet because we buffer
+	// until flushPendingDelta is called.
+	for i := 0; i < 50; i++ {
+		c.appendAgentDelta("tok ")
+	}
+	if cr.calls != 0 {
+		t.Errorf("Render called %d times during streaming; want 0 (all buffered)", cr.calls)
+	}
+
+	c.flushPendingDelta()
+	if cr.calls != 1 {
+		t.Errorf("Render called %d times after first flush; want 1", cr.calls)
+	}
+
+	// A second flush with nothing pending is a no-op.
+	c.flushPendingDelta()
+	if cr.calls != 1 {
+		t.Errorf("Render called %d times after idle flush; want 1", cr.calls)
+	}
+}
+
+// TestChatFlushPendingDeltaAppendsAccumulatedText verifies the buffered tokens
+// are concatenated and applied to a single agent entry on flush.
+func TestChatFlushPendingDeltaAppendsAccumulatedText(t *testing.T) {
+	c := newChatModel(NewTheme(), 80, 20)
+	c.appendAgentDelta("Hello ")
+	c.appendAgentDelta("world")
+	c.flushPendingDelta()
+
+	if n := len(c.entries); n != 1 {
+		t.Fatalf("entries: %d, want 1", n)
+	}
+	if got := c.entries[0].text; got != "Hello world" {
+		t.Errorf("entry text = %q, want %q", got, "Hello world")
 	}
 }

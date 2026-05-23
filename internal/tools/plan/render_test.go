@@ -292,6 +292,50 @@ func TestRenderBindCraftSection(t *testing.T) {
 	}
 }
 
+// TestRenderRFdiffusion2Section: a plan carrying an RFdiffusion2
+// method-config renders the RFdiffusion2 block — the benchmark, the motif
+// PDB (when set), the contigs (when set), the num designs, the stop step.
+func TestRenderRFdiffusion2Section(t *testing.T) {
+	p := &domain.DesignPlan{
+		ID: "p_x", Method: "RFdiffusion2",
+		MethodConfig: &domain.MethodConfig{RFdiffusion2: &domain.RFdiffusion2Params{
+			Benchmark:  "active_site_demo",
+			MotifPDB:   "inputs/triad.pdb",
+			Contigs:    "5-15,A10-30,5-15",
+			NumDesigns: 8,
+			StopStep:   "end",
+		}},
+	}
+	out := RenderPlan(*p)
+	for _, want := range []string{
+		"RFdiffusion2",
+		"active_site_demo",
+		"inputs/triad.pdb",
+		"5-15,A10-30,5-15",
+		"end",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("rendered plan missing %q:\n%s", want, out)
+		}
+	}
+}
+
+// TestRenderRFdiffusion2SectionDefaultStopStep: an RFdiffusion2 plan with an
+// empty stop_step falls back to "end (default)" in the render — the user sees
+// what will actually happen.
+func TestRenderRFdiffusion2SectionDefaultStopStep(t *testing.T) {
+	p := &domain.DesignPlan{
+		ID: "p_x", Method: "RFdiffusion2",
+		MethodConfig: &domain.MethodConfig{RFdiffusion2: &domain.RFdiffusion2Params{
+			Benchmark: "active_site_demo",
+		}},
+	}
+	out := RenderPlan(*p)
+	if !strings.Contains(out, "end (default)") {
+		t.Errorf("rendered plan must show 'end (default)' when stop_step is unset:\n%s", out)
+	}
+}
+
 // TestRenderDoctorLabelledRows asserts /doctor output is one row per tool with
 // aligned columns and at least the System + Local protein tools sections
 // (spec Bug 7).

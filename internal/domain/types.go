@@ -220,17 +220,16 @@ type BoltzGenParams struct {
 	Reuse                   bool     `json:"reuse,omitempty"`
 }
 
-// MethodConfig carries method-specific run configuration on a DesignPlan.
-// Populated only for methods that need it (BoltzGen, LigandMPNN, RFantibody,
-// RFdiffusion, ProteinMPNN, BindCraft).
+// RFdiffusion, ProteinMPNN, BindCraft, RFdiffusion2).
 type MethodConfig struct {
-	SpecPath    string             `json:"spec_path,omitempty"`   // workspace-relative spec YAML
-	BoltzGen    *BoltzGenParams    `json:"boltzgen,omitempty"`    // BoltzGen run params
-	LigandMPNN  *LigandMPNNParams  `json:"ligandmpnn,omitempty"`  // LigandMPNN run params
-	RFantibody  *RFantibodyParams  `json:"rfantibody,omitempty"`  // RFantibody run params
-	RFdiffusion *RFdiffusionParams `json:"rfdiffusion,omitempty"` // RFdiffusion run params
-	ProteinMPNN *ProteinMPNNParams `json:"proteinmpnn,omitempty"` // ProteinMPNN run params
-	BindCraft   *BindCraftParams   `json:"bindcraft,omitempty"`   // BindCraft run params
+	SpecPath     string              `json:"spec_path,omitempty"`    // workspace-relative spec YAML
+	BoltzGen     *BoltzGenParams     `json:"boltzgen,omitempty"`     // BoltzGen run params
+	LigandMPNN   *LigandMPNNParams   `json:"ligandmpnn,omitempty"`   // LigandMPNN run params
+	RFantibody   *RFantibodyParams   `json:"rfantibody,omitempty"`   // RFantibody run params
+	RFdiffusion  *RFdiffusionParams  `json:"rfdiffusion,omitempty"`  // RFdiffusion run params
+	ProteinMPNN  *ProteinMPNNParams  `json:"proteinmpnn,omitempty"`  // ProteinMPNN run params
+	BindCraft    *BindCraftParams    `json:"bindcraft,omitempty"`    // BindCraft run params
+	RFdiffusion2 *RFdiffusion2Params `json:"rfdiffusion2,omitempty"` // RFdiffusion2 run params
 }
 
 // RFantibodyParams is the agent-facing RFantibody run configuration. It drives
@@ -252,6 +251,25 @@ type RFantibodyParams struct {
 	NumRecycles     *int     `json:"num_recycles,omitempty"`
 	Seed            *int     `json:"seed,omitempty"`
 	HotspotShowProp *float64 `json:"hotspot_show_prop,omitempty"`
+}
+
+// RFdiffusion2Params is the agent-facing RFdiffusion2 run configuration. It
+// drives RFdiffusion2's Hydra-config pipeline (rf_diffusion/benchmark/pipeline.py)
+// — backbone diffusion + idealization, then (when StopStep="end") inline
+// LigandMPNN sequence fitting + inline Chai-1 fold + metrics emission. Pointer
+// fields distinguish "unset" (omit the override, use the upstream default)
+// from a real zero value. It lives in internal/domain so a DesignPlan's
+// MethodConfig can carry it without an import cycle; internal/tools/design
+// references it under a package-local alias.
+type RFdiffusion2Params struct {
+	Benchmark                string `json:"benchmark,omitempty"`
+	MotifPDB                 string `json:"motif_pdb,omitempty"`
+	Contigs                  string `json:"contigs,omitempty"`
+	NumDesigns               int    `json:"num_designs,omitempty"`
+	Seed                     *int   `json:"seed,omitempty"`
+	GuidepostXYZAsDesignBB   *bool  `json:"guidepost_xyz_as_design_bb,omitempty"`
+	IdealizeSidechainOutputs *bool  `json:"idealize_sidechain_outputs,omitempty"`
+	StopStep                 string `json:"stop_step,omitempty"`
 }
 
 // LigandMPNNParams is the agent-facing LigandMPNN run configuration. Every

@@ -4,9 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
-	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
@@ -89,62 +87,6 @@ func TestDesignToolsImplementToolInterface(t *testing.T) {
 	var _ tools.Tool = NewLigandMPNNTool(ws, mgr, backend, st)
 }
 
-// TestAntibodyEnzymeToolMetadata checks the v0.4 antibody and enzyme design
-// tools report the right names and persist designs with the right origin and
-// application.
-func TestAntibodyEnzymeToolMetadata(t *testing.T) {
-	// Every new tool must report its declared name.
-	for _, tc := range []struct {
-		newTool func(string, *jobs.Manager, *store.Store, *stubBackend) *designTool
-		name    string
-	}{
-		{func(ws string, m *jobs.Manager, s *store.Store, b *stubBackend) *designTool {
-			return NewRFdiffusion2Tool(ws, m, b, s)
-		}, "design.rfdiffusion2"},
-	} {
-		mgr, st, backend, ws := newTestDeps(t, `{"designs":[]}`)
-		if got := tc.newTool(ws, mgr, st, backend).Name(); got != tc.name {
-			t.Errorf("Name = %q, want %q", got, tc.name)
-		}
-	}
-
-	const stubOut = `{"designs":[{"sequence":{"A":"MAQVQL"},"structure_file":"d.pdb","scores":{"ipsae":0.7}}]}`
-
-	// One enzyme tool must persist designs tagged with the matching origin and
-	// application. (design.rfantibody has its own bespoke-tool test coverage.)
-	for _, tc := range []struct {
-		newTool func(string, *jobs.Manager, *store.Store, *stubBackend) *designTool
-		origin  domain.DesignOrigin
-		app     domain.Application
-	}{
-		{func(ws string, m *jobs.Manager, s *store.Store, b *stubBackend) *designTool {
-			return NewRFdiffusion2Tool(ws, m, b, s)
-		}, domain.OriginRFDiff2MPNN, domain.AppEnzyme},
-	} {
-		mgr, st, backend, ws := newTestDeps(t, stubOut)
-		tool := tc.newTool(ws, mgr, st, backend)
-		res, err := tool.Execute(context.Background(), json.RawMessage(`{"target":"1ZWG"}`))
-		if err != nil {
-			t.Fatalf("Execute: %v", err)
-		}
-		waitJob(t, mgr, res.JobID)
-
-		designs, err := st.ListDesigns(store.DefaultProjectID)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if len(designs) != 1 {
-			t.Fatalf("%s: expected 1 persisted design, got %d", tool.Name(), len(designs))
-		}
-		if designs[0].Origin != tc.origin {
-			t.Errorf("%s: design origin = %q, want %q", tool.Name(), designs[0].Origin, tc.origin)
-		}
-		if designs[0].Application != tc.app {
-			t.Errorf("%s: design application = %q, want %q", tool.Name(), designs[0].Application, tc.app)
-		}
-	}
-}
-
 func TestDesignToolSchemaAdvertisesContigs(t *testing.T) {
 	tool := NewRFdiffusionTool("", nil, nil, nil)
 	props, ok := tool.InputSchema()["properties"].(map[string]any)
@@ -156,111 +98,10 @@ func TestDesignToolSchemaAdvertisesContigs(t *testing.T) {
 	}
 }
 
-// Bug 1 — relative path is resolved against the workspace root before being
-// handed to the backend.
-func TestDesignToolResolvesRelativeTargetAgainstWorkspace(t *testing.T) {
-	mgr, st, backend, ws := newTestDeps(t, `{"designs":[]}`)
-	// File exists at <workspace>/inputs/x.pdb.
-	if err := os.MkdirAll(filepath.Join(ws, "inputs"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(ws, "inputs", "x.pdb"), []byte("ATOM\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	tool := NewRFdiffusion2Tool(ws, mgr, backend, st)
-	res, err := tool.Execute(context.Background(), json.RawMessage(`{"target":"inputs/x.pdb"}`))
-	if err != nil {
-		t.Fatalf("Execute: %v", err)
-	}
-	waitJob(t, mgr, res.JobID)
-
-	if backend.lastIn == nil {
-		t.Fatal("backend.Run was not called")
-	}
-	var got map[string]any
-	if err := json.Unmarshal(backend.lastIn, &got); err != nil {
-		t.Fatalf("backend input is not valid JSON: %v", err)
-	}
-	want := filepath.Join(ws, "inputs", "x.pdb")
-	if got["target"] != want {
-		t.Errorf("backend saw target=%q, want %q", got["target"], want)
-	}
-}
-
-// Bug 1 — an absolute path inside the workspace is passed through unchanged.
-func TestDesignToolPassesAbsoluteInsideWorkspaceThrough(t *testing.T) {
-	mgr, st, backend, ws := newTestDeps(t, `{"designs":[]}`)
-	abs := filepath.Join(ws, "designs", "d.pdb")
-	if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(abs, []byte("ATOM\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	tool := NewRFdiffusion2Tool(ws, mgr, backend, st)
-	body, _ := json.Marshal(map[string]string{"target": abs})
-	res, err := tool.Execute(context.Background(), body)
-	if err != nil {
-		t.Fatalf("Execute: %v", err)
-	}
-	waitJob(t, mgr, res.JobID)
-
-	var got map[string]any
-	if err := json.Unmarshal(backend.lastIn, &got); err != nil {
-		t.Fatalf("backend input is not valid JSON: %v", err)
-	}
-	if got["target"] != abs {
-		t.Errorf("backend saw target=%q, want absolute %q", got["target"], abs)
-	}
-}
-
-// Bug 1 — an absolute path outside the workspace is rejected at submit time.
-func TestDesignToolRejectsAbsoluteOutsideWorkspace(t *testing.T) {
-	mgr, st, backend, ws := newTestDeps(t, `{"designs":[]}`)
-	outside := filepath.Join(t.TempDir(), "outside.pdb")
-	if err := os.WriteFile(outside, []byte("ATOM\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	tool := NewRFdiffusion2Tool(ws, mgr, backend, st)
-	body, _ := json.Marshal(map[string]string{"target": outside})
-	if _, err := tool.Execute(context.Background(), body); err == nil {
-		t.Fatal("expected an 'escapes the workspace' error")
-	} else if !strings.Contains(err.Error(), "escapes the workspace") {
-		t.Errorf("error %q must mention 'escapes the workspace'", err)
-	}
-}
-
-// Bug 1 — `../`-style traversal is rejected.
-func TestDesignToolRejectsPathTraversal(t *testing.T) {
-	mgr, st, backend, ws := newTestDeps(t, `{"designs":[]}`)
-	tool := NewRFdiffusion2Tool(ws, mgr, backend, st)
-	if _, err := tool.Execute(context.Background(),
-		json.RawMessage(`{"target":"../../etc/passwd"}`)); err == nil {
-		t.Fatal("expected an 'escapes the workspace' error")
-	} else if !strings.Contains(err.Error(), "escapes the workspace") {
-		t.Errorf("error %q must mention 'escapes the workspace'", err)
-	}
-}
-
-// Bug 1 — an empty target is passed through unchanged (the wrapper doesn't
-// validate presence; the adapter does).
-func TestDesignToolPassesEmptyTargetThrough(t *testing.T) {
-	mgr, st, backend, ws := newTestDeps(t, `{"designs":[]}`)
-	tool := NewRFdiffusion2Tool(ws, mgr, backend, st)
-	res, err := tool.Execute(context.Background(), json.RawMessage(`{"target":""}`))
-	if err != nil {
-		t.Fatalf("Execute: %v", err)
-	}
-	waitJob(t, mgr, res.JobID)
-
-	var got map[string]any
-	if err := json.Unmarshal(backend.lastIn, &got); err != nil {
-		t.Fatalf("backend input is not valid JSON: %v", err)
-	}
-	if got["target"] != "" {
-		t.Errorf("empty target should pass through unchanged, got %q", got["target"])
-	}
-}
+// The path-resolution tests that lived here previously (relative/absolute/
+// traversal handling for the shared *designTool wrapper, parameterised over
+// NewRFdiffusion2Tool / NewProteinMPNNTool) are gone with that wrapper.
+// All six design tools (boltzgen, ligandmpnn, rfantibody, rfdiffusion,
+// rfdiffusion2, proteinmpnn, bindcraft) are now bespoke; each owns its own
+// path-resolution test in its tool-specific *_test.go file (e.g.
+// proteinmpnn_test.go::TestProteinMPNNResolvesRelativePDBAgainstWorkspace).

@@ -104,3 +104,72 @@ func TestPDBSearchExecute(t *testing.T) {
 		t.Errorf("Provenance.Tool = %q, want knowledge.pdb_search", res.Provenance.Tool)
 	}
 }
+
+func TestPDBSearchExecute_WithFilters(t *testing.T) {
+	var captured map[string]any
+	searchSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&captured); err != nil {
+			t.Fatalf("decode search body: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"result_set":[],"total_count":0}`))
+	}))
+	defer searchSrv.Close()
+
+	// GraphQL must not be hit (no IDs to enrich), but wire a server anyway so a
+	// stray request would obviously fail the test.
+	graphqlSrv := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
+		t.Error("GraphQL should not be called with zero IDs")
+	}))
+	defer graphqlSrv.Close()
+
+	tool := NewPDBSearch()
+	tool.SearchURL = searchSrv.URL
+	tool.GraphQLURL = graphqlSrv.URL
+
+	in := json.RawMessage(`{"query":"PD-L1","organism":"Homo sapiens","max_resolution":3.0,"method":"X-RAY DIFFRACTION"}`)
+	if _, err := tool.Execute(context.Background(), in); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+
+	// Walk the captured request body and assert all three filter terminals + the
+	// full-text terminal are present. We decode rather than string-match so the
+	// test does not care about JSON key ordering.
+	queryMap, ok := captured["query"].(map[string]any)
+	if !ok {
+		t.Fatalf("query missing: %v", captured)
+	}
+	if queryMap["type"] != "group" {
+		t.Errorf("query.type = %v, want group", queryMap["type"])
+	}
+	nodes, ok := queryMap["nodes"].([]any)
+	if !ok {
+		t.Fatalf("query.nodes missing: %v", queryMap)
+	}
+	if len(nodes) != 4 {
+		t.Fatalf("got %d nodes, want 4 (full_text + 3 filters)", len(nodes))
+	}
+
+	seen := map[string]bool{}
+	for _, n := range nodes {
+		nm := n.(map[string]any)
+		params := nm["parameters"].(map[string]any)
+		if nm["service"] == "full_text" {
+			if params["value"] != "PD-L1" {
+				t.Errorf("full_text value = %v", params["value"])
+			}
+			seen["full_text"] = true
+			continue
+		}
+		if nm["service"] != "text" {
+			t.Errorf("unexpected service %v", nm["service"])
+			continue
+		}
+		seen[params["attribute"].(string)] = true
+	}
+	for _, want := range []string{"full_text", "rcsb_entity_source_organism.ncbi_scientific_name", "exptl.method", "rcsb_entry_info.resolution_combined"} {
+		if !seen[want] {
+			t.Errorf("missing node %q in captured request: %v", want, captured)
+		}
+	}
+}

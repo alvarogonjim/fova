@@ -85,3 +85,37 @@ func TestOpenIsIdempotent(t *testing.T) {
 	}
 	st2.Close()
 }
+
+func TestStoreWALEnabled(t *testing.T) {
+	st := openTestStore(t)
+	var mode string
+	if err := st.db.QueryRow("PRAGMA journal_mode").Scan(&mode); err != nil {
+		t.Fatalf("PRAGMA journal_mode: %v", err)
+	}
+	if mode != "wal" {
+		t.Errorf("journal_mode = %q, want \"wal\"", mode)
+	}
+}
+
+func TestStoreBusyTimeoutSet(t *testing.T) {
+	st := openTestStore(t)
+	var ms int
+	if err := st.db.QueryRow("PRAGMA busy_timeout").Scan(&ms); err != nil {
+		t.Fatalf("PRAGMA busy_timeout: %v", err)
+	}
+	if ms != 5000 {
+		t.Errorf("busy_timeout = %d, want 5000", ms)
+	}
+}
+
+func TestStoreSynchronousNormal(t *testing.T) {
+	st := openTestStore(t)
+	var mode int
+	if err := st.db.QueryRow("PRAGMA synchronous").Scan(&mode); err != nil {
+		t.Fatalf("PRAGMA synchronous: %v", err)
+	}
+	// synchronous=NORMAL is 1 in SQLite.
+	if mode != 1 {
+		t.Errorf("synchronous = %d, want 1 (NORMAL)", mode)
+	}
+}

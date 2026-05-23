@@ -35,7 +35,8 @@ func NewPDBSearch() *PDBSearch {
 	return &PDBSearch{SearchURL: pdbSearchURL, GraphQLURL: pdbGraphQLURL}
 }
 
-func (*PDBSearch) Name() string { return "knowledge.pdb_search" }
+func (*PDBSearch) Name() string     { return "knowledge.pdb_search" }
+func (*PDBSearch) Concurrent() bool { return true }
 func (*PDBSearch) Description() string {
 	return "Search the RCSB PDB by free text and optional filters; returns candidate PDB IDs with title, method, and resolution. Use this before knowledge.pdb when you do not already know the entry ID."
 }

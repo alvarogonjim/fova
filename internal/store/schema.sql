@@ -65,6 +65,7 @@ CREATE TABLE IF NOT EXISTS jobs (
 );
 
 CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status, created);
+CREATE INDEX IF NOT EXISTS idx_jobs_project ON jobs(project_id, created);
 
 CREATE TABLE IF NOT EXISTS experiments (
     id           TEXT PRIMARY KEY,
@@ -79,6 +80,8 @@ CREATE TABLE IF NOT EXISTS experiments (
     cost_usd     REAL NOT NULL DEFAULT 0,
     body         TEXT NOT NULL
 );
+
+CREATE INDEX IF NOT EXISTS idx_experiments_project ON experiments(project_id, submitted);
 
 CREATE TABLE IF NOT EXISTS webhook_events (
     id           TEXT PRIMARY KEY,

@@ -3,7 +3,11 @@ package design
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"io"
 	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/alvarogonjim/fova/internal/backends"
 	"github.com/alvarogonjim/fova/internal/domain"
@@ -135,8 +139,86 @@ func (*bindcraftTool) RequiresConfirmation(json.RawMessage) bool       { return 
 func (*bindcraftTool) EstimatedCostUSD(json.RawMessage) float64        { return 5.0 }
 func (*bindcraftTool) EstimatedDuration(json.RawMessage) time.Duration { return 60 * time.Minute }
 
-// Execute is a stub at this commit (C1). The real body — validate, resolve
-// paths, submit, persist — lands in C2.
-func (t *bindcraftTool) Execute(_ context.Context, _ json.RawMessage) (tools.Result, error) {
-	return tools.Result{}, nil
+// Execute validates the request, resolves the workspace path inputs, submits
+// a background job, and returns its ID immediately. The job runs the backend,
+// parses the designs, and persists them.
+func (t *bindcraftTool) Execute(_ context.Context, input json.RawMessage) (tools.Result, error) {
+	var params BindCraftParams
+	if err := json.Unmarshal(input, &params); err != nil {
+		return tools.Result{}, fmt.Errorf("invalid design.bindcraft request: %w", err)
+	}
+	if err := params.Validate(); err != nil {
+		return tools.Result{}, err
+	}
+	// Resolve every workspace-relative path input against the workspace root.
+	if t.workspaceRoot != "" {
+		for _, ref := range []*string{&params.StartingPDB, &params.TemplatePDB} {
+			if *ref == "" {
+				continue
+			}
+			resolved, err := tools.ResolveWorkspacePath(t.workspaceRoot, *ref)
+			if err != nil {
+				return tools.Result{}, fmt.Errorf("design.bindcraft: %w", err)
+			}
+			if resolved != "" {
+				*ref = resolved
+			}
+		}
+	}
+	resolved, err := json.Marshal(params)
+	if err != nil {
+		return tools.Result{}, fmt.Errorf("design.bindcraft: %w", err)
+	}
+	jobID, err := t.mgr.Submit(jobs.Spec{
+		Kind:    domain.JobCompute,
+		Tool:    "design.bindcraft",
+		Backend: t.backend.Name(),
+		Input:   resolved,
+		Run: func(ctx context.Context, progress func(float64), log io.Writer) ([]byte, error) {
+			out, err := t.backend.Run(ctx, "design.bindcraft", resolved, log, progress)
+			if err != nil {
+				return nil, err
+			}
+			progress(0.95)
+			if _, perr := t.persist(out); perr != nil {
+				return out, perr
+			}
+			return out, nil
+		},
+	})
+	if err != nil {
+		return tools.Result{}, err
+	}
+	return tools.Result{
+		JobID: jobID,
+		Display: fmt.Sprintf("started design.bindcraft job %s — poll jobs.result for the designs",
+			jobID),
+		Provenance: domain.NewToolCallRef("design.bindcraft", input),
+	}, nil
+}
+
+// persist parses the backend's design-list output and writes each design to
+// the store. A response with no "designs" array persists nothing.
+func (t *bindcraftTool) persist(out []byte) (int, error) {
+	var bo backendOutput
+	if err := json.Unmarshal(out, &bo); err != nil {
+		return 0, fmt.Errorf("design.bindcraft output is not valid JSON: %w", err)
+	}
+	for _, d := range bo.Designs {
+		design := domain.Design{
+			ID:            domain.DesignID("d_" + uuid.NewString()),
+			ProjectID:     store.DefaultProjectID,
+			Created:       time.Now().UTC(),
+			Origin:        domain.OriginBindCraft,
+			Application:   domain.AppBinder,
+			Sequence:      domain.Sequence{Chains: d.Sequence},
+			StructureFile: d.StructureFile,
+			Scores:        d.Scores,
+			Provenance:    []domain.ToolCallRef{domain.NewToolCallRef("design.bindcraft", nil)},
+		}
+		if err := t.store.InsertDesign(design); err != nil {
+			return 0, err
+		}
+	}
+	return len(bo.Designs), nil
 }

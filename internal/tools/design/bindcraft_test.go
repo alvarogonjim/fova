@@ -1,6 +1,7 @@
 package design
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
 )
@@ -32,5 +33,12 @@ func TestBindCraftToolSchema(t *testing.T) {
 func TestBindCraftToolRequiresConfirmation(t *testing.T) {
 	if !NewBindCraftTool("/ws", nil, nil, nil).RequiresConfirmation(json.RawMessage(`{}`)) {
 		t.Error("design.bindcraft must require confirmation")
+	}
+}
+
+func TestBindCraftExecuteRejectsBadInput(t *testing.T) {
+	tool := NewBindCraftTool(t.TempDir(), nil, nil, nil)
+	if _, err := tool.Execute(context.Background(), json.RawMessage(`{}`)); err == nil {
+		t.Fatal("expected a validation error when required fields are missing")
 	}
 }

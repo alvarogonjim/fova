@@ -26,7 +26,8 @@ func NewBioRxiv(r *Results, recentDays int) *BioRxiv {
 	return &BioRxiv{BaseURL: bioRxivEndpoint, RecentDays: recentDays, results: r}
 }
 
-func (*BioRxiv) Name() string { return "knowledge.biorxiv" }
+func (*BioRxiv) Name() string       { return "knowledge.biorxiv" }
+func (*BioRxiv) Concurrent() bool { return true }
 func (*BioRxiv) Description() string {
 	return "List bioRxiv preprints posted within a date range via the free bioRxiv API."
 }

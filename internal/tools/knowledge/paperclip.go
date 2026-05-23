@@ -36,7 +36,8 @@ func NewPaperclip(token, baseURL string) *Paperclip {
 	return &Paperclip{token: token, baseURL: strings.TrimRight(baseURL, "/")}
 }
 
-func (*Paperclip) Name() string { return "knowledge.paperclip" }
+func (*Paperclip) Name() string       { return "knowledge.paperclip" }
+func (*Paperclip) Concurrent() bool { return true }
 func (*Paperclip) Description() string {
 	return "Forward an MCP-shaped request to Paperclip and return the response " +
 		"verbatim. Requires PAPERCLIP_TOKEN."

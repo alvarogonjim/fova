@@ -273,7 +273,8 @@ type corpusSearchInput struct {
 
 type corpusSearch struct{ c *Corpus }
 
-func (*corpusSearch) Name() string { return "knowledge.corpus_search" }
+func (*corpusSearch) Name() string       { return "knowledge.corpus_search" }
+func (*corpusSearch) Concurrent() bool { return true }
 func (*corpusSearch) Description() string {
 	return "Search the Europe PMC literature corpus by free-text query. " +
 		"Returns matched papers, a sanitised echo of the query that was sent, " +
@@ -501,7 +502,8 @@ type corpusGrepInput struct {
 
 type corpusGrep struct{ c *Corpus }
 
-func (*corpusGrep) Name() string { return "knowledge.corpus_grep" }
+func (*corpusGrep) Name() string       { return "knowledge.corpus_grep" }
+func (*corpusGrep) Concurrent() bool { return true }
 func (*corpusGrep) Description() string {
 	return "Literal Go-regex match across paper titles and full text. Unlike " +
 		"corpus_search there is no tokenizing or stemming, so results may " +
@@ -566,7 +568,8 @@ type corpusMapInput struct {
 
 type corpusMap struct{ c *Corpus }
 
-func (*corpusMap) Name() string { return "knowledge.corpus_map" }
+func (*corpusMap) Name() string       { return "knowledge.corpus_map" }
+func (*corpusMap) Concurrent() bool { return true }
 func (*corpusMap) Description() string {
 	return "Apply the same LLM prompt to every paper in the corpus (or a " +
 		"subset via from=results_id or explicit paper_ids), returning one " +
@@ -770,7 +773,8 @@ type corpusReadInput struct {
 
 type corpusRead struct{ c *Corpus }
 
-func (*corpusRead) Name() string { return "knowledge.corpus_read" }
+func (*corpusRead) Name() string       { return "knowledge.corpus_read" }
+func (*corpusRead) Concurrent() bool { return true }
 func (*corpusRead) Description() string {
 	return "Return the full text of one paper from the corpus by paper_id."
 }

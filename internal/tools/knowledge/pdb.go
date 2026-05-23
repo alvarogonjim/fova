@@ -22,7 +22,8 @@ type PDB struct {
 // NewPDB returns the knowledge.pdb tool.
 func NewPDB() *PDB { return &PDB{BaseURL: pdbBaseURL} }
 
-func (*PDB) Name() string { return "knowledge.pdb" }
+func (*PDB) Name() string       { return "knowledge.pdb" }
+func (*PDB) Concurrent() bool { return true }
 func (*PDB) Description() string {
 	return "Look up an RCSB PDB entry by ID and return its title, experimental method, and resolution."
 }

@@ -27,7 +27,8 @@ func NewOpenAlex(r *Results, mailto string) *OpenAlex {
 	return &OpenAlex{BaseURL: openAlexEndpoint, Mailto: mailto, results: r}
 }
 
-func (*OpenAlex) Name() string { return "knowledge.openalex" }
+func (*OpenAlex) Name() string       { return "knowledge.openalex" }
+func (*OpenAlex) Concurrent() bool { return true }
 func (*OpenAlex) Description() string {
 	return "Search scholarly works via the free OpenAlex API."
 }

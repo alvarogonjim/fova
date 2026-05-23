@@ -22,7 +22,8 @@ type InterPro struct {
 // NewInterPro returns the knowledge.interpro tool.
 func NewInterPro() *InterPro { return &InterPro{BaseURL: interproBaseURL} }
 
-func (*InterPro) Name() string { return "knowledge.interpro" }
+func (*InterPro) Name() string       { return "knowledge.interpro" }
+func (*InterPro) Concurrent() bool { return true }
 func (*InterPro) Description() string {
 	return "List the InterPro domains and families annotated on a protein by its UniProt accession."
 }

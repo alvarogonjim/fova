@@ -205,3 +205,33 @@ func TestChatJobLogRender(t *testing.T) {
 		t.Errorf("job-log tail connector ⎿ missing: %q", out)
 	}
 }
+
+// countingRenderer wraps a real glamour renderer and counts how many times
+// Render is called so cache tests can assert reuse.
+type countingRenderer struct {
+	inner mdRenderer
+	calls int
+}
+
+func (r *countingRenderer) Render(s string) (string, error) {
+	r.calls++
+	return r.inner.Render(s)
+}
+
+func TestChatCacheReusesRenderForUnchangedEntries(t *testing.T) {
+	c := newChatModel(NewTheme(), 80, 20)
+	cr := &countingRenderer{inner: c.renderer}
+	c.renderer = cr
+
+	c.appendAgentDeltaBlock("first answer")
+	first := cr.calls
+	if first == 0 {
+		t.Fatalf("expected at least one render call for the first entry, got 0")
+	}
+
+	c.appendAgentDeltaBlock("second answer")
+	// Only the new entry should have been rendered; the first one is cached.
+	if cr.calls != first+1 {
+		t.Errorf("render calls = %d, want %d (one new entry only)", cr.calls, first+1)
+	}
+}

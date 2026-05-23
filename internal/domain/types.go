@@ -220,14 +220,15 @@ type BoltzGenParams struct {
 	Reuse                   bool     `json:"reuse,omitempty"`
 }
 
-// MethodConfig carries method-specific run configuration on a DesignPlan.
-// Populated only for methods that need it (BoltzGen, LigandMPNN, RFantibody,
-// RFdiffusion2).
+// RFdiffusion, ProteinMPNN, BindCraft, RFdiffusion2).
 type MethodConfig struct {
 	SpecPath     string              `json:"spec_path,omitempty"`    // workspace-relative spec YAML
 	BoltzGen     *BoltzGenParams     `json:"boltzgen,omitempty"`     // BoltzGen run params
 	LigandMPNN   *LigandMPNNParams   `json:"ligandmpnn,omitempty"`   // LigandMPNN run params
 	RFantibody   *RFantibodyParams   `json:"rfantibody,omitempty"`   // RFantibody run params
+	RFdiffusion  *RFdiffusionParams  `json:"rfdiffusion,omitempty"`  // RFdiffusion run params
+	ProteinMPNN  *ProteinMPNNParams  `json:"proteinmpnn,omitempty"`  // ProteinMPNN run params
+	BindCraft    *BindCraftParams    `json:"bindcraft,omitempty"`    // BindCraft run params
 	RFdiffusion2 *RFdiffusion2Params `json:"rfdiffusion2,omitempty"` // RFdiffusion2 run params
 }
 

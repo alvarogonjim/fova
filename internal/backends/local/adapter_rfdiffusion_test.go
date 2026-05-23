@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/alvarogonjim/fova/internal/domain"
 )
 
 func TestParseRFdiffusionOutput(t *testing.T) {
@@ -237,6 +239,40 @@ func TestRFdiffusionAdapterInvokeBadTarget(t *testing.T) {
 	}
 	if len(ran) != 0 {
 		t.Errorf("a bad target must not run any command, got %d", len(ran))
+	}
+}
+
+func TestRFdiffusionArgs(t *testing.T) {
+	det := true
+	sym := true
+	gs := 5.0
+	got := strings.Join(rfdiffusionArgs(domain.RFdiffusionParams{
+		Target: "/work/t.pdb", Hotspots: "A30,A33", Contigs: "50-100",
+		NumDesigns: 8, Deterministic: &det,
+		Symmetric: &sym, SymmetryKind: "cyclic", NChains: 4,
+		PartialT: 12, GuidingPotentials: []string{"binder_ROG"}, GuideScale: &gs,
+	}, "/models/Base_ckpt.pt"), " ")
+	for _, want := range []string{
+		"inference.input_pdb=/work/t.pdb",
+		"inference.num_designs=8",
+		"'ppi.hotspot_res=[A30,A33]'",
+		"'contigmap.contigs=[50-100]'",
+		"inference.ckpt_override_path=/models/Base_ckpt.pt",
+		"inference.deterministic=true",
+		"inference.symmetric=true",
+		"symmetry.symmetry_kind=cyclic",
+		"symmetry.n_chains=4",
+		"diffuser.partial_T=12",
+		"'potentials.guiding_potentials=[binder_ROG]'",
+		"potentials.guide_scale=5",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("args missing %q in %q", want, got)
+		}
+	}
+	// Unset optionals omit their overrides.
+	if strings.Contains(strings.Join(rfdiffusionArgs(domain.RFdiffusionParams{Contigs: "X"}, "/m/c.pt"), " "), "noise_scale") {
+		t.Error("unset noise_scale must omit the override")
 	}
 }
 

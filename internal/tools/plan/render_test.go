@@ -225,6 +225,73 @@ func TestRenderRFantibodySection(t *testing.T) {
 	}
 }
 
+// TestRenderRFdiffusionSection: a plan carrying an RFdiffusion method-config
+// renders the RFdiffusion block — the target (or unconditional marker) and
+// the contig string.
+func TestRenderRFdiffusionSection(t *testing.T) {
+	p := domain.DesignPlan{
+		ID: "p_x", Method: "RFdiffusion",
+		MethodConfig: &domain.MethodConfig{RFdiffusion: &domain.RFdiffusionParams{
+			Target: "target.pdb", Hotspots: "A30,A33",
+			Contigs: "A1-100/0 60-80", NumDesigns: 8,
+		}},
+	}
+	out := RenderPlan(p)
+	for _, want := range []string{"RFdiffusion", "target.pdb", "A30,A33", "A1-100/0 60-80"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("rendered plan missing %q:\n%s", want, out)
+		}
+	}
+	// An unconditional plan (no target) renders the explicit marker.
+	pu := domain.DesignPlan{
+		ID: "p_u", Method: "RFdiffusion",
+		MethodConfig: &domain.MethodConfig{RFdiffusion: &domain.RFdiffusionParams{
+			Contigs: "50-100",
+		}},
+	}
+	if !strings.Contains(RenderPlan(pu), "unconditional") {
+		t.Error("an RFdiffusion plan with no target must render the unconditional marker")
+	}
+}
+
+// TestRenderProteinMPNNSection: a plan carrying a ProteinMPNN method-config
+// renders the ProteinMPNN block — the input PDB and any set knobs.
+func TestRenderProteinMPNNSection(t *testing.T) {
+	temp := 0.2
+	p := domain.DesignPlan{
+		ID: "p_x", Method: "ProteinMPNN",
+		MethodConfig: &domain.MethodConfig{ProteinMPNN: &domain.ProteinMPNNParams{
+			PDB: "bb.pdb", NumDesigns: 4, SamplingTemp: &temp, ChainsToDesign: "A,B",
+		}},
+	}
+	out := RenderPlan(p)
+	for _, want := range []string{"ProteinMPNN", "bb.pdb", "0.2", "A,B"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("rendered plan missing %q:\n%s", want, out)
+		}
+	}
+}
+
+// TestRenderBindCraftSection: a plan carrying a BindCraft method-config
+// renders the BindCraft block — the target file + chains + epitope + length.
+func TestRenderBindCraftSection(t *testing.T) {
+	p := domain.DesignPlan{
+		ID: "p_x", Method: "BindCraft",
+		MethodConfig: &domain.MethodConfig{BindCraft: &domain.BindCraftParams{
+			StartingPDB: "t.pdb", Chains: "A",
+			TargetHotspotResidues: "A30,A33",
+			LengthMin:             80, LengthMax: 120, NumberOfFinalDesigns: 10,
+			ProtocolName: "beta_only",
+		}},
+	}
+	out := RenderPlan(p)
+	for _, want := range []string{"BindCraft", "t.pdb", "A30,A33", "80..120", "beta_only"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("rendered plan missing %q:\n%s", want, out)
+		}
+	}
+}
+
 // TestRenderRFdiffusion2Section: a plan carrying an RFdiffusion2
 // method-config renders the RFdiffusion2 block — the benchmark, the motif
 // PDB (when set), the contigs (when set), the num designs, the stop step.

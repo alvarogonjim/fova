@@ -4,9 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
-	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
@@ -60,56 +58,15 @@ func waitJob(t *testing.T, m *jobs.Manager, id domain.JobID) domain.Job {
 	return domain.Job{}
 }
 
-func TestDesignToolSubmitsJobAndPersistsDesigns(t *testing.T) {
-	out := `{"designs":[
-	  {"sequence":{"A":"MAQVQL"},"structure_file":"d1.pdb","scores":{"ipsae":0.71,"plddt_mean":88.0}},
-	  {"sequence":{"A":"GSHMKE"},"structure_file":"d2.pdb","scores":{"ipsae":0.55,"plddt_mean":81.0}}
-	]}`
-	mgr, st, backend, ws := newTestDeps(t, out)
-	tool := NewBindCraftTool(ws, mgr, backend, st)
-
-	if tool.Name() != "design.bindcraft" {
-		t.Fatalf("Name = %q", tool.Name())
-	}
-	if !tool.RequiresConfirmation(nil) {
-		t.Error("design tools must require confirmation (expensive)")
-	}
-
-	res, err := tool.Execute(context.Background(), json.RawMessage(`{"target":"1ZWG"}`))
-	if err != nil {
-		t.Fatalf("Execute: %v", err)
-	}
-	if res.JobID == "" {
-		t.Fatal("Execute must return a JobID")
-	}
-	waitJob(t, mgr, res.JobID)
-
-	designs, err := st.ListDesigns(store.DefaultProjectID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(designs) != 2 {
-		t.Fatalf("expected 2 persisted designs, got %d", len(designs))
-	}
-	if designs[0].Origin != domain.OriginBindCraft {
-		t.Errorf("design origin = %q", designs[0].Origin)
-	}
-	found := false
-	for _, d := range designs {
-		if d.Scores["ipsae"] == 0.71 {
-			found = true
-		}
-	}
-	if !found {
-		t.Error("a design with ipsae 0.71 was not persisted")
-	}
-}
-
 func TestDesignToolToleratesEmptyOutput(t *testing.T) {
 	// An unknown-tool / error backend response has no "designs" array.
+	// design.rfdiffusion is now a bespoke tool that validates the input
+	// up-front, so the request carries the minimum-valid contigs string;
+	// the test still asserts that an error-shaped backend reply persists
+	// zero designs.
 	mgr, st, backend, ws := newTestDeps(t, `{"error":"unknown tool"}`)
 	tool := NewRFdiffusionTool(ws, mgr, backend, st)
-	res, err := tool.Execute(context.Background(), json.RawMessage(`{}`))
+	res, err := tool.Execute(context.Background(), json.RawMessage(`{"contigs":"50-100"}`))
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
@@ -141,153 +98,10 @@ func TestDesignToolSchemaAdvertisesContigs(t *testing.T) {
 	}
 }
 
-func TestDesignToolSchemaAdvertisesSettings(t *testing.T) {
-	tool := NewBindCraftTool("", nil, nil, nil)
-	props, ok := tool.InputSchema()["properties"].(map[string]any)
-	if !ok {
-		t.Fatal("InputSchema has no properties map")
-	}
-	if _, ok := props["settings"]; !ok {
-		t.Error("InputSchema must advertise the settings property")
-	}
-}
-
-// Bug 1 — relative path is resolved against the workspace root before being
-// handed to the backend.
-func TestDesignToolResolvesRelativeTargetAgainstWorkspace(t *testing.T) {
-	mgr, st, backend, ws := newTestDeps(t, `{"designs":[]}`)
-	// File exists at <workspace>/inputs/x.pdb.
-	if err := os.MkdirAll(filepath.Join(ws, "inputs"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(ws, "inputs", "x.pdb"), []byte("ATOM\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	tool := NewProteinMPNNTool(ws, mgr, backend, st)
-	res, err := tool.Execute(context.Background(), json.RawMessage(`{"target":"inputs/x.pdb"}`))
-	if err != nil {
-		t.Fatalf("Execute: %v", err)
-	}
-	waitJob(t, mgr, res.JobID)
-
-	if backend.lastIn == nil {
-		t.Fatal("backend.Run was not called")
-	}
-	var got map[string]any
-	if err := json.Unmarshal(backend.lastIn, &got); err != nil {
-		t.Fatalf("backend input is not valid JSON: %v", err)
-	}
-	want := filepath.Join(ws, "inputs", "x.pdb")
-	if got["target"] != want {
-		t.Errorf("backend saw target=%q, want %q", got["target"], want)
-	}
-}
-
-// Bug 1 — an absolute path inside the workspace is passed through unchanged.
-func TestDesignToolPassesAbsoluteInsideWorkspaceThrough(t *testing.T) {
-	mgr, st, backend, ws := newTestDeps(t, `{"designs":[]}`)
-	abs := filepath.Join(ws, "designs", "d.pdb")
-	if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(abs, []byte("ATOM\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	tool := NewProteinMPNNTool(ws, mgr, backend, st)
-	body, _ := json.Marshal(map[string]string{"target": abs})
-	res, err := tool.Execute(context.Background(), body)
-	if err != nil {
-		t.Fatalf("Execute: %v", err)
-	}
-	waitJob(t, mgr, res.JobID)
-
-	var got map[string]any
-	if err := json.Unmarshal(backend.lastIn, &got); err != nil {
-		t.Fatalf("backend input is not valid JSON: %v", err)
-	}
-	if got["target"] != abs {
-		t.Errorf("backend saw target=%q, want absolute %q", got["target"], abs)
-	}
-}
-
-// Bug 1 — an absolute path outside the workspace is rejected at submit time.
-func TestDesignToolRejectsAbsoluteOutsideWorkspace(t *testing.T) {
-	mgr, st, backend, ws := newTestDeps(t, `{"designs":[]}`)
-	outside := filepath.Join(t.TempDir(), "outside.pdb")
-	if err := os.WriteFile(outside, []byte("ATOM\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	tool := NewProteinMPNNTool(ws, mgr, backend, st)
-	body, _ := json.Marshal(map[string]string{"target": outside})
-	if _, err := tool.Execute(context.Background(), body); err == nil {
-		t.Fatal("expected an 'escapes the workspace' error")
-	} else if !strings.Contains(err.Error(), "escapes the workspace") {
-		t.Errorf("error %q must mention 'escapes the workspace'", err)
-	}
-}
-
-// Bug 1 — `../`-style traversal is rejected.
-func TestDesignToolRejectsPathTraversal(t *testing.T) {
-	mgr, st, backend, ws := newTestDeps(t, `{"designs":[]}`)
-	tool := NewProteinMPNNTool(ws, mgr, backend, st)
-	if _, err := tool.Execute(context.Background(),
-		json.RawMessage(`{"target":"../../etc/passwd"}`)); err == nil {
-		t.Fatal("expected an 'escapes the workspace' error")
-	} else if !strings.Contains(err.Error(), "escapes the workspace") {
-		t.Errorf("error %q must mention 'escapes the workspace'", err)
-	}
-}
-
-// Bug 1 — an empty target is passed through unchanged (the wrapper doesn't
-// validate presence; the adapter does).
-func TestDesignToolPassesEmptyTargetThrough(t *testing.T) {
-	mgr, st, backend, ws := newTestDeps(t, `{"designs":[]}`)
-	tool := NewProteinMPNNTool(ws, mgr, backend, st)
-	res, err := tool.Execute(context.Background(), json.RawMessage(`{"target":""}`))
-	if err != nil {
-		t.Fatalf("Execute: %v", err)
-	}
-	waitJob(t, mgr, res.JobID)
-
-	var got map[string]any
-	if err := json.Unmarshal(backend.lastIn, &got); err != nil {
-		t.Fatalf("backend input is not valid JSON: %v", err)
-	}
-	if got["target"] != "" {
-		t.Errorf("empty target should pass through unchanged, got %q", got["target"])
-	}
-}
-
-// Bug 1 — nested starting_pdb in BindCraft's settings is also resolved.
-func TestDesignToolResolvesNestedStartingPDB(t *testing.T) {
-	mgr, st, backend, ws := newTestDeps(t, `{"designs":[]}`)
-	if err := os.MkdirAll(filepath.Join(ws, "inputs"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(ws, "inputs", "t.pdb"), []byte("ATOM\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	tool := NewBindCraftTool(ws, mgr, backend, st)
-	res, err := tool.Execute(context.Background(),
-		json.RawMessage(`{"settings":{"starting_pdb":"inputs/t.pdb"}}`))
-	if err != nil {
-		t.Fatalf("Execute: %v", err)
-	}
-	waitJob(t, mgr, res.JobID)
-
-	var got struct {
-		Settings map[string]any `json:"settings"`
-	}
-	if err := json.Unmarshal(backend.lastIn, &got); err != nil {
-		t.Fatalf("backend input is not valid JSON: %v", err)
-	}
-	want := filepath.Join(ws, "inputs", "t.pdb")
-	if got.Settings["starting_pdb"] != want {
-		t.Errorf("backend saw settings.starting_pdb=%q, want %q",
-			got.Settings["starting_pdb"], want)
-	}
-}
+// The path-resolution tests that lived here previously (relative/absolute/
+// traversal handling for the shared *designTool wrapper, parameterised over
+// NewRFdiffusion2Tool / NewProteinMPNNTool) are gone with that wrapper.
+// All six design tools (boltzgen, ligandmpnn, rfantibody, rfdiffusion,
+// rfdiffusion2, proteinmpnn, bindcraft) are now bespoke; each owns its own
+// path-resolution test in its tool-specific *_test.go file (e.g.
+// proteinmpnn_test.go::TestProteinMPNNResolvesRelativePDBAgainstWorkspace).

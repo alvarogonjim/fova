@@ -9,7 +9,31 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/alvarogonjim/fova/internal/domain"
 )
+
+func TestProteinMPNNArgs(t *testing.T) {
+	temp, seed := 0.2, 42
+	got := strings.Join(proteinMPNNArgs(domain.ProteinMPNNParams{
+		NumDesigns: 5, BatchSize: 2, SamplingTemp: &temp, Seed: &seed,
+		OmitAAs: "CG",
+	}, "/work/parsed.jsonl", "/work/out"), " ")
+	for _, want := range []string{
+		"--jsonl_path /work/parsed.jsonl", "--out_folder /work/out",
+		"--num_seq_per_target 5", "--batch_size 2",
+		"--sampling_temp 0.2", "--seed 42", `--omit_AAs CG`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("args missing %q in %q", want, got)
+		}
+	}
+	// Unset NumDesigns defaults to 1 (a usable single sequence per target).
+	d := strings.Join(proteinMPNNArgs(domain.ProteinMPNNParams{}, "/p", "/o"), " ")
+	if !strings.Contains(d, "--num_seq_per_target 1") {
+		t.Errorf("default num_seq_per_target = 1, got %q", d)
+	}
+}
 
 func TestParseProteinMPNNOutput(t *testing.T) {
 	seqsDir := filepath.Join(t.TempDir(), "seqs")
@@ -53,8 +77,8 @@ func TestParseProteinMPNNOutputEmptyDirErrors(t *testing.T) {
 
 func TestProteinMPNNAdapterInvoke(t *testing.T) {
 	workDir := t.TempDir()
-	target := filepath.Join(t.TempDir(), "backbone.pdb")
-	if err := os.WriteFile(target, []byte("ATOM      1  N   MET A   1\n"), 0o644); err != nil {
+	pdb := filepath.Join(t.TempDir(), "backbone.pdb")
+	if err := os.WriteFile(pdb, []byte("ATOM      1  N   MET A   1\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	fixture, err := os.ReadFile("testdata/proteinmpnn_sample.fa")
@@ -91,7 +115,7 @@ func TestProteinMPNNAdapterInvoke(t *testing.T) {
 	}
 
 	out, err := proteinMPNNAdapter{}.Invoke(context.Background(), env,
-		[]byte(`{"target":"`+target+`","num_designs":2}`))
+		[]byte(`{"pdb":"`+pdb+`","num_designs":2}`))
 	if err != nil {
 		t.Fatalf("Invoke: %v", err)
 	}
@@ -111,7 +135,7 @@ func TestProteinMPNNAdapterInvoke(t *testing.T) {
 	if !strings.Contains(ran[1], "--num_seq_per_target 2") {
 		t.Errorf("command 2 should request 2 sequences: %s", ran[1])
 	}
-	// Bug 2: the adapter must stream stdout+stderr to env.Log and tick env.Progress.
+	// The adapter must stream stdout+stderr to env.Log and tick env.Progress.
 	if logBuf.Len() == 0 {
 		t.Error("env.Log should receive the stubbed command output")
 	}
@@ -123,18 +147,18 @@ func TestProteinMPNNAdapterInvoke(t *testing.T) {
 	}
 }
 
-func TestProteinMPNNAdapterInvokeMissingTarget(t *testing.T) {
+func TestProteinMPNNAdapterInvokeMissingPDB(t *testing.T) {
 	env := AdapterEnv{Recipe: ToolRecipe{VenvDir: t.TempDir()}, WorkDir: t.TempDir()}
 	if _, err := (proteinMPNNAdapter{}).Invoke(context.Background(), env, []byte(`{"num_designs":1}`)); err == nil {
-		t.Fatal("expected an error when target is missing")
+		t.Fatal("expected an error when pdb is missing")
 	}
 }
 
-// Bug 4 — a missing-target error must steer the agent at fs.read_structure.
+// A missing-pdb error must steer the agent at fs.read_structure.
 func TestProteinMPNNAdapterInvokeNotFoundIncludesHint(t *testing.T) {
 	env := AdapterEnv{Recipe: ToolRecipe{VenvDir: t.TempDir()}, WorkDir: t.TempDir()}
 	_, err := proteinMPNNAdapter{}.Invoke(context.Background(), env,
-		[]byte(`{"target":"/no/such/file.pdb"}`))
+		[]byte(`{"pdb":"/no/such/file.pdb"}`))
 	if err == nil {
 		t.Fatal("expected a 'not found' error")
 	}
@@ -144,15 +168,15 @@ func TestProteinMPNNAdapterInvokeNotFoundIncludesHint(t *testing.T) {
 }
 
 func TestProteinMPNNAdapterInvokeNotInstalled(t *testing.T) {
-	target := filepath.Join(t.TempDir(), "b.pdb")
-	if err := os.WriteFile(target, []byte("ATOM\n"), 0o644); err != nil {
+	pdb := filepath.Join(t.TempDir(), "b.pdb")
+	if err := os.WriteFile(pdb, []byte("ATOM\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	env := AdapterEnv{
 		Recipe:  ToolRecipe{VenvDir: filepath.Join(t.TempDir(), "does-not-exist")},
 		WorkDir: t.TempDir(),
 	}
-	if _, err := (proteinMPNNAdapter{}).Invoke(context.Background(), env, []byte(`{"target":"`+target+`"}`)); err == nil {
+	if _, err := (proteinMPNNAdapter{}).Invoke(context.Background(), env, []byte(`{"pdb":"`+pdb+`"}`)); err == nil {
 		t.Fatal("expected a 'not installed' error")
 	}
 }
@@ -162,9 +186,9 @@ func TestRunDesignProteinMPNNIsRegistered(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// A nonexistent target makes Invoke fail fast before any command runs —
+	// A nonexistent pdb makes Invoke fail fast before any command runs —
 	// which still proves design.proteinmpnn is registered and dispatched.
-	_, err = RunDesign(context.Background(), reg, "design.proteinmpnn", []byte(`{"target":"/no/such/file.pdb"}`), io.Discard, nil)
+	_, err = RunDesign(context.Background(), reg, "design.proteinmpnn", []byte(`{"pdb":"/no/such/file.pdb"}`), io.Discard, nil)
 	if err == nil {
 		t.Fatal("expected an error")
 	}
@@ -174,8 +198,8 @@ func TestRunDesignProteinMPNNIsRegistered(t *testing.T) {
 }
 
 func TestProteinMPNNAdapterInvokeInstallDirMissing(t *testing.T) {
-	target := filepath.Join(t.TempDir(), "b.pdb")
-	if err := os.WriteFile(target, []byte("ATOM\n"), 0o644); err != nil {
+	pdb := filepath.Join(t.TempDir(), "b.pdb")
+	if err := os.WriteFile(pdb, []byte("ATOM\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	// VenvDir exists but InstallDir does not — still "not installed".
@@ -183,9 +207,87 @@ func TestProteinMPNNAdapterInvokeInstallDirMissing(t *testing.T) {
 		Recipe:  ToolRecipe{VenvDir: t.TempDir(), InstallDir: filepath.Join(t.TempDir(), "gone")},
 		WorkDir: t.TempDir(),
 	}
-	_, err := proteinMPNNAdapter{}.Invoke(context.Background(), env, []byte(`{"target":"`+target+`"}`))
+	_, err := proteinMPNNAdapter{}.Invoke(context.Background(), env, []byte(`{"pdb":"`+pdb+`"}`))
 	if err == nil || !strings.Contains(err.Error(), "not installed") {
 		t.Fatalf("want a 'not installed' error, got: %v", err)
+	}
+}
+
+// Stages and emits --chain_id_jsonl when chains_to_design is set, plus stages
+// every set JSONL-path field into the workdir and rewrites the run.py flag to
+// the staged path.
+func TestProteinMPNNAdapterStagesJSONLs(t *testing.T) {
+	workDir := t.TempDir()
+	pdb := filepath.Join(t.TempDir(), "bb.pdb")
+	if err := os.WriteFile(pdb, []byte("ATOM\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	bias := filepath.Join(t.TempDir(), "bias.jsonl")
+	if err := os.WriteFile(bias, []byte("{}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	fixed := filepath.Join(t.TempDir(), "fixed.jsonl")
+	if err := os.WriteFile(fixed, []byte("{}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	fixture, err := os.ReadFile("testdata/proteinmpnn_sample.fa")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var ran []string
+	stub := func(ctx context.Context, dir, cmd string, log io.Writer) (string, error) {
+		ran = append(ran, cmd)
+		if strings.Contains(cmd, "protein_mpnn_run.py") {
+			seqs := filepath.Join(workDir, "seqs")
+			if err := os.MkdirAll(seqs, 0o755); err != nil {
+				return "", err
+			}
+			if err := os.WriteFile(filepath.Join(seqs, "bb.fa"), fixture, 0o644); err != nil {
+				return "", err
+			}
+		}
+		return "ok", nil
+	}
+	env := AdapterEnv{
+		Recipe:  ToolRecipe{Name: "proteinmpnn", InstallDir: t.TempDir(), VenvDir: t.TempDir()},
+		Run:     stub,
+		WorkDir: workDir,
+	}
+	body, _ := json.Marshal(map[string]any{
+		"pdb": pdb, "chains_to_design": "A,B",
+		"bias_AA": bias, "fixed_positions": fixed,
+	})
+	if _, err := (proteinMPNNAdapter{}).Invoke(context.Background(), env, body); err != nil {
+		t.Fatalf("Invoke: %v", err)
+	}
+
+	// chain_id.jsonl is generated in the workdir...
+	chainPath := filepath.Join(workDir, "chain_id.jsonl")
+	if _, err := os.Stat(chainPath); err != nil {
+		t.Errorf("chain_id.jsonl not generated: %v", err)
+	}
+	chainBody, _ := os.ReadFile(chainPath)
+	if !strings.Contains(string(chainBody), `"bb":[["A","B"],[]]`) {
+		t.Errorf("chain_id.jsonl has wrong shape: %s", chainBody)
+	}
+	// ...the bias_AA JSONL is staged into the workdir...
+	if _, err := os.Stat(filepath.Join(workDir, "bias.jsonl")); err != nil {
+		t.Errorf("bias.jsonl was not staged: %v", err)
+	}
+	// ...and the run.py invocation references the staged paths (host-rooted
+	// for venv-mode).
+	if len(ran) < 2 {
+		t.Fatalf("want 2 commands (parse + inference), got %d", len(ran))
+	}
+	if !strings.Contains(ran[1], "--chain_id_jsonl "+filepath.Join(workDir, "chain_id.jsonl")) {
+		t.Errorf("run.py should reference the staged chain_id.jsonl: %s", ran[1])
+	}
+	if !strings.Contains(ran[1], "--bias_AA_jsonl "+filepath.Join(workDir, "bias.jsonl")) {
+		t.Errorf("run.py should reference the staged bias_AA jsonl: %s", ran[1])
+	}
+	if !strings.Contains(ran[1], "--fixed_positions_jsonl "+filepath.Join(workDir, "fixed.jsonl")) {
+		t.Errorf("run.py should reference the staged fixed_positions jsonl: %s", ran[1])
 	}
 }
 

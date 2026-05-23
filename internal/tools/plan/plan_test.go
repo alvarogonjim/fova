@@ -505,6 +505,22 @@ func TestPlanCreateAcceptsCompatibleApplicationMethod(t *testing.T) {
 					// the epitope hotspots.
 					extra = `, "method_params": {"target": "ag.pdb", "hotspots": "T10"}`
 				}
+				if m == MethodRFdiffusion {
+					// RFdiffusion requires method_params carrying its run
+					// configuration — at minimum a contig string.
+					extra = `, "method_params": {"contigs": "50-100"}`
+				}
+				if m == MethodProteinMPNN {
+					// ProteinMPNN requires method_params carrying its run
+					// configuration — at minimum a pdb backbone path.
+					extra = `, "method_params": {"pdb": "bb.pdb"}`
+				}
+				if m == MethodBindCraft {
+					// BindCraft requires method_params carrying its run
+					// configuration — at minimum starting_pdb, chains,
+					// hotspots, and a length range.
+					extra = `, "method_params": {"starting_pdb": "t.pdb", "chains": "A", "target_hotspot_residues": "A30", "length_min": 80, "length_max": 120}`
+				}
 				if m == MethodRFdiffusion2 {
 					// RFdiffusion2 requires method_params carrying its
 					// pipeline-run configuration — at minimum the benchmark
@@ -702,11 +718,99 @@ func TestPlanCreateRFantibodyMethodConfig(t *testing.T) {
 	}
 }
 
+// applyRFdiffusionParamsErr / applyProteinMPNNParamsErr / applyBindCraftParamsErr /
+// applyRFdiffusion2ParamsErr run the corresponding *MethodConfig helpers
+// against a fresh plan and return the resulting MethodConfig (nil on error)
+// plus the error — mirroring the LigandMPNN / RFantibody helpers. A *CreateTool
+// with no store/installer/registry is sufficient: none of these helpers touch
+// them.
+func applyRFdiffusionParamsErr(input string) (*domain.MethodConfig, error) {
+	ct := NewPlanCreateTool(nil, nil)
+	p := domain.DesignPlan{Method: string(MethodRFdiffusion)}
+	if err := ct.applyRFdiffusionMethodConfig(json.RawMessage(input), &p); err != nil {
+		return nil, err
+	}
+	return p.MethodConfig, nil
+}
+
+func applyProteinMPNNParamsErr(input string) (*domain.MethodConfig, error) {
+	ct := NewPlanCreateTool(nil, nil)
+	p := domain.DesignPlan{Method: string(MethodProteinMPNN)}
+	if err := ct.applyProteinMPNNMethodConfig(json.RawMessage(input), &p); err != nil {
+		return nil, err
+	}
+	return p.MethodConfig, nil
+}
+
+func applyBindCraftParamsErr(input string) (*domain.MethodConfig, error) {
+	ct := NewPlanCreateTool(nil, nil)
+	p := domain.DesignPlan{Method: string(MethodBindCraft)}
+	if err := ct.applyBindCraftMethodConfig(json.RawMessage(input), &p); err != nil {
+		return nil, err
+	}
+	return p.MethodConfig, nil
+}
+
+// TestPlanCreateRFdiffusionMethodConfig: an RFdiffusion plan with method_params
+// must land MethodConfig.RFdiffusion, and an invalid params object is rejected.
+func TestPlanCreateRFdiffusionMethodConfig(t *testing.T) {
+	cfg, err := applyRFdiffusionParamsErr(`{"method_params":{"contigs":"50-100","num_designs":5}}`)
+	if err != nil {
+		t.Fatalf("applyRFdiffusionMethodConfig: %v", err)
+	}
+	if cfg == nil || cfg.RFdiffusion == nil {
+		t.Fatal("MethodConfig.RFdiffusion must be populated")
+	}
+	if cfg.RFdiffusion.Contigs != "50-100" {
+		t.Errorf("contigs = %q", cfg.RFdiffusion.Contigs)
+	}
+	// An invalid params object (no contigs) must be rejected.
+	if _, err := applyRFdiffusionParamsErr(`{"method_params":{"num_designs":5}}`); err == nil {
+		t.Error("an RFdiffusion plan with no contigs must be rejected")
+	}
+}
+
+// TestPlanCreateProteinMPNNMethodConfig: a ProteinMPNN plan with method_params
+// must land MethodConfig.ProteinMPNN, and an invalid params object is rejected.
+func TestPlanCreateProteinMPNNMethodConfig(t *testing.T) {
+	cfg, err := applyProteinMPNNParamsErr(`{"method_params":{"pdb":"bb.pdb","num_designs":4}}`)
+	if err != nil {
+		t.Fatalf("applyProteinMPNNMethodConfig: %v", err)
+	}
+	if cfg == nil || cfg.ProteinMPNN == nil {
+		t.Fatal("MethodConfig.ProteinMPNN must be populated")
+	}
+	if cfg.ProteinMPNN.PDB != "bb.pdb" {
+		t.Errorf("pdb = %q", cfg.ProteinMPNN.PDB)
+	}
+	if _, err := applyProteinMPNNParamsErr(`{"method_params":{"num_designs":4}}`); err == nil {
+		t.Error("a ProteinMPNN plan with no pdb must be rejected")
+	}
+}
+
+// TestPlanCreateBindCraftMethodConfig: a BindCraft plan with method_params
+// must land MethodConfig.BindCraft, and an invalid params object is rejected.
+func TestPlanCreateBindCraftMethodConfig(t *testing.T) {
+	cfg, err := applyBindCraftParamsErr(`{"method_params":{"starting_pdb":"t.pdb","chains":"A","target_hotspot_residues":"A30","length_min":80,"length_max":120}}`)
+	if err != nil {
+		t.Fatalf("applyBindCraftMethodConfig: %v", err)
+	}
+	if cfg == nil || cfg.BindCraft == nil {
+		t.Fatal("MethodConfig.BindCraft must be populated")
+	}
+	if cfg.BindCraft.StartingPDB != "t.pdb" {
+		t.Errorf("starting_pdb = %q", cfg.BindCraft.StartingPDB)
+	}
+	if _, err := applyBindCraftParamsErr(`{"method_params":{"chains":"A","target_hotspot_residues":"A30","length_min":80,"length_max":120}}`); err == nil {
+		t.Error("a BindCraft plan with no starting_pdb must be rejected")
+	}
+}
+
 // applyRFdiffusion2ParamsErr runs applyRFdiffusion2MethodConfig against a fresh
 // RFdiffusion2 plan and returns the resulting MethodConfig (nil on error) plus
-// the error. Helper.
+// the error.
 func applyRFdiffusion2ParamsErr(input string) (*domain.MethodConfig, error) {
-	ct := &CreateTool{}
+	ct := NewPlanCreateTool(nil, nil)
 	p := domain.DesignPlan{Method: string(MethodRFdiffusion2)}
 	if err := ct.applyRFdiffusion2MethodConfig(json.RawMessage(input), &p); err != nil {
 		return nil, err

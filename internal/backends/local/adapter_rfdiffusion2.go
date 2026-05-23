@@ -1,6 +1,11 @@
 package local
 
 import (
+	"encoding/csv"
+	"fmt"
+	"os"
+	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -106,4 +111,145 @@ func pyBool(v bool) string {
 		return "True"
 	}
 	return "False"
+}
+
+// rfdiffusion2ScoreKey folds a CSV header column to a canonical Scores key.
+// Unknown columns are returned lower-cased and as-is, so any numeric column
+// pipeline.py emits is carried through under its header name.
+func rfdiffusion2ScoreKey(col string) string {
+	switch strings.TrimSpace(col) {
+	case "metrics.IdealizedResidueRMSD.rmsd_constellation":
+		return "idealized_residue_rmsd"
+	case "motif_ideality_diff":
+		return "motif_ideality_diff"
+	case "contig_rmsd_des_ref_motif_atom":
+		return "motif_rmsd"
+	default:
+		return strings.ToLower(strings.TrimSpace(col))
+	}
+}
+
+// readRFdiffusion2Scores parses the metrics CSV emitted by pipeline.py into
+// tag -> score map. The first row is the header; the first column ("name" or
+// "design", case-insensitive) keys each data row. Numeric columns become
+// scores, with the canonical-key folding in rfdiffusion2ScoreKey + everything
+// else carried through. A missing or unreadable file yields an empty map —
+// never an error, because a dropped score must not fail an otherwise-
+// successful design run.
+func readRFdiffusion2Scores(csvPath string) map[string]map[string]float64 {
+	out := map[string]map[string]float64{}
+	f, err := os.Open(csvPath)
+	if err != nil {
+		return out
+	}
+	defer f.Close()
+	r := csv.NewReader(f)
+	r.FieldsPerRecord = -1 // tolerate ragged rows; we key by column index
+	rows, err := r.ReadAll()
+	if err != nil || len(rows) < 2 {
+		return out
+	}
+	header := rows[0]
+	tagCol := -1
+	for i, col := range header {
+		c := strings.ToLower(strings.TrimSpace(col))
+		if c == "name" || c == "design" || c == "tag" {
+			tagCol = i
+			break
+		}
+	}
+	if tagCol < 0 {
+		// Convention violation; nothing useful to extract.
+		return out
+	}
+	for _, row := range rows[1:] {
+		if tagCol >= len(row) {
+			continue
+		}
+		tag := strings.TrimSpace(row[tagCol])
+		if tag == "" {
+			continue
+		}
+		scores := map[string]float64{}
+		for i, col := range header {
+			if i == tagCol || i >= len(row) {
+				continue
+			}
+			v, err := strconv.ParseFloat(strings.TrimSpace(row[i]), 64)
+			if err != nil {
+				continue
+			}
+			scores[rfdiffusion2ScoreKey(col)] = v
+		}
+		out[tag] = scores
+	}
+	return out
+}
+
+// parseRFdiffusion2Output walks the pipeline.py output tree under outDir and
+// returns one designOut per prediction PDB. The pipeline writes a metrics CSV
+// somewhere under outDir/pipeline_outputs/<timestamp>_<config>/; the parser
+// glob-searches for the first *.csv it finds and uses its tag column to
+// associate scores with PDBs. A missing CSV yields scoreless designs (not an
+// error). An empty PDB set is an error.
+func parseRFdiffusion2Output(outDir string) ([]designOut, error) {
+	pdbs, err := filepath.Glob(filepath.Join(outDir, "**", "*.pdb"))
+	if err != nil {
+		return nil, err
+	}
+	// Go's filepath.Glob does not recurse; walk for "**" semantics.
+	if len(pdbs) == 0 {
+		pdbs, err = walkGlob(outDir, ".pdb")
+		if err != nil {
+			return nil, err
+		}
+	}
+	sort.Strings(pdbs)
+	if len(pdbs) == 0 {
+		return nil, fmt.Errorf("design.rfdiffusion2: no prediction PDBs found under %s", outDir)
+	}
+
+	csvs, err := walkGlob(outDir, ".csv")
+	if err != nil {
+		return nil, err
+	}
+	sort.Strings(csvs)
+	scores := map[string]map[string]float64{}
+	if len(csvs) > 0 {
+		scores = readRFdiffusion2Scores(csvs[0])
+	}
+
+	designs := make([]designOut, 0, len(pdbs))
+	for _, pdb := range pdbs {
+		tag := strings.TrimSuffix(filepath.Base(pdb), filepath.Ext(pdb))
+		row := scores[tag]
+		if row == nil {
+			row = map[string]float64{}
+		}
+		designs = append(designs, designOut{
+			Sequence:      map[string]string{},
+			StructureFile: pdb,
+			Scores:        row,
+		})
+	}
+	return designs, nil
+}
+
+// walkGlob walks root and returns every file whose name ends in suffix.
+// Used in lieu of `**` globbing, which Go's filepath.Glob doesn't support.
+func walkGlob(root, suffix string) ([]string, error) {
+	var matches []string
+	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if !d.IsDir() && strings.HasSuffix(path, suffix) {
+			matches = append(matches, path)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return matches, nil
 }

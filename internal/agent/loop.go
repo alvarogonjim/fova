@@ -62,6 +62,18 @@ type ConfirmContextMsg struct {
 	Input json.RawMessage
 }
 
+// ConfirmFunc is the agent-loop's bridge to the user-facing confirmation
+// surface. It is called synchronously when a tool requires confirmation; the
+// TUI implementation blocks on a modal and may let the user edit the proposed
+// input before approval.
+//
+// Returns (accepted, finalInput). finalInput == nil means "user accepted
+// without editing — submit the original bytes"; a non-nil finalInput means
+// "user edited — submit these bytes instead". The original input is also
+// passed through ConfirmContextMsg on the bus, so the implementation can
+// render a tool-specific review without re-parsing the prompt string.
+type ConfirmFunc func(prompt, name string, input json.RawMessage) (accepted bool, finalInput json.RawMessage)
+
 // Loop is the ReAct agent loop.
 type Loop struct {
 	provider llm.Provider
@@ -69,7 +81,7 @@ type Loop struct {
 	registry *tools.Registry
 	session  *Session
 	bus      chan<- tea.Msg
-	confirm  func(prompt string) bool
+	confirm  ConfirmFunc
 	guard    safety.Guard // optional; nil = no inspection (used in tests)
 }
 
@@ -78,7 +90,7 @@ type Loop struct {
 // returned loop has no biosecurity guard; production callers should use
 // NewLoopWithGuard.
 func NewLoop(p llm.Provider, model string, r *tools.Registry, s *Session,
-	bus chan<- tea.Msg, confirm func(string) bool) *Loop {
+	bus chan<- tea.Msg, confirm ConfirmFunc) *Loop {
 	return NewLoopWithGuard(p, model, r, s, bus, confirm, nil)
 }
 
@@ -86,7 +98,7 @@ func NewLoop(p llm.Provider, model string, r *tools.Registry, s *Session,
 // guard is consulted on every tool call; nil disables inspection (used only
 // in tests).
 func NewLoopWithGuard(p llm.Provider, model string, r *tools.Registry, s *Session,
-	bus chan<- tea.Msg, confirm func(string) bool, g safety.Guard) *Loop {
+	bus chan<- tea.Msg, confirm ConfirmFunc, g safety.Guard) *Loop {
 	return &Loop{provider: p, model: model, registry: r, session: s, bus: bus, confirm: confirm, guard: g}
 }
 
@@ -185,9 +197,13 @@ func (l *Loop) executeTool(ctx context.Context, tc llm.ToolCall) string {
 	}
 	if tool.RequiresConfirmation(input) {
 		l.bus <- ConfirmContextMsg{Tool: tc.Name, Input: input}
-		if !l.confirm("Run " + tc.Name + "? " + string(input)) {
+		accepted, edited := l.confirm("Run "+tc.Name+"?", tc.Name, input)
+		if !accepted {
 			l.bus <- ToolDoneMsg{Name: tc.Name, Display: "declined by user"}
 			return "error: user declined to run " + tc.Name
+		}
+		if len(edited) > 0 {
+			input = edited
 		}
 	}
 

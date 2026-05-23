@@ -30,7 +30,7 @@ func TestLoopTextOnlyTurn(t *testing.T) {
 	}}
 	bus := make(chan tea.Msg, 32)
 	loop := NewLoop(prov, "mock", tools.NewRegistry(),
-		NewSession("sys"), bus, func(string) bool { return true })
+		NewSession("sys"), bus, func(string, string, json.RawMessage) (bool, json.RawMessage) { return true, nil })
 
 	go func() { loop.Run(context.Background(), "hi"); close(bus) }()
 	msgs := drain(bus)
@@ -59,7 +59,7 @@ func TestLoopExecutesToolThenFinishes(t *testing.T) {
 		{Text: "done", StopReason: "end_turn"},
 	}}
 	bus := make(chan tea.Msg, 32)
-	loop := NewLoop(prov, "mock", reg, NewSession("sys"), bus, func(string) bool { return true })
+	loop := NewLoop(prov, "mock", reg, NewSession("sys"), bus, func(string, string, json.RawMessage) (bool, json.RawMessage) { return true, nil })
 
 	go func() { loop.Run(context.Background(), "go"); close(bus) }()
 	msgs := drain(bus)
@@ -104,7 +104,7 @@ func TestLoopCancellationMidTool(t *testing.T) {
 		{ToolCalls: []llm.ToolCall{{ID: "c1", Name: "block", Input: map[string]any{}}}},
 	}}
 	bus := make(chan tea.Msg, 32)
-	loop := NewLoop(prov, "mock", reg, NewSession("sys"), bus, func(string) bool { return true })
+	loop := NewLoop(prov, "mock", reg, NewSession("sys"), bus, func(string, string, json.RawMessage) (bool, json.RawMessage) { return true, nil })
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel() // cleanup; the mid-tool cancel below is the meaningful one
@@ -151,7 +151,7 @@ func TestLoopAccumulatesTurnUsage(t *testing.T) {
 			Usage: llm.Usage{InputTokens: 20, OutputTokens: 7}},
 	}}
 	bus := make(chan tea.Msg, 32)
-	loop := NewLoop(prov, "mock", reg, NewSession("sys"), bus, func(string) bool { return true })
+	loop := NewLoop(prov, "mock", reg, NewSession("sys"), bus, func(string, string, json.RawMessage) (bool, json.RawMessage) { return true, nil })
 
 	go func() { loop.Run(context.Background(), "go"); close(bus) }()
 	msgs := drain(bus)
@@ -191,7 +191,7 @@ func TestLoopRefusesBiosecurityHit(t *testing.T) {
 	}}
 	bus := make(chan tea.Msg, 32)
 	loop := NewLoopWithGuard(prov, "mock", reg, NewSession("sys"), bus,
-		func(string) bool { return true }, hitGuard{reason: "Select agent; banned"})
+		func(string, string, json.RawMessage) (bool, json.RawMessage) { return true, nil }, hitGuard{reason: "Select agent; banned"})
 
 	go func() { loop.Run(context.Background(), "go"); close(bus) }()
 
@@ -229,7 +229,7 @@ func TestLoopWithGuardPassesSafeCalls(t *testing.T) {
 	}}
 	bus := make(chan tea.Msg, 32)
 	loop := NewLoopWithGuard(prov, "mock", reg, NewSession("sys"), bus,
-		func(string) bool { return true }, passGuard{})
+		func(string, string, json.RawMessage) (bool, json.RawMessage) { return true, nil }, passGuard{})
 
 	go func() { loop.Run(context.Background(), "go"); close(bus) }()
 	msgs := drain(bus)

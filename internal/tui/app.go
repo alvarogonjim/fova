@@ -111,8 +111,8 @@ type Model struct {
 	// real local installer; tests override it.
 	installFn func(ctx context.Context, name string, log io.Writer) error
 
-	bus       chan tea.Msg // agent → TUI
-	confirmCh chan bool    // TUI → agent (modal result)
+	bus       chan tea.Msg     // agent → TUI
+	confirmCh chan confirmReply // TUI → agent (modal result + optional edited input)
 
 	turnCancel context.CancelFunc
 	running    bool
@@ -192,7 +192,7 @@ func New(d Deps) *Model {
 		fovaHome:     d.FovaHome,
 		configDir:    d.ConfigDir,
 		bus:          make(chan tea.Msg, 256),
-		confirmCh:    make(chan bool, 1),
+		confirmCh:    make(chan confirmReply, 1),
 	}
 	m.jobs = newJobsModel(th)
 	m.designs = newDesignsModel(th)
@@ -464,17 +464,17 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		switch msg.String() {
 		case "y", "Y":
 			m.overlay = overlayNone
-			m.confirmCh <- true
+			m.confirmCh <- confirmReply{accepted: true}
 		case "n", "N", "esc":
 			m.overlay = overlayNone
-			m.confirmCh <- false
+			m.confirmCh <- confirmReply{accepted: false}
 		case "ctrl+c":
 			m.overlay = overlayNone
 			m.chat.appendError("cancelled")
 			if m.turnCancel != nil {
 				m.turnCancel()
 			}
-			m.confirmCh <- false
+			m.confirmCh <- confirmReply{accepted: false}
 		}
 		return m, nil
 	case overlayPicker:
@@ -783,10 +783,23 @@ func (m *Model) startTurn(input string) (tea.Model, tea.Cmd) {
 	return m, spinnerTick()
 }
 
+// confirmReply is the TUI → agent reply written on confirmCh. accepted carries
+// the user's decision; input is the edited bytes when the user accepted after
+// editing, or nil when accepted-as-proposed or declined.
+type confirmReply struct {
+	accepted bool
+	input    json.RawMessage
+}
+
 // confirmFn is passed to the loop; it asks the TUI and blocks for the answer.
-func (m *Model) confirmFn(prompt string) bool {
+// The original tool name + input arrive via ConfirmContextMsg ahead of the
+// ConfirmRequestMsg, so the TUI can render a tool-specific surface without
+// re-parsing the prompt string. The returned input is non-nil only when the
+// user edited the proposal before accepting.
+func (m *Model) confirmFn(prompt, name string, input json.RawMessage) (bool, json.RawMessage) {
 	m.bus <- agent.ConfirmRequestMsg{Prompt: prompt}
-	return <-m.confirmCh
+	r := <-m.confirmCh
+	return r.accepted, r.input
 }
 
 // runSlashCommand handles the v0.1 slash-command set.

@@ -146,8 +146,8 @@ func TestAppCtrlCDuringConfirmOverlay(t *testing.T) {
 	}
 	select {
 	case v := <-m.confirmCh:
-		if v {
-			t.Error("ctrl+c during confirm should send false (decline) to confirmCh")
+		if v.accepted {
+			t.Error("ctrl+c during confirm should send accepted=false (decline) to confirmCh")
 		}
 	default:
 		t.Error("ctrl+c during confirm must unblock the agent goroutine via confirmCh")

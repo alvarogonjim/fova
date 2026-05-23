@@ -1,7 +1,9 @@
 package local
 
 import (
+	"context"
 	"encoding/csv"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -252,4 +254,112 @@ func walkGlob(root, suffix string) ([]string, error) {
 		return nil, err
 	}
 	return matches, nil
+}
+
+// init registers the RFdiffusion2 design adapter with the local backend.
+func init() { registerAdapter(rfdiffusion2Adapter{}) }
+
+// rfdiffusion2Adapter wires design.rfdiffusion2 to the container-mode
+// RFdiffusion2 image. The image ENTRYPOINT is `python pipeline.py`, but we
+// override it to bash so a small driver script can mkdir /work/out and then
+// exec pipeline.py with the assembled Hydra overrides — letting the output
+// landing tree stay deterministic across benchmark/motif variants. The
+// metrics CSV emitted under /work/out/pipeline_outputs/<timestamp>_<config>/
+// is parsed back into the {"designs":[...]} envelope.
+type rfdiffusion2Adapter struct{}
+
+func (rfdiffusion2Adapter) AgentTool() string { return "design.rfdiffusion2" }
+func (rfdiffusion2Adapter) Recipe() string    { return "rfdiffusion2" }
+
+// Invoke stages the motif PDB (when set), assembles the Hydra overrides,
+// writes the driver script, runs the RFdiffusion2 image with the entrypoint
+// overridden to bash, and parses the metrics CSV + prediction PDBs into the
+// {"designs":[...]} envelope.
+func (rfdiffusion2Adapter) Invoke(ctx context.Context, env AdapterEnv, request []byte) ([]byte, error) {
+	var req domain.RFdiffusion2Params
+	if err := json.Unmarshal(request, &req); err != nil {
+		return nil, fmt.Errorf("design.rfdiffusion2: invalid request: %w", err)
+	}
+
+	if env.Registry == nil {
+		return nil, fmt.Errorf("design.rfdiffusion2: adapter registry unavailable")
+	}
+	if env.Recipe.ImageTag == "" {
+		return nil, fmt.Errorf("design.rfdiffusion2: container image is not configured (run /install rfdiffusion2)")
+	}
+
+	// Stage the motif PDB into the workdir when set; remember the /work path
+	// for the Hydra override.
+	motifContainerPath := ""
+	if motif := strings.TrimSpace(req.MotifPDB); motif != "" {
+		if !strings.HasSuffix(motif, ".pdb") {
+			return nil, fmt.Errorf("design.rfdiffusion2: motif_pdb %q must be a .pdb file", motif)
+		}
+		if info, err := os.Stat(motif); err != nil || info.IsDir() {
+			return nil, fmt.Errorf("design.rfdiffusion2: motif_pdb %q not found", motif)
+		}
+		base := filepath.Base(motif)
+		if err := copyFile(motif, filepath.Join(env.WorkDir, base)); err != nil {
+			return nil, fmt.Errorf("design.rfdiffusion2: stage motif_pdb: %w", err)
+		}
+		motifContainerPath = "/work/" + base
+	}
+
+	outDir := filepath.Join(env.WorkDir, "out")
+	if err := os.MkdirAll(outDir, 0o755); err != nil {
+		return nil, err
+	}
+	env.Tick(0.05) // input staged
+
+	rt := Detect()
+	if !rt.Available() {
+		return nil, fmt.Errorf("design.rfdiffusion2: no container runtime — install podman or docker")
+	}
+	if ok, _ := rt.ImageExists(env.Recipe.ImageTag); !ok {
+		return nil, fmt.Errorf(
+			"design.rfdiffusion2: image %s is missing — run /install rfdiffusion2",
+			env.Recipe.ImageTag)
+	}
+
+	// Weights cache (RFD checkpoints + bundled LigandMPNN tied weights) is
+	// fetched at /install time. A missing cache means install did not
+	// complete, so validate it exists rather than creating it.
+	modelsCache := ModelsRoot(env.Registry.Home(), "rfdiffusion2")
+	if info, err := os.Stat(modelsCache); err != nil || !info.IsDir() {
+		return nil, fmt.Errorf(
+			"design.rfdiffusion2: weights cache %s missing — run /install rfdiffusion2",
+			modelsCache)
+	}
+
+	// Write the driver script with the assembled Hydra overrides.
+	overrides := rfdiffusion2HydraOverrides(req, motifContainerPath)
+	driver := filepath.Join(env.WorkDir, "run.sh")
+	if err := os.WriteFile(driver, []byte(buildRFdiffusion2Driver(overrides)), 0o755); err != nil {
+		return nil, fmt.Errorf("design.rfdiffusion2: write driver: %w", err)
+	}
+
+	// The recipe declares weights_paths = ["/models/rfdiffusion2"], so the
+	// host cache mounts to /models/rfdiffusion2 (not /models).
+	mounts := []Mount{
+		{HostPath: env.WorkDir, ContainerPath: "/work"},
+		{HostPath: modelsCache, ContainerPath: "/models/rfdiffusion2"},
+	}
+	if _, err := rt.RunContainer(ctx, ContainerRunArgs{
+		Image:      env.Recipe.ImageTag,
+		Entrypoint: "bash",
+		Cmd:        []string{"/work/run.sh"},
+		GPU:        env.Recipe.GPU,
+		Mounts:     mounts,
+		Workdir:    "/work",
+		Log:        env.LogWriter(),
+	}); err != nil {
+		return nil, fmt.Errorf("design.rfdiffusion2: container run failed: %w", err)
+	}
+	env.Tick(0.95) // pipeline.py done
+
+	designs, err := parseRFdiffusion2Output(outDir)
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(designsEnvelope{Designs: designs})
 }

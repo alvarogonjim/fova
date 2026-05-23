@@ -1,6 +1,8 @@
 package local
 
 import (
+	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -174,5 +176,76 @@ func TestParseRFdiffusion2OutputMissingCSVIsNotFatal(t *testing.T) {
 	}
 	if len(designs) != 1 || len(designs[0].Scores) != 0 {
 		t.Errorf("missing CSV ⇒ designs with empty Scores, got %+v", designs)
+	}
+}
+
+// rfdiffusion2TestEnv builds a stub AdapterEnv with a fova home, the
+// rfdiffusion2 recipe loaded from the registry, the weights cache directory
+// present, and a workdir. Modelled on boltz2TestEnv.
+func rfdiffusion2TestEnv(t *testing.T) AdapterEnv {
+	t.Helper()
+	home := t.TempDir()
+	reg, err := LoadRegistry(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(ModelsRoot(home, "rfdiffusion2"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	rec, ok := reg.Tool("rfdiffusion2")
+	if !ok {
+		t.Fatal("rfdiffusion2 missing from registry")
+	}
+	return AdapterEnv{
+		Registry: reg,
+		Recipe:   rec,
+		WorkDir:  t.TempDir(),
+	}
+}
+
+func TestRFdiffusion2AdapterInvoke(t *testing.T) {
+	env := rfdiffusion2TestEnv(t)
+	motif := filepath.Join(t.TempDir(), "triad.pdb")
+	if err := os.WriteFile(motif, []byte("ATOM\nEND\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	stubContainerRuntime(t, func(args []string) error {
+		if len(args) < 2 || args[1] != "run" {
+			return nil
+		}
+		runDir := filepath.Join(env.WorkDir, "out", "pipeline_outputs", "2026-05-23_demo")
+		if err := os.MkdirAll(runDir, 0o755); err != nil {
+			return err
+		}
+		if err := os.WriteFile(filepath.Join(runDir, "metrics.csv"),
+			[]byte("name,motif_ideality_diff\ndesign_0,0.07\n"), 0o644); err != nil {
+			return err
+		}
+		return os.WriteFile(filepath.Join(runDir, "design_0.pdb"), []byte("ATOM\nEND\n"), 0o644)
+	})
+
+	body, _ := json.Marshal(domain.RFdiffusion2Params{
+		Benchmark: "active_site_demo",
+		MotifPDB:  motif,
+		Contigs:   "5-15,A10-30,5-15",
+	})
+	out, err := rfdiffusion2Adapter{}.Invoke(context.Background(), env, body)
+	if err != nil {
+		t.Fatalf("Invoke: %v", err)
+	}
+	var resp designsEnvelope
+	if err := json.Unmarshal(out, &resp); err != nil {
+		t.Fatalf("not a designs envelope: %v", err)
+	}
+	if len(resp.Designs) != 1 || resp.Designs[0].Scores["motif_ideality_diff"] != 0.07 {
+		t.Fatalf("want 1 scored design with motif_ideality_diff=0.07, got %+v", resp.Designs)
+	}
+}
+
+func TestRFdiffusion2AdapterInvokeRejectsMissingMotif(t *testing.T) {
+	env := rfdiffusion2TestEnv(t)
+	body := []byte(`{"motif_pdb":"/nonexistent/triad.pdb","contigs":"1-1"}`)
+	if _, err := (rfdiffusion2Adapter{}).Invoke(context.Background(), env, body); err == nil {
+		t.Fatal("expected an error when motif_pdb does not exist")
 	}
 }

@@ -58,6 +58,24 @@ const (
 // refreshMsg triggers a reload of the jobs and designs panels from the store.
 type refreshMsg struct{}
 
+// streamFlushMsg fires ~30 FPS while a turn is streaming, draining the
+// chat's pendingDelta buffer into a single refresh per tick. The cadence
+// is set to ~33ms so the user sees fluid token-by-token feedback without
+// paying the per-token viewport-copy + lipgloss + terminal-redraw cost.
+// Forced flushes on TurnDoneMsg / TurnErrorMsg make the end-of-turn state
+// exact even if the last tokens arrive between ticks (perf-batch-2 §6).
+type streamFlushMsg struct{}
+
+// streamFlushInterval is the streaming-tick cadence (~30 FPS).
+const streamFlushInterval = 33 * time.Millisecond
+
+// scheduleStreamFlush returns a command that fires a streamFlushMsg after
+// streamFlushInterval. Re-issued by the streamFlushMsg handler as long as
+// a turn is running, then halted at TurnDoneMsg / TurnErrorMsg.
+func scheduleStreamFlush() tea.Cmd {
+	return tea.Tick(streamFlushInterval, func(time.Time) tea.Msg { return streamFlushMsg{} })
+}
+
 // Model is the root Bubble Tea model.
 type Model struct {
 	width, height int
@@ -116,6 +134,12 @@ type Model struct {
 
 	turnCancel context.CancelFunc
 	running    bool
+
+	// streamFlushScheduled is set on the first TextDeltaMsg of a streaming
+	// burst to ensure exactly one tea.Tick chain is in flight at a time. The
+	// streamFlushMsg handler clears it (and stops chaining) once a turn
+	// ends. See perf-batch-2 §6.
+	streamFlushScheduled bool
 
 	overlay overlay
 	modal   modalModel
@@ -384,13 +408,32 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case streamFlushMsg:
+		// 30 FPS streaming-tick coalescer (perf-batch-2 §6): drain the
+		// chat's pendingDelta buffer into a single refresh. Chain the next
+		// tick only while a turn is actually running so the ticker stops
+		// itself naturally at end-of-turn.
+		m.chat.flushPendingDelta()
+		if m.running {
+			return m, scheduleStreamFlush()
+		}
+		m.streamFlushScheduled = false
+		return m, nil
+
 	case tea.MouseMsg:
 		m.chat.handleMouse(msg)
 		return m, nil
 
 	// --- agent bus messages ---
 	case agent.TextDeltaMsg:
+		// Buffer the token; the chain of streamFlushMsg ticks (kicked off
+		// here on the first delta of a streaming burst) drains the buffer
+		// at ~30 FPS. See perf-batch-2 §6.
 		m.chat.appendAgentDelta(msg.Delta)
+		if !m.streamFlushScheduled {
+			m.streamFlushScheduled = true
+			return m, tea.Batch(m.waitForBus(), scheduleStreamFlush())
+		}
 		return m, m.waitForBus()
 	case agent.ToolStartMsg:
 		m.thinking.verb = verbForTool(msg.Name)
@@ -443,6 +486,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// surface this in a collapsible block.
 		return m, m.waitForBus()
 	case agent.TurnDoneMsg:
+		// Force a final flush so any tokens that arrived after the last
+		// streamFlushMsg tick are rendered before we mark the turn done
+		// (perf-batch-2 §6). Then stop the tick chain.
+		m.chat.flushPendingDelta()
+		m.streamFlushScheduled = false
 		m.running = false
 		m.turnCancel = nil
 		m.thinking.stop()
@@ -450,6 +498,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.addTurnCost(msg.Usage)
 		return m, m.waitForBus()
 	case agent.TurnErrorMsg:
+		// Same end-of-turn invariant as TurnDoneMsg — flush before we draw
+		// the error so any in-flight tokens are visible alongside it.
+		m.chat.flushPendingDelta()
+		m.streamFlushScheduled = false
 		m.running = false
 		m.turnCancel = nil
 		m.thinking.stop()

@@ -204,3 +204,61 @@ func TestPDBSearchExecute_ZeroHits(t *testing.T) {
 		t.Errorf("results not empty: %+v", out.Results)
 	}
 }
+
+func TestPDBSearchExecute_PartialEnrichment(t *testing.T) {
+	searchSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+		  "result_set": [
+		    {"identifier": "5O45", "score": 0.94},
+		    {"identifier": "9XXX", "score": 0.50}
+		  ],
+		  "total_count": 2
+		}`))
+	}))
+	defer searchSrv.Close()
+
+	graphqlSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+		  "data": {
+		    "entries": [
+		      {
+		        "rcsb_id": "5O45",
+		        "struct": {"title": "Crystal structure of human PD-L1"},
+		        "exptl": [{"method": "X-RAY DIFFRACTION"}],
+		        "rcsb_entry_info": {"resolution_combined": [2.20], "initial_release_date": "2017-08-23T00:00:00Z"}
+		      },
+		      null
+		    ]
+		  }
+		}`))
+	}))
+	defer graphqlSrv.Close()
+
+	tool := NewPDBSearch()
+	tool.SearchURL = searchSrv.URL
+	tool.GraphQLURL = graphqlSrv.URL
+
+	res, err := tool.Execute(context.Background(), json.RawMessage(`{"query":"PD-L1"}`))
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	var out pdbSearchOutput
+	if err := json.Unmarshal(res.Output, &out); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(out.Results) != 2 {
+		t.Fatalf("results len = %d, want 2", len(out.Results))
+	}
+	if out.Results[0].Title == "" {
+		t.Error("first row missing enrichment")
+	}
+	missing := out.Results[1]
+	if missing.PDBID != "9XXX" || missing.Score != 0.50 {
+		t.Errorf("second row lost identity: %+v", missing)
+	}
+	if missing.Title != "" || missing.Method != "" || missing.Resolution != 0 || missing.Year != 0 {
+		t.Errorf("second row should have empty enriched fields: %+v", missing)
+	}
+}

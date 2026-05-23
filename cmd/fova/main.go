@@ -249,6 +249,7 @@ func buildRegistry(workspace string, st *store.Store, mgr *jobmgr.Manager, model
 	registry.Register(knowledge.NewCrossref(results))
 	registry.Register(knowledge.NewUniProt())
 	registry.Register(knowledge.NewPDB())
+	registry.Register(knowledge.NewPDBSearch())
 	registry.Register(knowledge.NewInterPro())
 	registry.Register(knowledge.NewWebFetch())
 	registry.Register(knowledge.NewWebSearch())

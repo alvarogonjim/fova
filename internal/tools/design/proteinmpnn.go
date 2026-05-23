@@ -3,7 +3,11 @@ package design
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"io"
 	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/alvarogonjim/fova/internal/backends"
 	"github.com/alvarogonjim/fova/internal/domain"
@@ -118,8 +122,94 @@ func (*proteinMPNNTool) RequiresConfirmation(json.RawMessage) bool       { retur
 func (*proteinMPNNTool) EstimatedCostUSD(json.RawMessage) float64        { return 1.0 }
 func (*proteinMPNNTool) EstimatedDuration(json.RawMessage) time.Duration { return 10 * time.Minute }
 
-// Execute is implemented in task B2.
+// Execute validates the request, resolves the workspace path inputs, submits a
+// background job, and returns its ID immediately. The job runs the backend,
+// parses the designs, and persists them.
 func (t *proteinMPNNTool) Execute(_ context.Context, input json.RawMessage) (tools.Result, error) {
-	_ = input
-	return tools.Result{}, nil
+	var params ProteinMPNNParams
+	if err := json.Unmarshal(input, &params); err != nil {
+		return tools.Result{}, fmt.Errorf("invalid design.proteinmpnn request: %w", err)
+	}
+	if err := params.Validate(); err != nil {
+		return tools.Result{}, err
+	}
+	// Resolve every workspace-relative path input against the workspace root.
+	// The chain/fixed-positions/bias/tied JSONLs are all workspace paths whose
+	// existence the adapter verifies at stage-in time.
+	if t.workspaceRoot != "" {
+		for _, ref := range []*string{
+			&params.PDB,
+			&params.FixedPositions,
+			&params.BiasAA,
+			&params.BiasByResidue,
+			&params.TiedPositions,
+		} {
+			if *ref == "" {
+				continue
+			}
+			resolved, err := tools.ResolveWorkspacePath(t.workspaceRoot, *ref)
+			if err != nil {
+				return tools.Result{}, fmt.Errorf("design.proteinmpnn: %w", err)
+			}
+			if resolved != "" {
+				*ref = resolved
+			}
+		}
+	}
+	resolved, err := json.Marshal(params)
+	if err != nil {
+		return tools.Result{}, fmt.Errorf("design.proteinmpnn: %w", err)
+	}
+	jobID, err := t.mgr.Submit(jobs.Spec{
+		Kind:    domain.JobCompute,
+		Tool:    "design.proteinmpnn",
+		Backend: t.backend.Name(),
+		Input:   resolved,
+		Run: func(ctx context.Context, progress func(float64), log io.Writer) ([]byte, error) {
+			out, err := t.backend.Run(ctx, "design.proteinmpnn", resolved, log, progress)
+			if err != nil {
+				return nil, err
+			}
+			progress(0.95)
+			if _, perr := t.persist(out); perr != nil {
+				return out, perr
+			}
+			return out, nil
+		},
+	})
+	if err != nil {
+		return tools.Result{}, err
+	}
+	return tools.Result{
+		JobID: jobID,
+		Display: fmt.Sprintf("started design.proteinmpnn job %s — poll jobs.result for the designs",
+			jobID),
+		Provenance: domain.NewToolCallRef("design.proteinmpnn", input),
+	}, nil
+}
+
+// persist parses the backend's design-list output and writes each design to
+// the store. A response with no "designs" array persists nothing.
+func (t *proteinMPNNTool) persist(out []byte) (int, error) {
+	var bo backendOutput
+	if err := json.Unmarshal(out, &bo); err != nil {
+		return 0, fmt.Errorf("design.proteinmpnn output is not valid JSON: %w", err)
+	}
+	for _, d := range bo.Designs {
+		design := domain.Design{
+			ID:            domain.DesignID("d_" + uuid.NewString()),
+			ProjectID:     store.DefaultProjectID,
+			Created:       time.Now().UTC(),
+			Origin:        domain.OriginRFDiffMPNN,
+			Application:   domain.AppBinder,
+			Sequence:      domain.Sequence{Chains: d.Sequence},
+			StructureFile: d.StructureFile,
+			Scores:        d.Scores,
+			Provenance:    []domain.ToolCallRef{domain.NewToolCallRef("design.proteinmpnn", nil)},
+		}
+		if err := t.store.InsertDesign(design); err != nil {
+			return 0, err
+		}
+	}
+	return len(bo.Designs), nil
 }

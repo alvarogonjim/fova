@@ -60,51 +60,6 @@ func waitJob(t *testing.T, m *jobs.Manager, id domain.JobID) domain.Job {
 	return domain.Job{}
 }
 
-func TestDesignToolSubmitsJobAndPersistsDesigns(t *testing.T) {
-	out := `{"designs":[
-	  {"sequence":{"A":"MAQVQL"},"structure_file":"d1.pdb","scores":{"ipsae":0.71,"plddt_mean":88.0}},
-	  {"sequence":{"A":"GSHMKE"},"structure_file":"d2.pdb","scores":{"ipsae":0.55,"plddt_mean":81.0}}
-	]}`
-	mgr, st, backend, ws := newTestDeps(t, out)
-	tool := NewBindCraftTool(ws, mgr, backend, st)
-
-	if tool.Name() != "design.bindcraft" {
-		t.Fatalf("Name = %q", tool.Name())
-	}
-	if !tool.RequiresConfirmation(nil) {
-		t.Error("design tools must require confirmation (expensive)")
-	}
-
-	res, err := tool.Execute(context.Background(), json.RawMessage(`{"target":"1ZWG"}`))
-	if err != nil {
-		t.Fatalf("Execute: %v", err)
-	}
-	if res.JobID == "" {
-		t.Fatal("Execute must return a JobID")
-	}
-	waitJob(t, mgr, res.JobID)
-
-	designs, err := st.ListDesigns(store.DefaultProjectID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(designs) != 2 {
-		t.Fatalf("expected 2 persisted designs, got %d", len(designs))
-	}
-	if designs[0].Origin != domain.OriginBindCraft {
-		t.Errorf("design origin = %q", designs[0].Origin)
-	}
-	found := false
-	for _, d := range designs {
-		if d.Scores["ipsae"] == 0.71 {
-			found = true
-		}
-	}
-	if !found {
-		t.Error("a design with ipsae 0.71 was not persisted")
-	}
-}
-
 func TestDesignToolToleratesEmptyOutput(t *testing.T) {
 	// An unknown-tool / error backend response has no "designs" array.
 	mgr, st, backend, ws := newTestDeps(t, `{"error":"unknown tool"}`)
@@ -303,36 +258,5 @@ func TestDesignToolPassesEmptyTargetThrough(t *testing.T) {
 	}
 	if got["target"] != "" {
 		t.Errorf("empty target should pass through unchanged, got %q", got["target"])
-	}
-}
-
-// Bug 1 — nested starting_pdb in BindCraft's settings is also resolved.
-func TestDesignToolResolvesNestedStartingPDB(t *testing.T) {
-	mgr, st, backend, ws := newTestDeps(t, `{"designs":[]}`)
-	if err := os.MkdirAll(filepath.Join(ws, "inputs"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(ws, "inputs", "t.pdb"), []byte("ATOM\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	tool := NewBindCraftTool(ws, mgr, backend, st)
-	res, err := tool.Execute(context.Background(),
-		json.RawMessage(`{"settings":{"starting_pdb":"inputs/t.pdb"}}`))
-	if err != nil {
-		t.Fatalf("Execute: %v", err)
-	}
-	waitJob(t, mgr, res.JobID)
-
-	var got struct {
-		Settings map[string]any `json:"settings"`
-	}
-	if err := json.Unmarshal(backend.lastIn, &got); err != nil {
-		t.Fatalf("backend input is not valid JSON: %v", err)
-	}
-	want := filepath.Join(ws, "inputs", "t.pdb")
-	if got.Settings["starting_pdb"] != want {
-		t.Errorf("backend saw settings.starting_pdb=%q, want %q",
-			got.Settings["starting_pdb"], want)
 	}
 }

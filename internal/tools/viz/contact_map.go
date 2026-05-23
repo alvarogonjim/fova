@@ -34,7 +34,8 @@ func NewContactMap(workspace string) *ContactMap {
 	return &ContactMap{workspace: workspace}
 }
 
-func (*ContactMap) Name() string { return "viz.contact_map" }
+func (*ContactMap) Concurrent() bool { return true }
+func (*ContactMap) Name() string     { return "viz.contact_map" }
 func (*ContactMap) Description() string {
 	return "Render an inter-chain Cα–Cα distance heatmap from a PDB as a greyscale PNG."
 }

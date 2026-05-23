@@ -25,7 +25,8 @@ func NewS2(r *Results) *S2 {
 	return &S2{BaseURL: s2Endpoint, results: r}
 }
 
-func (*S2) Name() string { return "knowledge.s2" }
+func (*S2) Name() string     { return "knowledge.s2" }
+func (*S2) Concurrent() bool { return true }
 func (*S2) Description() string {
 	return "Search papers via the free Semantic Scholar Graph API."
 }

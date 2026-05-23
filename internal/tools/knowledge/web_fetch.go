@@ -32,7 +32,8 @@ type webFetchOutput struct {
 	Truncated bool   `json:"truncated"`
 }
 
-func (*WebFetch) Name() string { return "knowledge.web_fetch" }
+func (*WebFetch) Name() string     { return "knowledge.web_fetch" }
+func (*WebFetch) Concurrent() bool { return true }
 func (*WebFetch) Description() string {
 	return "Fetch a web page or document by URL and return its readable plain-text content. " +
 		"HTML is stripped of scripts, styles and tags."

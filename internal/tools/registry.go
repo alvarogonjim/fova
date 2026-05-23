@@ -25,6 +25,23 @@ type Tool interface {
 	EstimatedDuration(input json.RawMessage) time.Duration
 }
 
+// Concurrent is an optional interface a Tool may implement to declare it is
+// safe to run in parallel with other Concurrent tools in the same batched
+// tool-call response. Tools that do not implement it are treated as serial.
+//
+// Invariant: a Tool that returns Concurrent()=true must NOT return
+// RequiresConfirmation()=true. The agent loop refuses to parallelise calls
+// requiring confirmation; combining the two is a bug.
+type Concurrent interface {
+	Concurrent() bool
+}
+
+// IsConcurrent reports whether t opts in to concurrent execution.
+func IsConcurrent(t Tool) bool {
+	c, ok := t.(Concurrent)
+	return ok && c.Concurrent()
+}
+
 // Result is the outcome of a tool execution.
 type Result struct {
 	Output     json.RawMessage    // JSON-serialisable structured output

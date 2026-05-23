@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -65,15 +66,23 @@ type Validator interface {
 }
 
 // Registry holds and dispatches tools.
+//
+// Registry is not safe for concurrent Register/Specs calls. In fova, all
+// Register calls happen on the main goroutine before the agent loop starts;
+// afterwards Specs is read-only from the agent goroutine.
 type Registry struct {
 	tools map[string]Tool
+	specs []llm.ToolSpec // built lazily; cleared on Register
 }
 
 // NewRegistry returns an empty registry.
 func NewRegistry() *Registry { return &Registry{tools: map[string]Tool{}} }
 
 // Register adds a tool, replacing any tool with the same name.
-func (r *Registry) Register(t Tool) { r.tools[t.Name()] = t }
+func (r *Registry) Register(t Tool) {
+	r.tools[t.Name()] = t
+	r.specs = nil
+}
 
 // Get returns the tool with the given name.
 func (r *Registry) Get(name string) (Tool, bool) {
@@ -82,22 +91,21 @@ func (r *Registry) Get(name string) (Tool, bool) {
 }
 
 // Specs returns the tool specs advertised to the LLM, sorted by name.
+// The slice is cached and reused across calls until Register is called.
 func (r *Registry) Specs() []llm.ToolSpec {
-	specs := make([]llm.ToolSpec, 0, len(r.tools))
-	for _, t := range r.tools {
-		specs = append(specs, llm.ToolSpec{
-			Name:        t.Name(),
-			Description: t.Description(),
-			InputSchema: t.InputSchema(),
-		})
-	}
-	// Stable order so prompts and tests are deterministic.
-	for i := 1; i < len(specs); i++ {
-		for j := i; j > 0 && specs[j-1].Name > specs[j].Name; j-- {
-			specs[j-1], specs[j] = specs[j], specs[j-1]
+	if r.specs == nil {
+		specs := make([]llm.ToolSpec, 0, len(r.tools))
+		for _, t := range r.tools {
+			specs = append(specs, llm.ToolSpec{
+				Name:        t.Name(),
+				Description: t.Description(),
+				InputSchema: t.InputSchema(),
+			})
 		}
+		sort.Slice(specs, func(i, j int) bool { return specs[i].Name < specs[j].Name })
+		r.specs = specs
 	}
-	return specs
+	return r.specs
 }
 
 // Execute dispatches a tool call by name.

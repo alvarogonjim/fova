@@ -42,6 +42,7 @@ func (*FilterTool) InputSchema() map[string]any {
 		},
 	}
 }
+func (*FilterTool) Concurrent() bool                                { return true }
 func (*FilterTool) RequiresConfirmation(json.RawMessage) bool       { return false }
 func (*FilterTool) EstimatedCostUSD(json.RawMessage) float64        { return 0 }
 func (*FilterTool) EstimatedDuration(json.RawMessage) time.Duration { return 100 * time.Millisecond }

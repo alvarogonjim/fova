@@ -335,6 +335,23 @@ func (*chai1Tool) RequiresConfirmation(json.RawMessage) bool       { return true
 func (*chai1Tool) EstimatedCostUSD(json.RawMessage) float64        { return 0.25 }
 func (*chai1Tool) EstimatedDuration(json.RawMessage) time.Duration { return 3 * time.Minute }
 
+// Validate satisfies tools.Validator: the editable confirmation gate calls
+// this after a user edit and rejects the edit (re-opening the editor with
+// the error pinned at the top of the pending-input file) when it returns
+// non-nil. The implementation mirrors Execute's own JSON+preflight prelude
+// so what the user sees on edit matches what Execute would have rejected.
+func (*chai1Tool) Validate(input json.RawMessage) error {
+	var req chai1Request
+	if err := json.Unmarshal(input, &req); err != nil {
+		return fmt.Errorf("fold.chai1: invalid JSON: %w", err)
+	}
+	return preflightChai1(req)
+}
+
+// Compile-time assertion: chai1Tool opts into the editable-confirmation
+// pre-execution validation sidecar.
+var _ tools.Validator = (*chai1Tool)(nil)
+
 // isMSAPath reports whether an MSA value names a workspace path — i.e. it is
 // neither empty, the "default" mode, nor the "server" mode.
 func isMSAPath(msa string) bool {

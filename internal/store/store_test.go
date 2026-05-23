@@ -3,6 +3,7 @@ package store
 import (
 	"fmt"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -164,5 +165,49 @@ func TestStoreConcurrentWrites(t *testing.T) {
 	}
 	if want := goroutines * perGoroutine; n != want {
 		t.Errorf("jobs count = %d, want %d", n, want)
+	}
+}
+
+// queryPlanContains runs EXPLAIN QUERY PLAN and reports whether the textual
+// plan mentions the given index name. SQLite includes the index name in the
+// "detail" column when the plan uses an index.
+func queryPlanContains(t *testing.T, st *Store, indexName, query string, args ...any) bool {
+	t.Helper()
+	rows, err := st.db.Query("EXPLAIN QUERY PLAN "+query, args...)
+	if err != nil {
+		t.Fatalf("EXPLAIN QUERY PLAN: %v", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		// SQLite returns (id INTEGER, parent INTEGER, notused INTEGER, detail TEXT).
+		var id, parent, notused int
+		var detail string
+		if err := rows.Scan(&id, &parent, &notused, &detail); err != nil {
+			t.Fatalf("scan EXPLAIN row: %v", err)
+		}
+		if strings.Contains(detail, indexName) {
+			return true
+		}
+	}
+	return false
+}
+
+func TestListJobsUsesProjectIndex(t *testing.T) {
+	st := openTestStore(t)
+	if !queryPlanContains(t, st, "idx_jobs_project",
+		`SELECT id FROM jobs WHERE project_id=? ORDER BY created DESC, rowid DESC`,
+		string(DefaultProjectID),
+	) {
+		t.Errorf("ListJobs query plan does not use idx_jobs_project")
+	}
+}
+
+func TestListExperimentsUsesProjectIndex(t *testing.T) {
+	st := openTestStore(t)
+	if !queryPlanContains(t, st, "idx_experiments_project",
+		`SELECT body FROM experiments WHERE project_id=? ORDER BY submitted DESC, rowid DESC`,
+		string(DefaultProjectID),
+	) {
+		t.Errorf("ListExperiments query plan does not use idx_experiments_project")
 	}
 }

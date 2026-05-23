@@ -1,7 +1,9 @@
 package store
 
 import (
+	"fmt"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -117,5 +119,50 @@ func TestStoreSynchronousNormal(t *testing.T) {
 	// synchronous=NORMAL is 1 in SQLite.
 	if mode != 1 {
 		t.Errorf("synchronous = %d, want 1 (NORMAL)", mode)
+	}
+}
+
+func TestStoreConcurrentWrites(t *testing.T) {
+	st := openTestStore(t)
+
+	const goroutines = 4
+	const perGoroutine = 50
+
+	var wg sync.WaitGroup
+	errs := make(chan error, goroutines*perGoroutine)
+	for g := 0; g < goroutines; g++ {
+		g := g
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := 0; i < perGoroutine; i++ {
+				j := domain.Job{
+					ID:      domain.JobID(fmt.Sprintf("job-%d-%d", g, i)),
+					Kind:    domain.JobCompute,
+					Tool:    "concurrent-writer-test",
+					Status:  domain.JobQueued,
+					Created: time.Now().UTC(),
+				}
+				if err := st.InsertJob(j); err != nil {
+					errs <- err
+				}
+			}
+		}()
+	}
+	wg.Wait()
+	close(errs)
+
+	for err := range errs {
+		t.Errorf("concurrent InsertJob: %v", err)
+	}
+
+	var n int
+	if err := st.db.QueryRow(
+		"SELECT COUNT(*) FROM jobs WHERE tool = 'concurrent-writer-test'",
+	).Scan(&n); err != nil {
+		t.Fatalf("count jobs: %v", err)
+	}
+	if want := goroutines * perGoroutine; n != want {
+		t.Errorf("jobs count = %d, want %d", n, want)
 	}
 }

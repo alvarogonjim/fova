@@ -2,6 +2,7 @@ package local
 
 import (
 	"strconv"
+	"strings"
 
 	"github.com/alvarogonjim/fova/internal/domain"
 )
@@ -74,6 +75,27 @@ func rfdiffusion2HydraOverrides(p domain.RFdiffusion2Params, motifContainerPath 
 	args = append(args, "stop_step='"+stop+"'")
 
 	return args
+}
+
+// buildRFdiffusion2Driver renders the bash script that drives one pipeline.py
+// invocation inside the tool image. The script mkdirs the deterministic
+// /work/out landing dir then execs python pipeline.py with the assembled
+// Hydra overrides. The container is run with Entrypoint=bash because the
+// image ENTRYPOINT is `python /opt/rfdiffusion2/rf_diffusion/benchmark/pipeline.py`
+// — we override it so the script can prepare /work/out before exec and so the
+// argv shape stays uniform across benchmark/motif variants.
+func buildRFdiffusion2Driver(hydraOverrides []string) string {
+	var b strings.Builder
+	b.WriteString("#!/bin/bash\n")
+	b.WriteString("set -euo pipefail\n")
+	b.WriteString("mkdir -p /work/out\n")
+	b.WriteString("python /opt/rfdiffusion2/rf_diffusion/benchmark/pipeline.py")
+	for _, arg := range hydraOverrides {
+		b.WriteString(" ")
+		b.WriteString(arg)
+	}
+	b.WriteString("\n")
+	return b.String()
 }
 
 // pyBool returns "True"/"False" — what Hydra/OmegaConf expect for a bool

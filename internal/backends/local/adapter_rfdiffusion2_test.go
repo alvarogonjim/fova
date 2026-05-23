@@ -57,6 +57,29 @@ func TestRFdiffusion2HydraOverridesMotifOverride(t *testing.T) {
 	}
 }
 
+func TestBuildRFdiffusion2Driver(t *testing.T) {
+	script := buildRFdiffusion2Driver([]string{
+		"--config-name=open_source_demo",
+		"sweep.benchmarks=active_site_unindexed_atomic_partial_ligand",
+		"outdir=/work/out",
+		"stop_step='end'",
+	})
+	for _, want := range []string{
+		"#!/bin/bash",
+		"set -euo pipefail",
+		"mkdir -p /work/out",
+		"python /opt/rfdiffusion2/rf_diffusion/benchmark/pipeline.py",
+		"--config-name=open_source_demo",
+		"sweep.benchmarks=active_site_unindexed_atomic_partial_ligand",
+		"outdir=/work/out",
+		"stop_step='end'",
+	} {
+		if !strings.Contains(script, want) {
+			t.Errorf("driver missing %q in:\n%s", want, script)
+		}
+	}
+}
+
 func TestRFdiffusion2HydraOverridesToggles(t *testing.T) {
 	tru := true
 	fls := false

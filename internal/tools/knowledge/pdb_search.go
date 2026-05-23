@@ -242,8 +242,10 @@ func (t *PDBSearch) enrich(ctx context.Context, ids []string) (map[string]pdbEnr
 		if len(e.RCSBEntryInfo.ResolutionCombined) > 0 {
 			enriched.Resolution = e.RCSBEntryInfo.ResolutionCombined[0]
 		}
-		if len(e.RCSBEntryInfo.InitialReleaseDate) >= 4 {
-			if y, err := time.Parse(time.RFC3339, e.RCSBEntryInfo.InitialReleaseDate); err == nil {
+		if d := e.RCSBEntryInfo.InitialReleaseDate; len(d) >= 4 {
+			if y, err := time.Parse(time.RFC3339, d); err == nil {
+				enriched.Year = y.Year()
+			} else if y, err := time.Parse(time.DateOnly, d); err == nil {
 				enriched.Year = y.Year()
 			}
 		}

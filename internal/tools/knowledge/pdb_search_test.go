@@ -262,3 +262,45 @@ func TestPDBSearchExecute_PartialEnrichment(t *testing.T) {
 		t.Errorf("second row should have empty enriched fields: %+v", missing)
 	}
 }
+
+func TestPDBSearchExecute_DateOnlyRelease(t *testing.T) {
+	searchSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+		  "result_set": [{"identifier": "1ABC", "score": 0.9}],
+		  "total_count": 1
+		}`))
+	}))
+	defer searchSrv.Close()
+
+	graphqlSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+		  "data": {
+		    "entries": [{
+		      "rcsb_id": "1ABC",
+		      "struct": {"title": "Example"},
+		      "exptl": [{"method": "X-RAY DIFFRACTION"}],
+		      "rcsb_entry_info": {"resolution_combined": [1.5], "initial_release_date": "2020-04-15"}
+		    }]
+		  }
+		}`))
+	}))
+	defer graphqlSrv.Close()
+
+	tool := NewPDBSearch()
+	tool.SearchURL = searchSrv.URL
+	tool.GraphQLURL = graphqlSrv.URL
+
+	res, err := tool.Execute(context.Background(), json.RawMessage(`{"query":"example"}`))
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	var out pdbSearchOutput
+	if err := json.Unmarshal(res.Output, &out); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(out.Results) != 1 || out.Results[0].Year != 2020 {
+		t.Errorf("year not parsed from date-only string: %+v", out.Results)
+	}
+}

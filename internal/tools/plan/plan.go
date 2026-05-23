@@ -315,6 +315,24 @@ func (t *CreateTool) Execute(ctx context.Context, input json.RawMessage) (tools.
 		}
 	}
 
+	// RFdiffusion / ProteinMPNN / BindCraft — same pattern: method_params
+	// carries the typed run configuration. No spec file or external check.
+	if method == MethodRFdiffusion {
+		if err := t.applyRFdiffusionMethodConfig(input, &p); err != nil {
+			return tools.Result{}, err
+		}
+	}
+	if method == MethodProteinMPNN {
+		if err := t.applyProteinMPNNMethodConfig(input, &p); err != nil {
+			return tools.Result{}, err
+		}
+	}
+	if method == MethodBindCraft {
+		if err := t.applyBindCraftMethodConfig(input, &p); err != nil {
+			return tools.Result{}, err
+		}
+	}
+
 	// Ground every evidence entry in the corpus. The Citation field is
 	// computed here; any value the caller supplied for it is discarded.
 	if err := t.resolveEvidence(&p); err != nil {
@@ -622,6 +640,70 @@ func (t *CreateTool) applyRFantibodyMethodConfig(input json.RawMessage, p *domai
 		return err
 	}
 	p.MethodConfig = &domain.MethodConfig{RFantibody: envelope.Params}
+	return nil
+}
+
+// applyRFdiffusionMethodConfig parses the optional method_params input into
+// an RFdiffusionParams and folds it onto the plan's MethodConfig. When
+// method_params is absent the plan is accepted without an RFdiffusion section
+// (legacy back-compat — RFdiffusion's pre-bespoke schema took no required
+// configuration); when present the typed params are validated. LigandMPNN and
+// RFantibody by contrast strictly require method_params — they are bespoke
+// from inception and have no legacy callers to preserve.
+func (t *CreateTool) applyRFdiffusionMethodConfig(input json.RawMessage, p *domain.DesignPlan) error {
+	var envelope struct {
+		Params *domain.RFdiffusionParams `json:"method_params"`
+	}
+	if err := json.Unmarshal(input, &envelope); err != nil {
+		return fmt.Errorf("plan.create: invalid method_params: %w", err)
+	}
+	if envelope.Params == nil {
+		return nil
+	}
+	if err := envelope.Params.Validate(); err != nil {
+		return err
+	}
+	p.MethodConfig = &domain.MethodConfig{RFdiffusion: envelope.Params}
+	return nil
+}
+
+// applyProteinMPNNMethodConfig is the ProteinMPNN sibling of
+// applyRFdiffusionMethodConfig — see its doc comment for the legacy-compat
+// rationale. method_params is optional; present-and-malformed is rejected.
+func (t *CreateTool) applyProteinMPNNMethodConfig(input json.RawMessage, p *domain.DesignPlan) error {
+	var envelope struct {
+		Params *domain.ProteinMPNNParams `json:"method_params"`
+	}
+	if err := json.Unmarshal(input, &envelope); err != nil {
+		return fmt.Errorf("plan.create: invalid method_params: %w", err)
+	}
+	if envelope.Params == nil {
+		return nil
+	}
+	if err := envelope.Params.Validate(); err != nil {
+		return err
+	}
+	p.MethodConfig = &domain.MethodConfig{ProteinMPNN: envelope.Params}
+	return nil
+}
+
+// applyBindCraftMethodConfig is the BindCraft sibling — same legacy-compat
+// rule. BindCraft is x86-only (PyRosetta); method_params is optional; when
+// present the typed params are validated.
+func (t *CreateTool) applyBindCraftMethodConfig(input json.RawMessage, p *domain.DesignPlan) error {
+	var envelope struct {
+		Params *domain.BindCraftParams `json:"method_params"`
+	}
+	if err := json.Unmarshal(input, &envelope); err != nil {
+		return fmt.Errorf("plan.create: invalid method_params: %w", err)
+	}
+	if envelope.Params == nil {
+		return nil
+	}
+	if err := envelope.Params.Validate(); err != nil {
+		return err
+	}
+	p.MethodConfig = &domain.MethodConfig{BindCraft: envelope.Params}
 	return nil
 }
 

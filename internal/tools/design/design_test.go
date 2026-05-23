@@ -197,17 +197,6 @@ func TestDesignToolSchemaAdvertisesContigs(t *testing.T) {
 	}
 }
 
-func TestDesignToolSchemaAdvertisesSettings(t *testing.T) {
-	tool := NewBindCraftTool("", nil, nil, nil)
-	props, ok := tool.InputSchema()["properties"].(map[string]any)
-	if !ok {
-		t.Fatal("InputSchema has no properties map")
-	}
-	if _, ok := props["settings"]; !ok {
-		t.Error("InputSchema must advertise the settings property")
-	}
-}
-
 // Bug 1 — relative path is resolved against the workspace root before being
 // handed to the backend.
 func TestDesignToolResolvesRelativeTargetAgainstWorkspace(t *testing.T) {

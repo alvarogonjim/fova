@@ -100,6 +100,12 @@ func RenderPlanWithOpts(p domain.DesignPlan, opts RenderPlanOpts) string {
 			renderLigandMPNNSection(&b, mc.LigandMPNN)
 		case mc.RFantibody != nil:
 			renderRFantibodySection(&b, mc.RFantibody)
+		case mc.RFdiffusion != nil:
+			renderRFdiffusionSection(&b, mc.RFdiffusion)
+		case mc.ProteinMPNN != nil:
+			renderProteinMPNNSection(&b, mc.ProteinMPNN)
+		case mc.BindCraft != nil:
+			renderBindCraftSection(&b, mc.BindCraft)
 		}
 	}
 
@@ -200,6 +206,86 @@ func renderRFantibodySection(b *strings.Builder, ra *domain.RFantibodyParams) {
 
 	if ra.DesignLoops != "" {
 		labelRow(b, "Design loops", ra.DesignLoops)
+	}
+}
+
+// renderRFdiffusionSection appends the RFdiffusion method-config block to b:
+// the target (unconditional when empty), the contig map, hotspots, and the
+// run knobs that were explicitly set. Emitted for a plan whose MethodConfig
+// carries RFdiffusion params.
+func renderRFdiffusionSection(b *strings.Builder, rd *domain.RFdiffusionParams) {
+	b.WriteString("\n  RFdiffusion design configuration\n")
+
+	target := rd.Target
+	if target == "" {
+		target = "(unconditional — no target)"
+	}
+	labelRow(b, "Target", target)
+	if rd.Hotspots != "" {
+		labelRow(b, "Hotspots", rd.Hotspots)
+	}
+	labelRow(b, "Contigs", rd.Contigs)
+	if rd.NumDesigns > 0 {
+		labelRow(b, "Num designs", fmt.Sprintf("%d", rd.NumDesigns))
+	}
+	if rd.Symmetric != nil && *rd.Symmetric {
+		labelRow(b, "Symmetry", rd.SymmetryKind)
+		labelRow(b, "N chains", fmt.Sprintf("%d", rd.NChains))
+	}
+	if rd.PartialT > 0 {
+		labelRow(b, "Partial T", fmt.Sprintf("%d", rd.PartialT))
+	}
+	if len(rd.GuidingPotentials) > 0 {
+		labelRow(b, "Potentials", strings.Join(rd.GuidingPotentials, ", "))
+	}
+}
+
+// renderProteinMPNNSection appends the ProteinMPNN method-config block to b:
+// the input backbone PDB and the run knobs that were set. Emitted for a
+// plan whose MethodConfig carries ProteinMPNN params.
+func renderProteinMPNNSection(b *strings.Builder, pm *domain.ProteinMPNNParams) {
+	b.WriteString("\n  ProteinMPNN design configuration\n")
+
+	labelRow(b, "Input PDB", pm.PDB)
+	if pm.NumDesigns > 0 {
+		labelRow(b, "Sequences per target", fmt.Sprintf("%d", pm.NumDesigns))
+	}
+	if pm.SamplingTemp != nil {
+		labelRow(b, "Sampling temp", fmt.Sprintf("%g", *pm.SamplingTemp))
+	}
+	if pm.ChainsToDesign != "" {
+		labelRow(b, "Chains to design", pm.ChainsToDesign)
+	}
+	if pm.FixedPositions != "" {
+		labelRow(b, "Fixed positions", pm.FixedPositions)
+	}
+	if pm.OmitAAs != "" {
+		labelRow(b, "Omit AAs", pm.OmitAAs)
+	}
+}
+
+// renderBindCraftSection appends the BindCraft method-config block to b:
+// the target file + chains + epitope, the binder length range, and the
+// run knobs that were set. Emitted for a plan whose MethodConfig carries
+// BindCraft params.
+func renderBindCraftSection(b *strings.Builder, bc *domain.BindCraftParams) {
+	b.WriteString("\n  BindCraft design configuration\n")
+
+	if bc.BinderName != "" {
+		labelRow(b, "Binder name", bc.BinderName)
+	}
+	labelRow(b, "Starting PDB", bc.StartingPDB)
+	labelRow(b, "Chains", bc.Chains)
+	labelRow(b, "Hotspots", bc.TargetHotspotResidues)
+	labelRow(b, "Length", fmt.Sprintf("%d..%d", bc.LengthMin, bc.LengthMax))
+	if bc.NumberOfFinalDesigns > 0 {
+		labelRow(b, "Final designs", fmt.Sprintf("%d", bc.NumberOfFinalDesigns))
+	}
+	if bc.ProtocolName != "" {
+		labelRow(b, "Protocol", bc.ProtocolName)
+	}
+	if bc.TemplatePDB != "" {
+		labelRow(b, "Template PDB", bc.TemplatePDB)
 	}
 }
 

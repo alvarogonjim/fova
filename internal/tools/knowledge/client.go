@@ -3,6 +3,7 @@
 package knowledge
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -29,6 +30,47 @@ func getJSON(ctx context.Context, url string, out any) error {
 		return err
 	}
 	if err := json.Unmarshal(body, out); err != nil {
+		return fmt.Errorf("decode %s: %w", url, err)
+	}
+	return nil
+}
+
+// postJSON sends body as JSON and decodes a JSON response into out. Non-2xx
+// is an error. 204 No Content is treated as success and leaves out untouched.
+func postJSON(ctx context.Context, url string, body, out any) error {
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return fmt.Errorf("encode body for %s: %w", url, err)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(buf))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("User-Agent", userAgent)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("request %s: %w", url, err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
+	if err != nil {
+		return fmt.Errorf("read body %s: %w", url, err)
+	}
+	if resp.StatusCode == http.StatusNoContent {
+		return nil
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("%s returned %d: %s", url, resp.StatusCode,
+			strings.TrimSpace(string(respBody)))
+	}
+	if len(respBody) == 0 {
+		return nil
+	}
+	if err := json.Unmarshal(respBody, out); err != nil {
 		return fmt.Errorf("decode %s: %w", url, err)
 	}
 	return nil

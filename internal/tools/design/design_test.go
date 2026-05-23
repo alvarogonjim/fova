@@ -213,7 +213,7 @@ func TestDesignToolResolvesRelativeTargetAgainstWorkspace(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	tool := NewProteinMPNNTool(ws, mgr, backend, st)
+	tool := NewRFdiffusion2Tool(ws, mgr, backend, st)
 	res, err := tool.Execute(context.Background(), json.RawMessage(`{"target":"inputs/x.pdb"}`))
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
@@ -244,7 +244,7 @@ func TestDesignToolPassesAbsoluteInsideWorkspaceThrough(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	tool := NewProteinMPNNTool(ws, mgr, backend, st)
+	tool := NewRFdiffusion2Tool(ws, mgr, backend, st)
 	body, _ := json.Marshal(map[string]string{"target": abs})
 	res, err := tool.Execute(context.Background(), body)
 	if err != nil {
@@ -269,7 +269,7 @@ func TestDesignToolRejectsAbsoluteOutsideWorkspace(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	tool := NewProteinMPNNTool(ws, mgr, backend, st)
+	tool := NewRFdiffusion2Tool(ws, mgr, backend, st)
 	body, _ := json.Marshal(map[string]string{"target": outside})
 	if _, err := tool.Execute(context.Background(), body); err == nil {
 		t.Fatal("expected an 'escapes the workspace' error")
@@ -281,7 +281,7 @@ func TestDesignToolRejectsAbsoluteOutsideWorkspace(t *testing.T) {
 // Bug 1 — `../`-style traversal is rejected.
 func TestDesignToolRejectsPathTraversal(t *testing.T) {
 	mgr, st, backend, ws := newTestDeps(t, `{"designs":[]}`)
-	tool := NewProteinMPNNTool(ws, mgr, backend, st)
+	tool := NewRFdiffusion2Tool(ws, mgr, backend, st)
 	if _, err := tool.Execute(context.Background(),
 		json.RawMessage(`{"target":"../../etc/passwd"}`)); err == nil {
 		t.Fatal("expected an 'escapes the workspace' error")
@@ -294,7 +294,7 @@ func TestDesignToolRejectsPathTraversal(t *testing.T) {
 // validate presence; the adapter does).
 func TestDesignToolPassesEmptyTargetThrough(t *testing.T) {
 	mgr, st, backend, ws := newTestDeps(t, `{"designs":[]}`)
-	tool := NewProteinMPNNTool(ws, mgr, backend, st)
+	tool := NewRFdiffusion2Tool(ws, mgr, backend, st)
 	res, err := tool.Execute(context.Background(), json.RawMessage(`{"target":""}`))
 	if err != nil {
 		t.Fatalf("Execute: %v", err)

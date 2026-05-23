@@ -221,12 +221,16 @@ type BoltzGenParams struct {
 }
 
 // MethodConfig carries method-specific run configuration on a DesignPlan.
-// Populated only for methods that need it (BoltzGen, LigandMPNN, RFantibody).
+// Populated only for methods that need it (BoltzGen, LigandMPNN, RFantibody,
+// RFdiffusion, ProteinMPNN, BindCraft).
 type MethodConfig struct {
-	SpecPath   string            `json:"spec_path,omitempty"`  // workspace-relative spec YAML
-	BoltzGen   *BoltzGenParams   `json:"boltzgen,omitempty"`   // BoltzGen run params
-	LigandMPNN *LigandMPNNParams `json:"ligandmpnn,omitempty"` // LigandMPNN run params
-	RFantibody *RFantibodyParams `json:"rfantibody,omitempty"` // RFantibody run params
+	SpecPath    string             `json:"spec_path,omitempty"`   // workspace-relative spec YAML
+	BoltzGen    *BoltzGenParams    `json:"boltzgen,omitempty"`    // BoltzGen run params
+	LigandMPNN  *LigandMPNNParams  `json:"ligandmpnn,omitempty"`  // LigandMPNN run params
+	RFantibody  *RFantibodyParams  `json:"rfantibody,omitempty"`  // RFantibody run params
+	RFdiffusion *RFdiffusionParams `json:"rfdiffusion,omitempty"` // RFdiffusion run params
+	ProteinMPNN *ProteinMPNNParams `json:"proteinmpnn,omitempty"` // ProteinMPNN run params
+	BindCraft   *BindCraftParams   `json:"bindcraft,omitempty"`   // BindCraft run params
 }
 
 // RFantibodyParams is the agent-facing RFantibody run configuration. It drives

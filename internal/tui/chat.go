@@ -13,6 +13,12 @@ import (
 	"github.com/alvarogonjim/fova/internal/domain"
 )
 
+// mdRenderer renders markdown to terminal output. A small interface so tests
+// can substitute a counting fake.
+type mdRenderer interface {
+	Render(string) (string, error)
+}
+
 // entryKind classifies a chat entry.
 type entryKind int
 
@@ -64,7 +70,7 @@ type chatModel struct {
 	theme    Theme
 	viewport viewport.Model
 	entries  []chatEntry
-	renderer *glamour.TermRenderer
+	renderer mdRenderer
 	width    int
 }
 

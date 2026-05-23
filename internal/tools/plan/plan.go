@@ -315,6 +315,16 @@ func (t *CreateTool) Execute(ctx context.Context, input json.RawMessage) (tools.
 		}
 	}
 
+	// RFdiffusion2 folds its pipeline-run configuration (the RFdiffusion2Params)
+	// into the plan so /plan can render it and /plan approve can run it. Like
+	// LigandMPNN and RFantibody there is no spec file or external check —
+	// method_params alone carries the configuration.
+	if method == MethodRFdiffusion2 {
+		if err := t.applyRFdiffusion2MethodConfig(input, &p); err != nil {
+			return tools.Result{}, err
+		}
+	}
+
 	// Ground every evidence entry in the corpus. The Citation field is
 	// computed here; any value the caller supplied for it is discarded.
 	if err := t.resolveEvidence(&p); err != nil {
@@ -622,6 +632,31 @@ func (t *CreateTool) applyRFantibodyMethodConfig(input json.RawMessage, p *domai
 		return err
 	}
 	p.MethodConfig = &domain.MethodConfig{RFantibody: envelope.Params}
+	return nil
+}
+
+// applyRFdiffusion2MethodConfig parses the method_params input into an
+// RFdiffusion2Params and folds it into DesignPlan.MethodConfig. method_params
+// is required for an RFdiffusion2 plan — it carries the pipeline-run
+// configuration (at minimum the benchmark choice; motif_pdb + contigs
+// optional). The params are value-shape validated via
+// domain.RFdiffusion2Params.Validate; there is no external check tool.
+func (t *CreateTool) applyRFdiffusion2MethodConfig(input json.RawMessage, p *domain.DesignPlan) error {
+	var envelope struct {
+		Params *domain.RFdiffusion2Params `json:"method_params"`
+	}
+	if err := json.Unmarshal(input, &envelope); err != nil {
+		return fmt.Errorf("plan.create: invalid method_params: %w", err)
+	}
+	if envelope.Params == nil {
+		return fmt.Errorf(
+			"plan.create: method RFdiffusion2 requires method_params — the " +
+				"RFdiffusion2 run configuration (at minimum a benchmark choice)")
+	}
+	if err := envelope.Params.Validate(); err != nil {
+		return err
+	}
+	p.MethodConfig = &domain.MethodConfig{RFdiffusion2: envelope.Params}
 	return nil
 }
 

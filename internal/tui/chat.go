@@ -166,7 +166,11 @@ func (c *chatModel) appendToolDoneWithID(id, name, display string) {
 		if e.kind != entryTool || e.done {
 			continue
 		}
-		// Prefer ID match; if either side is empty, fall back to name.
+		// Match by ID when both sides carry one; otherwise fall back to
+		// name-only. The fallback is conservative: if Start has an ID but
+		// Done does not, we match by name (may pick the wrong entry under
+		// same-name concurrency) rather than producing an orphan Done.
+		// Today's only id="" caller is the session-replay path.
 		if id != "" && e.toolCallID != "" {
 			if id != e.toolCallID {
 				continue

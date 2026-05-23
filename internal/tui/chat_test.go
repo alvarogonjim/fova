@@ -328,6 +328,27 @@ func TestChatAppendToolDoneMatchesByID(t *testing.T) {
 	}
 }
 
+func TestChatAppendToolDoneMatchesByIDSameName(t *testing.T) {
+	c := newChatModel(NewTheme(), 80, 20)
+	c.appendToolStartWithID("call-1", "fs.read")
+	c.appendToolStartWithID("call-2", "fs.read")
+
+	// Complete the first call (the older entry) — without ID matching this
+	// would route to the newer entry because the back-to-front scan stops at
+	// the first unfinished entry with a matching name.
+	c.appendToolDoneWithID("call-1", "fs.read", "result 1")
+
+	if !c.entries[0].done {
+		t.Errorf("first fs.read (call-1) should be done")
+	}
+	if c.entries[1].done {
+		t.Errorf("second fs.read (call-2) should still be running")
+	}
+	if c.entries[0].result != "result 1" {
+		t.Errorf("entries[0].result = %q, want \"result 1\"", c.entries[0].result)
+	}
+}
+
 func TestChatCacheStreamingHotPathIsOPerEntry(t *testing.T) {
 	c := newChatModel(NewTheme(), 80, 20)
 	cr := &countingRenderer{inner: c.renderer}

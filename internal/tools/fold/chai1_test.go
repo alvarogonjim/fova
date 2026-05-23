@@ -3,6 +3,7 @@ package fold
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -96,4 +97,49 @@ func TestChai1ExecuteSubmitsJob(t *testing.T) {
 	// Wait for the submitted job to finish before the test returns —
 	// otherwise t.Cleanup closing the store races the job's goroutine.
 	waitJob(t, mgr, res.JobID)
+}
+
+// TestChai1ValidateRejectsInvalidJSON exercises the malformed-bytes branch of
+// Validate: the editable gate must surface a clear "invalid JSON" error so the
+// user sees an editor reopen with a fix-it hint rather than a stack trace.
+func TestChai1ValidateRejectsInvalidJSON(t *testing.T) {
+	tool := NewChai1("/ws", nil, nil)
+	err := tool.Validate(json.RawMessage(`not json at all`))
+	if err == nil {
+		t.Fatal("Validate must reject malformed JSON")
+	}
+	if !strings.Contains(err.Error(), "invalid JSON") {
+		t.Errorf("error %q must mention \"invalid JSON\"", err)
+	}
+}
+
+// TestChai1ValidatePassesGoodInput is the happy path: a minimal valid
+// single-protein request must return nil so the editable gate accepts the
+// user's edit without re-opening the editor.
+func TestChai1ValidatePassesGoodInput(t *testing.T) {
+	tool := NewChai1("/ws", nil, nil)
+	input := json.RawMessage(`{"entities":[{"type":"protein","id":"A","sequence":"MKQ"}]}`)
+	if err := tool.Validate(input); err != nil {
+		t.Fatalf("Validate(valid request) = %v, want nil", err)
+	}
+}
+
+// TestChai1ValidateSurfacesPreflightError feeds a request that parses cleanly
+// but trips preflight (duplicate chain id). The Validator must return the
+// preflight error verbatim so the editable gate pins the same diagnostic the
+// user would see from Execute.
+func TestChai1ValidateSurfacesPreflightError(t *testing.T) {
+	tool := NewChai1("/ws", nil, nil)
+	// Two entities sharing chain id "A" — preflightChai1 emits a
+	// "used more than once" diagnostic that the editable gate must surface.
+	input := json.RawMessage(`{"entities":[` +
+		`{"type":"protein","id":"A","sequence":"MKQ"},` +
+		`{"type":"ligand","id":"A","smiles":"CCO"}]}`)
+	err := tool.Validate(input)
+	if err == nil {
+		t.Fatal("Validate must surface preflight errors")
+	}
+	if !strings.Contains(err.Error(), "used more than once") {
+		t.Errorf("error %q must contain the preflight diagnostic \"used more than once\"", err)
+	}
 }

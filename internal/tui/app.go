@@ -111,8 +111,8 @@ type Model struct {
 	// real local installer; tests override it.
 	installFn func(ctx context.Context, name string, log io.Writer) error
 
-	bus       chan tea.Msg // agent → TUI
-	confirmCh chan bool    // TUI → agent (modal result)
+	bus       chan tea.Msg      // agent → TUI
+	confirmCh chan confirmReply // TUI → agent (modal result + optional edited input)
 
 	turnCancel context.CancelFunc
 	running    bool
@@ -129,6 +129,31 @@ type Model struct {
 	// until the paired ConfirmRequestMsg arrives.
 	pendingTool  string
 	pendingInput json.RawMessage
+
+	// Editable-confirmation-gate state (spec §3.3 / §3.4). All four fields
+	// are scoped to a single overlayConfirm cycle and reset on every modal
+	// exit path (accept, decline, cancel).
+	//
+	// pendingInputPath is the workspace path of the pending JSON file the
+	// user is editing; "" means no edit is in flight. pendingEdited carries
+	// the validated edited bytes that get submitted on [y]; nil means
+	// "accept the original proposal as-is". pendingValidator is the tool's
+	// optional tools.Validator, resolved from the registry at modal-open
+	// time; nil for tools that don't opt in.
+	pendingInputPath string
+	pendingEdited    json.RawMessage
+	pendingValidator tools.Validator
+
+	// pendingInputDir resolves the workspace directory used to root the
+	// pending-input file. Defaults to workspaceFromHome(m.fovaHome);
+	// tests inject t.TempDir() to avoid touching the real workspace.
+	pendingInputDir func() string
+
+	// openEditorFile is the editor-handoff entrypoint used by the editable
+	// confirmation gate. Defaults to openEditorFileCmd; tests inject a fake
+	// that posts editorFileDoneMsg immediately so the message loop drives
+	// the edit cycle without exec-ing a real editor.
+	openEditorFile func(path, initial string) tea.Cmd
 
 	thinking      thinkingModel   // animated "thinking" indicator (SPECS §10.7.4)
 	slashMenu     *slashMenuModel // slash-command autocomplete popup (§10.7.3)
@@ -192,11 +217,15 @@ func New(d Deps) *Model {
 		fovaHome:     d.FovaHome,
 		configDir:    d.ConfigDir,
 		bus:          make(chan tea.Msg, 256),
-		confirmCh:    make(chan bool, 1),
+		confirmCh:    make(chan confirmReply, 1),
 	}
 	m.jobs = newJobsModel(th)
 	m.designs = newDesignsModel(th)
 	m.lab = newLabModel(th)
+	// Editable-confirmation-gate hooks. Both have production defaults;
+	// tests replace them per case.
+	m.pendingInputDir = func() string { return workspaceFromHome(m.fovaHome) }
+	m.openEditorFile = openEditorFileCmd
 	m.detail = newDetailView(th)
 	m.keys = newKeysOverlay()
 	m.slashMenu = newSlashMenu()
@@ -381,11 +410,32 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.pendingTool == "lab.submit_experiment" {
 			m.submit = buildSubmitModal(m.pendingInput, m.webhookURL)
 			m.overlay = overlaySubmit
+			// Bespoke surface manages its own state; keep pendingTool /
+			// pendingInput populated only for the generic path so the
+			// editable gate has them when the user presses [e].
+			m.pendingTool, m.pendingInput = "", nil
+			m.pendingEdited = nil
+			m.pendingInputPath = ""
+			m.pendingValidator = nil
 		} else {
-			m.modal = modalModel{prompt: msg.Prompt}
+			// Resolve the optional Validator at modal-open time so a [e] →
+			// edit → save cycle can revalidate without re-looking it up.
+			m.pendingValidator = nil
+			if m.registry != nil {
+				if t, ok := m.registry.Get(m.pendingTool); ok {
+					if v, ok := t.(tools.Validator); ok {
+						m.pendingValidator = v
+					}
+				}
+			}
+			m.pendingEdited = nil
+			m.pendingInputPath = ""
+			m.modal = modalModel{
+				prompt:   renderJSONModal(m.pendingTool, m.pendingInput, false, m.theme, m.width, 15),
+				editable: true,
+			}
 			m.overlay = overlayConfirm
 		}
-		m.pendingTool, m.pendingInput = "", nil
 		return m, m.waitForBus()
 	case agent.ReasoningDeltaMsg:
 		// Chain-of-thought is dropped in v0.5 — the spinning "Thinking…"
@@ -434,6 +484,13 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case editorFileDoneMsg:
+		// Editable confirmation gate: when an edit on the pending-input file
+		// closes, run the validate/re-render loop and keep the modal open.
+		// This branch must come first so it short-circuits before the asset
+		// editor branch picks up the same message type.
+		if m.overlay == overlayConfirm && m.pendingInputPath != "" {
+			return m.handleConfirmEditDone(msg)
+		}
 		if msg.Err != nil {
 			m.chat.appendError("editor: " + msg.Err.Error())
 			m.pendingAssetReload = false
@@ -464,17 +521,40 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		switch msg.String() {
 		case "y", "Y":
 			m.overlay = overlayNone
-			m.confirmCh <- true
+			edited := m.pendingEdited
+			m.resetPendingConfirm()
+			// pendingEdited is non-nil only when the user opened the editor
+			// and produced bytes that passed validation; otherwise the loop
+			// receives a zero-length slice and submits the original input.
+			m.confirmCh <- confirmReply{accepted: true, input: edited}
 		case "n", "N", "esc":
 			m.overlay = overlayNone
-			m.confirmCh <- false
+			m.resetPendingConfirm()
+			m.confirmCh <- confirmReply{accepted: false}
+		case "e", "E":
+			// Only the generic editable modal opts in; the bespoke submit
+			// overlay keeps its own [r] review flow per spec §3.5.
+			if m.overlay != overlayConfirm || !m.modal.editable || m.pendingTool == "" {
+				return m, nil
+			}
+			path := m.pendingInputPath
+			if path == "" {
+				path = pendingInputPath(m.pendingInputDir(), m.pendingTool)
+			}
+			if err := writePendingInput(path, m.pendingTool, m.pendingInput, ""); err != nil {
+				m.chat.appendError("edit: " + err.Error())
+				return m, nil
+			}
+			m.pendingInputPath = path
+			return m, m.openEditorFile(path, "")
 		case "ctrl+c":
 			m.overlay = overlayNone
 			m.chat.appendError("cancelled")
 			if m.turnCancel != nil {
 				m.turnCancel()
 			}
-			m.confirmCh <- false
+			m.resetPendingConfirm()
+			m.confirmCh <- confirmReply{accepted: false}
 		}
 		return m, nil
 	case overlayPicker:
@@ -783,10 +863,87 @@ func (m *Model) startTurn(input string) (tea.Model, tea.Cmd) {
 	return m, spinnerTick()
 }
 
+// confirmReply is the TUI → agent reply written on confirmCh. accepted carries
+// the user's decision; input is the edited bytes when the user accepted after
+// editing, or nil when accepted-as-proposed or declined.
+type confirmReply struct {
+	accepted bool
+	input    json.RawMessage
+}
+
 // confirmFn is passed to the loop; it asks the TUI and blocks for the answer.
-func (m *Model) confirmFn(prompt string) bool {
+// The original tool name + input arrive via ConfirmContextMsg ahead of the
+// ConfirmRequestMsg, so the TUI can render a tool-specific surface without
+// re-parsing the prompt string. The returned input is non-nil only when the
+// user edited the proposal before accepting.
+func (m *Model) confirmFn(prompt, name string, input json.RawMessage) (bool, json.RawMessage) {
 	m.bus <- agent.ConfirmRequestMsg{Prompt: prompt}
-	return <-m.confirmCh
+	r := <-m.confirmCh
+	return r.accepted, r.input
+}
+
+// resetPendingConfirm clears every editable-confirmation-gate field and best-
+// effort removes the pending-input file. Called from every modal exit path —
+// accept, decline, esc, and ctrl+c cancel — so a stale pending state never
+// leaks into the next overlayConfirm cycle.
+func (m *Model) resetPendingConfirm() {
+	if m.pendingInputPath != "" {
+		removePendingInput(m.pendingInputPath)
+	}
+	m.pendingTool = ""
+	m.pendingInput = nil
+	m.pendingEdited = nil
+	m.pendingInputPath = ""
+	m.pendingValidator = nil
+}
+
+// handleConfirmEditDone runs after the user closes $EDITOR on the pending
+// JSON file. It reads the file, strips `// ...` comments, then checks that
+// the body is well-formed JSON; if a Validator was resolved at modal-open
+// time it runs that too. On any failure the pending file is rewritten with
+// a `// ERROR: ...` line at the top of the comment block and the editor is
+// reopened so the user keeps editing inside the same overlayConfirm cycle.
+// On success pendingEdited is set and the modal re-renders with the
+// "(edited)" hint so the [y] press submits the new bytes.
+func (m *Model) handleConfirmEditDone(msg editorFileDoneMsg) (tea.Model, tea.Cmd) {
+	if msg.Err != nil {
+		// Surface the failure but leave the modal open so the user can
+		// retry with [e] or bail with [n] / esc / ctrl+c.
+		m.chat.appendError("editor: " + msg.Err.Error())
+		return m, nil
+	}
+	body, err := readPendingInput(m.pendingInputPath)
+	if err != nil {
+		m.chat.appendError("read pending input: " + err.Error())
+		return m, nil
+	}
+	if !json.Valid(body) {
+		// Re-seed with the original proposal plus the parse hint so the
+		// user sees what they typed alongside the diagnosis.
+		errMsg := "invalid JSON: cannot parse the body"
+		if werr := writePendingInput(m.pendingInputPath, m.pendingTool, m.pendingInput, errMsg); werr != nil {
+			m.chat.appendError("rewrite pending input: " + werr.Error())
+			return m, nil
+		}
+		return m, m.openEditorFile(m.pendingInputPath, "")
+	}
+	if m.pendingValidator != nil {
+		if verr := m.pendingValidator.Validate(body); verr != nil {
+			if werr := writePendingInput(m.pendingInputPath, m.pendingTool, body, verr.Error()); werr != nil {
+				m.chat.appendError("rewrite pending input: " + werr.Error())
+				return m, nil
+			}
+			return m, m.openEditorFile(m.pendingInputPath, "")
+		}
+	}
+	// Success — pin the edited bytes and re-render the modal so the user
+	// sees `(edited)` and the new JSON before pressing [y].
+	m.pendingEdited = json.RawMessage(body)
+	m.modal = modalModel{
+		prompt:   renderJSONModal(m.pendingTool, body, true, m.theme, m.width, 15),
+		editable: true,
+	}
+	return m, nil
 }
 
 // runSlashCommand handles the v0.1 slash-command set.

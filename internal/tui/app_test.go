@@ -146,8 +146,8 @@ func TestAppCtrlCDuringConfirmOverlay(t *testing.T) {
 	}
 	select {
 	case v := <-m.confirmCh:
-		if v {
-			t.Error("ctrl+c during confirm should send false (decline) to confirmCh")
+		if v.accepted {
+			t.Error("ctrl+c during confirm should send accepted=false (decline) to confirmCh")
 		}
 	default:
 		t.Error("ctrl+c during confirm must unblock the agent goroutine via confirmCh")
@@ -542,6 +542,284 @@ func TestAppGenericConfirmForOtherTools(t *testing.T) {
 	m.Update(agent.ConfirmRequestMsg{Prompt: "Run design.bindcraft?"})
 	if m.overlay != overlayConfirm {
 		t.Fatalf("a non-lab tool should use the generic confirm overlay, got %v", m.overlay)
+	}
+	// The generic modal must be the editable JSON renderer (spec §3.5):
+	// header + four-key row, not the legacy y/n prompt.
+	if !m.modal.editable {
+		t.Errorf("generic confirm modal should be editable")
+	}
+	if !strings.Contains(m.modal.prompt, "Run design.bindcraft?") {
+		t.Errorf("generic confirm modal missing rendered header:\n%s", m.modal.prompt)
+	}
+	if !strings.Contains(m.modal.prompt, "[e]") {
+		t.Errorf("generic confirm modal missing [e] edit key:\n%s", m.modal.prompt)
+	}
+}
+
+// --- Editable confirmation gate (spec §3.3 / §3.4 / §3.5) ---
+
+// stubConfirmTool is a minimal tools.Tool that opts into confirmation but
+// does not implement tools.Validator. It is used to exercise the editable
+// gate's no-Validator fallback: any well-formed JSON edit is accepted as-is.
+type stubConfirmTool struct{ name string }
+
+func (s *stubConfirmTool) Name() string                            { return s.name }
+func (s *stubConfirmTool) Description() string                     { return "stub " + s.name }
+func (s *stubConfirmTool) InputSchema() map[string]any             { return map[string]any{"type": "object"} }
+func (*stubConfirmTool) RequiresConfirmation(json.RawMessage) bool { return true }
+func (*stubConfirmTool) EstimatedCostUSD(json.RawMessage) float64  { return 0 }
+func (*stubConfirmTool) EstimatedDuration(json.RawMessage) time.Duration {
+	return 0
+}
+func (*stubConfirmTool) Execute(_ context.Context, _ json.RawMessage) (tools.Result, error) {
+	return tools.Result{}, nil
+}
+
+// stubValidatorTool extends stubConfirmTool with a programmable Validate that
+// returns the next queued error on each call. Lets a single test drive the
+// validate-fail → rewrite-with-ERROR → re-edit → validate-pass loop.
+type stubValidatorTool struct {
+	stubConfirmTool
+	results []error // popped front-to-back per Validate call
+}
+
+func (s *stubValidatorTool) Validate(_ json.RawMessage) error {
+	if len(s.results) == 0 {
+		return nil
+	}
+	r := s.results[0]
+	s.results = s.results[1:]
+	return r
+}
+
+// newEditableConfirmApp builds a TUI Model with the given tool registered
+// and the editable-gate hooks pointed at the test's temp dir + a fake editor.
+// The fake editor takes a queue of byte sequences and writes the next one
+// to the pending-input file each time the modal hands off via [e].
+func newEditableConfirmApp(t *testing.T, tool tools.Tool, editorPayloads [][]byte) *Model {
+	t.Helper()
+	reg := tools.NewRegistry()
+	reg.Register(tool)
+	m := New(Deps{
+		Registry:     reg,
+		Models:       llm.NewModelRegistry(assets.DefaultCatalog()),
+		SystemPrompt: assets.DefaultSystemPrompt(),
+	})
+	pendingDir := t.TempDir()
+	m.pendingInputDir = func() string { return pendingDir }
+	idx := 0
+	m.openEditorFile = func(path, _ string) tea.Cmd {
+		i := idx
+		idx++
+		return func() tea.Msg {
+			if i < len(editorPayloads) {
+				// Mimic what a user does: replace the entire file (header
+				// included) with raw body bytes. readPendingInput strips
+				// the (now absent) comments and returns the body intact.
+				if err := os.WriteFile(path, editorPayloads[i], 0o644); err != nil {
+					return editorFileDoneMsg{Path: path, Err: err}
+				}
+			}
+			return editorFileDoneMsg{Path: path}
+		}
+	}
+	return m
+}
+
+// runCmd drives a tea.Cmd until quiescence: it invokes the command, feeds
+// the resulting message back through m.Update, and repeats so chained
+// follow-up commands (the editor's done-msg → re-open editor on validate
+// failure) all run inside the test goroutine.
+func runCmd(t *testing.T, m *Model, cmd tea.Cmd) {
+	t.Helper()
+	for cmd != nil {
+		msg := cmd()
+		if msg == nil {
+			return
+		}
+		_, cmd = m.Update(msg)
+	}
+}
+
+// openConfirmModal pumps the two-message handshake the agent loop sends
+// before blocking on confirmCh, so a test can immediately drive the modal's
+// key handler.
+func openConfirmModal(t *testing.T, m *Model, tool string, input []byte) {
+	t.Helper()
+	m.Update(agent.ConfirmContextMsg{Tool: tool, Input: input})
+	m.Update(agent.ConfirmRequestMsg{Prompt: "Run " + tool + "?"})
+	if m.overlay != overlayConfirm {
+		t.Fatalf("confirm modal did not open for %s: overlay=%v", tool, m.overlay)
+	}
+}
+
+// TestConfirmAcceptUnchanged: pressing [y] with no prior edit must accept
+// the original proposal — the agent loop sees a nil edited slice and runs
+// the bytes the model produced.
+func TestConfirmAcceptUnchanged(t *testing.T) {
+	tool := &stubConfirmTool{name: "fold.boltz2"}
+	m := newEditableConfirmApp(t, tool, nil)
+	openConfirmModal(t, m, "fold.boltz2", []byte(`{"sequence":"MAQ"}`))
+
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	select {
+	case r := <-m.confirmCh:
+		if !r.accepted {
+			t.Error("[y] should accept the proposal")
+		}
+		if r.input != nil {
+			t.Errorf("accept-unchanged must send a nil input; got %q", r.input)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("[y] did not write on confirmCh")
+	}
+	if m.overlay != overlayNone {
+		t.Errorf("overlay should close after [y]; got %v", m.overlay)
+	}
+}
+
+// TestConfirmEditAccept: tool without a Validator. [e] hands off to the
+// fake editor which writes valid JSON; modal must re-render with `(edited)`
+// and a second [y] must submit the edited bytes. The pending file is gone
+// after accept.
+func TestConfirmEditAccept(t *testing.T) {
+	tool := &stubConfirmTool{name: "fold.boltz2"}
+	edited := []byte(`{"sequence":"EDITED"}`)
+	m := newEditableConfirmApp(t, tool, [][]byte{edited})
+	openConfirmModal(t, m, "fold.boltz2", []byte(`{"sequence":"MAQ"}`))
+
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}})
+	if cmd == nil {
+		t.Fatal("[e] should produce an editor command")
+	}
+	runCmd(t, m, cmd)
+	if m.pendingEdited == nil || !strings.Contains(string(m.pendingEdited), "EDITED") {
+		t.Errorf("modal must store the edited bytes; got %q", m.pendingEdited)
+	}
+	if !strings.Contains(m.modal.prompt, "(edited)") {
+		t.Errorf("modal must re-render with (edited) hint:\n%s", m.modal.prompt)
+	}
+
+	editedPath := m.pendingInputPath
+	if editedPath == "" {
+		t.Fatal("pendingInputPath must be set after the edit cycle")
+	}
+
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	select {
+	case r := <-m.confirmCh:
+		if !r.accepted {
+			t.Error("[y] after edit should accept")
+		}
+		if string(r.input) != string(edited) {
+			t.Errorf("[y] after edit should submit edited bytes; got %q want %q", r.input, edited)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("[y] did not write on confirmCh after edit")
+	}
+	if _, err := os.Stat(editedPath); !os.IsNotExist(err) {
+		t.Errorf("pending file should be removed after accept; err=%v", err)
+	}
+}
+
+// TestConfirmEditValidateFailRetry: tool with a Validator that rejects the
+// first edit and accepts the second. The first edit must rewrite the pending
+// file with `// ERROR:` and reopen the editor; the second pass must succeed
+// and let [y] submit the new bytes.
+func TestConfirmEditValidateFailRetry(t *testing.T) {
+	tool := &stubValidatorTool{
+		stubConfirmTool: stubConfirmTool{name: "fold.chai1"},
+		results:         []error{errors.New("missing target"), nil},
+	}
+	bad := []byte(`{"seq":"BAD"}`)
+	good := []byte(`{"seq":"GOOD"}`)
+	m := newEditableConfirmApp(t, tool, [][]byte{bad, good})
+	openConfirmModal(t, m, "fold.chai1", []byte(`{"seq":"MAQ"}`))
+
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}})
+	if cmd == nil {
+		t.Fatal("[e] should produce an editor command")
+	}
+	runCmd(t, m, cmd)
+
+	// After the second pass, pendingEdited must hold the good bytes and the
+	// pending file must contain GOOD (and no longer the ERROR line).
+	if m.pendingEdited == nil || !strings.Contains(string(m.pendingEdited), "GOOD") {
+		t.Errorf("after retry, pendingEdited must hold the good bytes; got %q", m.pendingEdited)
+	}
+	if !strings.Contains(m.modal.prompt, "(edited)") {
+		t.Errorf("after retry, modal must re-render with (edited) hint:\n%s", m.modal.prompt)
+	}
+
+	// Sanity: between the two passes the pending file received an ERROR
+	// line. The file at this point reflects the second (success) seed, so
+	// inspect the validator state instead — both queued errors must have
+	// been consumed.
+	if len(tool.results) != 0 {
+		t.Errorf("validator should have been called twice; remaining=%v", tool.results)
+	}
+
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	select {
+	case r := <-m.confirmCh:
+		if !r.accepted {
+			t.Error("[y] after successful retry should accept")
+		}
+		if string(r.input) != string(good) {
+			t.Errorf("[y] should submit the good bytes; got %q", r.input)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("[y] did not write on confirmCh after retry")
+	}
+}
+
+// TestConfirmEditDecline: editing then declining must cleanup the pending
+// file and never call the tool's Validate.
+func TestConfirmEditDecline(t *testing.T) {
+	tool := &stubValidatorTool{
+		stubConfirmTool: stubConfirmTool{name: "fold.boltz2"},
+	}
+	m := newEditableConfirmApp(t, tool, [][]byte{[]byte(`{"x":1}`)})
+	openConfirmModal(t, m, "fold.boltz2", []byte(`{"x":0}`))
+
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}})
+	runCmd(t, m, cmd)
+	editedPath := m.pendingInputPath
+	if editedPath == "" {
+		t.Fatal("pendingInputPath must be set after [e]")
+	}
+
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+	select {
+	case r := <-m.confirmCh:
+		if r.accepted {
+			t.Error("[n] after edit must decline")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("[n] did not write on confirmCh")
+	}
+	if _, err := os.Stat(editedPath); !os.IsNotExist(err) {
+		t.Errorf("pending file should be removed after decline; err=%v", err)
+	}
+	if m.pendingInputPath != "" || m.pendingEdited != nil || m.pendingValidator != nil {
+		t.Errorf("decline must reset every pending field; got path=%q edited=%q validator=%v",
+			m.pendingInputPath, m.pendingEdited, m.pendingValidator != nil)
+	}
+}
+
+// TestConfirmBespokeDispatchUnchanged: lab.submit_experiment continues to
+// open the bespoke submit overlay, not the generic JSON renderer (spec §3.5).
+func TestConfirmBespokeDispatchUnchanged(t *testing.T) {
+	m := newTestApp()
+	input := `{"target_id":"t1","assay_type":"binding","sequences":[{"name":"d","sequence":"MAQ"}]}`
+	m.Update(agent.ConfirmContextMsg{Tool: "lab.submit_experiment", Input: []byte(input)})
+	m.Update(agent.ConfirmRequestMsg{Prompt: "Run lab.submit_experiment?"})
+	if m.overlay != overlaySubmit {
+		t.Fatalf("lab.submit_experiment must open overlaySubmit; got %v", m.overlay)
+	}
+	// And the editable JSON renderer must not have populated m.modal.
+	if m.modal.editable {
+		t.Error("lab.submit_experiment must not install the generic editable modal")
 	}
 }
 

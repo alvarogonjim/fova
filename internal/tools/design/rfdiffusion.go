@@ -3,7 +3,11 @@ package design
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"io"
 	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/alvarogonjim/fova/internal/backends"
 	"github.com/alvarogonjim/fova/internal/domain"
@@ -134,8 +138,83 @@ func (*rfdiffusionTool) RequiresConfirmation(json.RawMessage) bool       { retur
 func (*rfdiffusionTool) EstimatedCostUSD(json.RawMessage) float64        { return 2.0 }
 func (*rfdiffusionTool) EstimatedDuration(json.RawMessage) time.Duration { return 20 * time.Minute }
 
-// Execute is a stub at A1 — the real validate/resolve/submit/persist body
-// lands in A2.
-func (*rfdiffusionTool) Execute(_ context.Context, _ json.RawMessage) (tools.Result, error) {
-	return tools.Result{}, nil
+// Execute validates the request, resolves the workspace path inputs, submits
+// a background job, and returns its ID immediately. The job runs the backend,
+// parses the backbones, and persists them (with empty scores — RFdiffusion
+// emits no native scores, so the agent must refold to rank).
+func (t *rfdiffusionTool) Execute(_ context.Context, input json.RawMessage) (tools.Result, error) {
+	var params RFdiffusionParams
+	if err := json.Unmarshal(input, &params); err != nil {
+		return tools.Result{}, fmt.Errorf("invalid design.rfdiffusion request: %w", err)
+	}
+	if err := params.Validate(); err != nil {
+		return tools.Result{}, err
+	}
+	// Resolve every workspace-relative path input against the workspace root.
+	if t.workspaceRoot != "" && params.Target != "" {
+		resolved, err := tools.ResolveWorkspacePath(t.workspaceRoot, params.Target)
+		if err != nil {
+			return tools.Result{}, fmt.Errorf("design.rfdiffusion: %w", err)
+		}
+		if resolved != "" {
+			params.Target = resolved
+		}
+	}
+	resolved, err := json.Marshal(params)
+	if err != nil {
+		return tools.Result{}, fmt.Errorf("design.rfdiffusion: %w", err)
+	}
+	jobID, err := t.mgr.Submit(jobs.Spec{
+		Kind:    domain.JobCompute,
+		Tool:    "design.rfdiffusion",
+		Backend: t.backend.Name(),
+		Input:   resolved,
+		Run: func(ctx context.Context, progress func(float64), log io.Writer) ([]byte, error) {
+			out, err := t.backend.Run(ctx, "design.rfdiffusion", resolved, log, progress)
+			if err != nil {
+				return nil, err
+			}
+			progress(0.95)
+			if _, perr := t.persist(out); perr != nil {
+				return out, perr
+			}
+			return out, nil
+		},
+	})
+	if err != nil {
+		return tools.Result{}, err
+	}
+	return tools.Result{
+		JobID: jobID,
+		Display: fmt.Sprintf("started design.rfdiffusion job %s — poll jobs.result for the backbones",
+			jobID),
+		Provenance: domain.NewToolCallRef("design.rfdiffusion", input),
+	}, nil
+}
+
+// persist parses the backend's design-list output and writes each backbone to
+// the store. RFdiffusion designs land with empty Scores — the grounding skill
+// tells the agent to refold (fold.boltz2 / fold.chai1) for ranking.
+func (t *rfdiffusionTool) persist(out []byte) (int, error) {
+	var bo backendOutput
+	if err := json.Unmarshal(out, &bo); err != nil {
+		return 0, fmt.Errorf("design.rfdiffusion output is not valid JSON: %w", err)
+	}
+	for _, d := range bo.Designs {
+		design := domain.Design{
+			ID:            domain.DesignID("d_" + uuid.NewString()),
+			ProjectID:     store.DefaultProjectID,
+			Created:       time.Now().UTC(),
+			Origin:        domain.OriginRFDiffMPNN,
+			Application:   domain.AppBinder,
+			Sequence:      domain.Sequence{Chains: d.Sequence},
+			StructureFile: d.StructureFile,
+			Scores:        d.Scores,
+			Provenance:    []domain.ToolCallRef{domain.NewToolCallRef("design.rfdiffusion", nil)},
+		}
+		if err := t.store.InsertDesign(design); err != nil {
+			return 0, err
+		}
+	}
+	return len(bo.Designs), nil
 }

@@ -107,9 +107,13 @@ func TestDesignToolSubmitsJobAndPersistsDesigns(t *testing.T) {
 
 func TestDesignToolToleratesEmptyOutput(t *testing.T) {
 	// An unknown-tool / error backend response has no "designs" array.
+	// design.rfdiffusion is now a bespoke tool that validates the input
+	// up-front, so the request carries the minimum-valid contigs string;
+	// the test still asserts that an error-shaped backend reply persists
+	// zero designs.
 	mgr, st, backend, ws := newTestDeps(t, `{"error":"unknown tool"}`)
 	tool := NewRFdiffusionTool(ws, mgr, backend, st)
-	res, err := tool.Execute(context.Background(), json.RawMessage(`{}`))
+	res, err := tool.Execute(context.Background(), json.RawMessage(`{"contigs":"50-100"}`))
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}

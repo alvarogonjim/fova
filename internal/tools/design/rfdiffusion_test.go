@@ -1,6 +1,7 @@
 package design
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
 )
@@ -28,5 +29,13 @@ func TestRFdiffusionToolSchema(t *testing.T) {
 func TestRFdiffusionToolRequiresConfirmation(t *testing.T) {
 	if !NewRFdiffusionTool("/ws", nil, nil, nil).RequiresConfirmation(json.RawMessage(`{}`)) {
 		t.Error("design.rfdiffusion must require confirmation — GPU design job")
+	}
+}
+
+func TestRFdiffusionExecuteRejectsBadInput(t *testing.T) {
+	tool := NewRFdiffusionTool(t.TempDir(), nil, nil, nil)
+	// Missing contigs — Validate rejects before any job/store access.
+	if _, err := tool.Execute(context.Background(), json.RawMessage(`{}`)); err == nil {
+		t.Fatal("expected a validation error when contigs is missing")
 	}
 }

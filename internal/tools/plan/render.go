@@ -100,6 +100,8 @@ func RenderPlanWithOpts(p domain.DesignPlan, opts RenderPlanOpts) string {
 			renderLigandMPNNSection(&b, mc.LigandMPNN)
 		case mc.RFantibody != nil:
 			renderRFantibodySection(&b, mc.RFantibody)
+		case mc.RFdiffusion2 != nil:
+			renderRFdiffusion2Section(&b, mc.RFdiffusion2)
 		}
 	}
 
@@ -201,6 +203,34 @@ func renderRFantibodySection(b *strings.Builder, ra *domain.RFantibodyParams) {
 	if ra.DesignLoops != "" {
 		labelRow(b, "Design loops", ra.DesignLoops)
 	}
+}
+
+// renderRFdiffusion2Section appends the RFdiffusion2 method-config block to b:
+// the benchmark choice, the motif PDB and contigs when a user motif is set,
+// the design count, and the stop step (with the "end (default)" fallback when
+// unset, so the user sees what will actually happen). It is emitted for a
+// plan whose MethodConfig carries RFdiffusion2 params.
+func renderRFdiffusion2Section(b *strings.Builder, rd *domain.RFdiffusion2Params) {
+	b.WriteString("\n  RFdiffusion2 design configuration\n")
+
+	benchmark := rd.Benchmark
+	if benchmark == "" {
+		benchmark = "active_site_demo (default)"
+	}
+	labelRow(b, "Benchmark", benchmark)
+
+	if rd.MotifPDB != "" {
+		labelRow(b, "Motif PDB", rd.MotifPDB)
+		labelRow(b, "Contigs", rd.Contigs)
+	}
+
+	labelRow(b, "Num designs", fmt.Sprintf("%d", rd.NumDesigns))
+
+	stop := rd.StopStep
+	if stop == "" {
+		stop = "end (default)"
+	}
+	labelRow(b, "Stop step", stop)
 }
 
 // boltzGenSpecAbsPath joins the workspace-relative spec path with the

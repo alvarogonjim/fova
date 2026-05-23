@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/alvarogonjim/fova/internal/domain"
 )
 
 func TestParseBindCraftOutput(t *testing.T) {
@@ -74,8 +76,54 @@ func TestParseBindCraftOutputEmptyErrors(t *testing.T) {
 	}
 }
 
-// bindCraftStubRunner records commands and, on the bindcraft.py call, reads the
-// settings file named after --settings, then writes a fixture results dir
+func TestBuildBindCraftSettingsJSON(t *testing.T) {
+	got := buildBindCraftSettingsJSON(domain.BindCraftParams{
+		BinderName:            "PDL1_binder",
+		StartingPDB:           "/work/target.pdb",
+		Chains:                "A",
+		TargetHotspotResidues: "A30,A33",
+		LengthMin:             80,
+		LengthMax:             120,
+		NumberOfFinalDesigns:  10,
+		BinderChain:           "B",
+		ProtocolName:          "beta_only",
+	})
+	var parsed map[string]any
+	if err := json.Unmarshal([]byte(got), &parsed); err != nil {
+		t.Fatalf("settings JSON did not parse: %v\n%s", err, got)
+	}
+	for k, want := range map[string]any{
+		"binder_name":             "PDL1_binder",
+		"starting_pdb":            "/work/target.pdb",
+		"chains":                  "A",
+		"target_hotspot_residues": "A30,A33",
+		"binder_chain":            "B",
+		"protocol_name":           "beta_only",
+		"number_of_final_designs": float64(10),
+	} {
+		if parsed[k] != want {
+			t.Errorf("settings[%q] = %v, want %v", k, parsed[k], want)
+		}
+	}
+	// lengths must be a 2-element list.
+	lengths, ok := parsed["lengths"].([]any)
+	if !ok || len(lengths) != 2 || lengths[0] != float64(80) || lengths[1] != float64(120) {
+		t.Errorf("lengths = %v, want [80, 120]", parsed["lengths"])
+	}
+	// Unset fields are omitted (defaults applied by BindCraft).
+	if _, present := parsed["design_runs"]; present {
+		t.Error("unset design_runs must be omitted (zero, not in JSON)")
+	}
+	if _, present := parsed["template_pdb"]; present {
+		t.Error("unset template_pdb must be omitted")
+	}
+	if _, present := parsed["omit_AAs"]; present {
+		t.Error("unset omit_AAs must be omitted")
+	}
+}
+
+// bindCraftStubRunner records commands and, on the bindcraft.py call, reads
+// the settings file named after --settings, then writes a fixture results dir
 // (Accepted/*.pdb + final_design_stats.csv) into that settings' design_path.
 func bindCraftStubRunner(ran *[]string) CmdRunner {
 	return func(ctx context.Context, dir, cmd string, log io.Writer) (string, error) {
@@ -114,8 +162,8 @@ func bindCraftStubRunner(ran *[]string) CmdRunner {
 	}
 }
 
-// bindCraftTestEnv builds an AdapterEnv with an installed-looking recipe and a
-// registry whose alphafold_params directory exists on disk. logBuf and
+// bindCraftTestEnv builds an AdapterEnv with an installed-looking recipe and
+// a registry whose alphafold_params directory exists on disk. logBuf and
 // progress (when non-nil) capture the adapter's log writes and progress ticks.
 func bindCraftTestEnv(t *testing.T, ran *[]string, logBuf *bytes.Buffer, progress *[]float64) AdapterEnv {
 	t.Helper()
@@ -156,8 +204,19 @@ func TestBindCraftAdapterInvoke(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	out, err := bindCraftAdapter{}.Invoke(context.Background(), env,
-		[]byte(`{"settings":{"starting_pdb":"`+starting+`","chains":"A","number_of_final_designs":2}}`))
+	// Build the typed request directly so we know the body exercises every
+	// staged field.
+	req, _ := json.Marshal(domain.BindCraftParams{
+		StartingPDB:           starting,
+		Chains:                "A",
+		TargetHotspotResidues: "A30",
+		LengthMin:             80,
+		LengthMax:             120,
+		NumberOfFinalDesigns:  2,
+		BinderChain:           "B",
+		ProtocolName:          "beta_only",
+	})
+	out, err := bindCraftAdapter{}.Invoke(context.Background(), env, req)
 	if err != nil {
 		t.Fatalf("Invoke: %v", err)
 	}
@@ -181,7 +240,30 @@ func TestBindCraftAdapterInvoke(t *testing.T) {
 	if len(ran) != 1 || !strings.Contains(ran[0], "bindcraft.py --settings ") {
 		t.Fatalf("want one bindcraft.py --settings command, got: %v", ran)
 	}
-	// Bug 2: log must be written and progress must be ticked.
+	// The settings file the adapter wrote must be a typed BindCraft JSON, with
+	// the staged starting_pdb under /work and the supplied hotspot/lengths.
+	settingsFile := filepath.Join(env.WorkDir, "settings.json")
+	body, err := os.ReadFile(settingsFile)
+	if err != nil {
+		t.Fatalf("settings.json was not written: %v", err)
+	}
+	var s map[string]any
+	if err := json.Unmarshal(body, &s); err != nil {
+		t.Fatalf("settings.json is not valid JSON: %v", err)
+	}
+	if got := s["starting_pdb"]; got == nil || !strings.HasPrefix(got.(string), env.WorkDir) {
+		t.Errorf("settings.starting_pdb=%v should point at the staged WorkDir copy", got)
+	}
+	if got, _ := s["target_hotspot_residues"].(string); got != "A30" {
+		t.Errorf("settings.target_hotspot_residues=%q, want A30", got)
+	}
+	if got, _ := s["lengths"].([]any); len(got) != 2 || got[0] != float64(80) || got[1] != float64(120) {
+		t.Errorf("settings.lengths=%v, want [80,120]", got)
+	}
+	if got, _ := s["protocol_name"].(string); got != "beta_only" {
+		t.Errorf("settings.protocol_name=%q, want beta_only", got)
+	}
+	// Log/progress hooks must be exercised.
 	if logBuf.Len() == 0 {
 		t.Error("env.Log should receive the stubbed bindcraft.py output")
 	}
@@ -193,23 +275,22 @@ func TestBindCraftAdapterInvoke(t *testing.T) {
 	}
 }
 
-func TestBindCraftAdapterInvokeMissingSettings(t *testing.T) {
+func TestBindCraftAdapterInvokeRejectsMissingRequired(t *testing.T) {
 	var ran []string
 	env := bindCraftTestEnv(t, &ran, nil, nil)
 	if _, err := (bindCraftAdapter{}).Invoke(context.Background(), env, []byte(`{}`)); err == nil {
-		t.Fatal("expected an error when settings is missing")
+		t.Fatal("expected an error when required typed fields are missing")
 	}
 }
 
 func TestBindCraftAdapterInvokeBadStartingPDB(t *testing.T) {
 	var ran []string
 	env := bindCraftTestEnv(t, &ran, nil, nil)
-	_, err := bindCraftAdapter{}.Invoke(context.Background(), env,
-		[]byte(`{"settings":{"starting_pdb":"/no/such/file.pdb"}}`))
+	req := []byte(`{"starting_pdb":"/no/such/file.pdb","chains":"A","target_hotspot_residues":"A30","length_min":80,"length_max":120}`)
+	_, err := bindCraftAdapter{}.Invoke(context.Background(), env, req)
 	if err == nil {
 		t.Fatal("expected an error when starting_pdb does not exist")
 	}
-	// Bug 4: error should steer the agent at fs.read_structure.
 	if !strings.Contains(err.Error(), "fs.read_structure") {
 		t.Errorf("error %q should point at fs.read_structure", err)
 	}
@@ -224,12 +305,17 @@ func TestBindCraftAdapterInvokeParamsMissing(t *testing.T) {
 		t.Fatal(err)
 	}
 	// alphafold_params directory is deliberately NOT created.
+	starting := filepath.Join(t.TempDir(), "t.pdb")
+	if err := os.WriteFile(starting, []byte("ATOM\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	env := AdapterEnv{
 		Recipe:   ToolRecipe{Name: "bindcraft", InstallDir: t.TempDir(), VenvDir: t.TempDir()},
 		WorkDir:  t.TempDir(),
 		Registry: reg,
 	}
-	_, err = bindCraftAdapter{}.Invoke(context.Background(), env, []byte(`{"settings":{"chains":"A"}}`))
+	req := []byte(`{"starting_pdb":"` + starting + `","chains":"A","target_hotspot_residues":"A30","length_min":80,"length_max":120}`)
+	_, err = bindCraftAdapter{}.Invoke(context.Background(), env, req)
 	if err == nil {
 		t.Fatal("expected an error when the alphafold_params directory is absent")
 	}
@@ -240,12 +326,17 @@ func TestBindCraftAdapterInvokeNotInstalled(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	starting := filepath.Join(t.TempDir(), "t.pdb")
+	if err := os.WriteFile(starting, []byte("ATOM\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	env := AdapterEnv{
 		Recipe:   ToolRecipe{InstallDir: filepath.Join(t.TempDir(), "gone"), VenvDir: t.TempDir()},
 		WorkDir:  t.TempDir(),
 		Registry: reg,
 	}
-	_, err = bindCraftAdapter{}.Invoke(context.Background(), env, []byte(`{"settings":{"chains":"A"}}`))
+	req := []byte(`{"starting_pdb":"` + starting + `","chains":"A","target_hotspot_residues":"A30","length_min":80,"length_max":120}`)
+	_, err = bindCraftAdapter{}.Invoke(context.Background(), env, req)
 	if err == nil || !strings.Contains(err.Error(), "not installed") {
 		t.Fatalf("want a 'not installed' error, got: %v", err)
 	}
@@ -256,8 +347,8 @@ func TestRunDesignBindCraftIsRegistered(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Missing settings makes Invoke fail fast — still proves design.bindcraft
-	// is registered and dispatched.
+	// An empty body fails Invoke fast — still proves design.bindcraft is
+	// registered and dispatched.
 	_, err = RunDesign(context.Background(), reg, "design.bindcraft", []byte(`{}`), io.Discard, nil)
 	if err == nil {
 		t.Fatal("expected an error")

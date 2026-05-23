@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/alvarogonjim/fova/internal/domain"
 )
 
 // bindCraftStats is one design's CSV-derived sequence and scores.
@@ -69,8 +71,8 @@ func parseBindCraftStatsCSV(path string) (map[string]bindCraftStats, error) {
 	return out, nil
 }
 
-// parseBindCraftOutput collects accepted BindCraft designs from designPath: the
-// PDBs in Accepted/, enriched with sequence and scores from
+// parseBindCraftOutput collects accepted BindCraft designs from designPath:
+// the PDBs in Accepted/, enriched with sequence and scores from
 // final_design_stats.csv when that file is present.
 func parseBindCraftOutput(designPath string) ([]designOut, error) {
 	pdbs, err := filepath.Glob(filepath.Join(designPath, "Accepted", "*.pdb"))
@@ -103,41 +105,92 @@ func parseBindCraftOutput(designPath string) ([]designOut, error) {
 	return designs, nil
 }
 
+// buildBindCraftSettingsJSON compiles a BindCraft target-settings JSON from
+// the typed BindCraftParams. Zero-value fields are omitted so BindCraft
+// applies its own defaults — fova never advertises an opaque settings blob.
+func buildBindCraftSettingsJSON(p domain.BindCraftParams) string {
+	m := map[string]any{
+		"starting_pdb":            p.StartingPDB,
+		"chains":                  p.Chains,
+		"target_hotspot_residues": p.TargetHotspotResidues,
+		"lengths":                 []int{p.LengthMin, p.LengthMax},
+	}
+	if p.BinderName != "" {
+		m["binder_name"] = p.BinderName
+	}
+	if p.NumberOfFinalDesigns > 0 {
+		m["number_of_final_designs"] = p.NumberOfFinalDesigns
+	}
+	if p.BinderChain != "" {
+		m["binder_chain"] = p.BinderChain
+	}
+	if p.DesignRuns > 0 {
+		m["design_runs"] = p.DesignRuns
+	}
+	if p.ProtocolName != "" {
+		m["protocol_name"] = p.ProtocolName
+	}
+	if p.TemplatePDB != "" {
+		m["template_pdb"] = p.TemplatePDB
+	}
+	if p.OmitAAs != "" {
+		m["omit_AAs"] = p.OmitAAs
+	}
+	b, _ := json.MarshalIndent(m, "", "  ")
+	return string(b)
+}
+
 // init registers the BindCraft adapter with the local backend.
 func init() { registerAdapter(bindCraftAdapter{}) }
 
 // bindCraftAdapter wires design.bindcraft to the installed BindCraft tool.
+// The request is the typed BindCraftParams; the adapter stages the input
+// PDBs into the workdir, compiles a target-settings JSON via
+// buildBindCraftSettingsJSON (no more opaque pass-through), runs
+// bindcraft.py against it, and returns the accepted designs in the
+// {"designs":[...]} envelope.
 type bindCraftAdapter struct{}
 
 func (bindCraftAdapter) AgentTool() string { return "design.bindcraft" }
 func (bindCraftAdapter) Recipe() string    { return "bindcraft" }
 
-// bindCraftRequest is the subset of the design.bindcraft input the adapter
-// uses: BindCraft's target-settings object, passed through verbatim.
-type bindCraftRequest struct {
-	Settings json.RawMessage `json:"settings"`
-}
+// bindCraftRequest is the typed BindCraft run configuration the adapter
+// consumes — same struct the design.bindcraft tool already validated.
+type bindCraftRequest = domain.BindCraftParams
 
-// Invoke writes the agent-supplied BindCraft settings (with design_path
-// overridden), runs bindcraft.py, and parses the accepted designs.
+// Invoke compiles the agent-supplied typed params into a BindCraft
+// settings.json (with design_path overridden), runs bindcraft.py against it,
+// and parses the accepted designs.
 func (bindCraftAdapter) Invoke(ctx context.Context, env AdapterEnv, request []byte) ([]byte, error) {
 	var req bindCraftRequest
 	if err := json.Unmarshal(request, &req); err != nil {
 		return nil, fmt.Errorf("design.bindcraft: invalid request: %w", err)
 	}
-	var settings map[string]any
-	if err := json.Unmarshal(req.Settings, &settings); err != nil || len(settings) == 0 {
-		return nil, fmt.Errorf("design.bindcraft: settings is required (a BindCraft target-settings JSON object)")
+	// Defensive backstop on the required fields — the tool's preflight is
+	// the primary guard, but a direct adapter call should still fail clean.
+	if strings.TrimSpace(req.StartingPDB) == "" {
+		return nil, fmt.Errorf("design.bindcraft: starting_pdb is required")
 	}
-	if sp, ok := settings["starting_pdb"].(string); ok && strings.TrimSpace(sp) != "" {
-		if info, err := os.Stat(sp); err != nil || info.IsDir() {
-			return nil, fmt.Errorf(
-				"design.bindcraft: starting_pdb %q not found (workspace root). "+
-					"Use fs.read_structure or fs.bash to confirm the file exists, "+
-					"or pass an absolute path.",
-				sp)
-		}
+	if strings.TrimSpace(req.Chains) == "" {
+		return nil, fmt.Errorf("design.bindcraft: chains is required")
 	}
+	if strings.TrimSpace(req.TargetHotspotResidues) == "" {
+		return nil, fmt.Errorf("design.bindcraft: target_hotspot_residues is required")
+	}
+	if req.LengthMin < 1 || req.LengthMax < req.LengthMin {
+		return nil, fmt.Errorf("design.bindcraft: length_min/length_max are required (1 ≤ min ≤ max)")
+	}
+
+	// starting_pdb must exist before staging — the agent gets a clear hint
+	// to use fs.read_structure to confirm the path.
+	if info, err := os.Stat(req.StartingPDB); err != nil || info.IsDir() {
+		return nil, fmt.Errorf(
+			"design.bindcraft: starting_pdb %q not found (workspace root). "+
+				"Use fs.read_structure or fs.bash to confirm the file exists, "+
+				"or pass an absolute path.",
+			req.StartingPDB)
+	}
+
 	if info, err := os.Stat(env.Recipe.InstallDir); err != nil || !info.IsDir() {
 		return nil, fmt.Errorf("design.bindcraft: bindcraft is not installed (run /install bindcraft)")
 	}
@@ -155,14 +208,42 @@ func (bindCraftAdapter) Invoke(ctx context.Context, env AdapterEnv, request []by
 		return nil, fmt.Errorf("design.bindcraft: AlphaFold params missing — install the alphafold_params data asset")
 	}
 
+	// Stage starting_pdb (and template_pdb when set) into the workdir so the
+	// settings.json references a path the BindCraft container/process can
+	// see. Rewrite the typed params to point at the staged copies before
+	// compiling the settings JSON.
+	startingBase := filepath.Base(req.StartingPDB)
+	stagedStarting := filepath.Join(env.WorkDir, startingBase)
+	if err := copyFile(req.StartingPDB, stagedStarting); err != nil {
+		return nil, fmt.Errorf("design.bindcraft: stage starting_pdb: %w", err)
+	}
+	req.StartingPDB = stagedStarting
+	if tp := strings.TrimSpace(req.TemplatePDB); tp != "" {
+		if info, err := os.Stat(tp); err != nil || info.IsDir() {
+			return nil, fmt.Errorf("design.bindcraft: template_pdb %q not found", tp)
+		}
+		stagedTemplate := filepath.Join(env.WorkDir, filepath.Base(tp))
+		if err := copyFile(tp, stagedTemplate); err != nil {
+			return nil, fmt.Errorf("design.bindcraft: stage template_pdb: %w", err)
+		}
+		req.TemplatePDB = stagedTemplate
+	}
+
 	designPath := filepath.Join(env.Registry.Home(), "designs",
 		fmt.Sprintf("bindcraft-%d", time.Now().UnixNano()))
 	if err := os.MkdirAll(designPath, 0o755); err != nil {
 		return nil, err
 	}
-	settings["design_path"] = designPath
 
-	settingsJSON, err := json.Marshal(settings)
+	// Compile the typed params, then inject design_path so accepted designs
+	// land under FOVA_HOME (outliving the temp WorkDir).
+	settingsBody := buildBindCraftSettingsJSON(req)
+	var settings map[string]any
+	if err := json.Unmarshal([]byte(settingsBody), &settings); err != nil {
+		return nil, fmt.Errorf("design.bindcraft: compiled settings JSON is invalid: %w", err)
+	}
+	settings["design_path"] = designPath
+	settingsJSON, err := json.MarshalIndent(settings, "", "  ")
 	if err != nil {
 		return nil, err
 	}

@@ -997,6 +997,7 @@ func (m *Model) cmdTheme(arg string) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	ApplyTheme(mode)
+	m.chat.invalidateRenderCache()
 	m.chat.appendAgentDeltaBlock("theme set to " + mode + " (persisted to config.toml)")
 	return m, nil
 }

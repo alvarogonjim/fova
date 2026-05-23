@@ -235,3 +235,28 @@ func TestChatCacheReusesRenderForUnchangedEntries(t *testing.T) {
 		t.Errorf("render calls = %d, want %d (one new entry only)", cr.calls, first+1)
 	}
 }
+
+func TestChatInvalidateRenderCacheClearsAllEntries(t *testing.T) {
+	c := newChatModel(NewTheme(), 80, 20)
+	cr := &countingRenderer{inner: c.renderer}
+	c.renderer = cr
+
+	c.appendUser("hi")
+	c.appendAgentDeltaBlock("hello")
+	// Both entries are now rendered (refresh was called during append).
+	callsAfterAppend := cr.calls
+
+	// A second call to renderEntries must not re-render (cache is warm).
+	_ = c.renderEntries()
+	if cr.calls != callsAfterAppend {
+		t.Fatalf("unexpected re-render before invalidate: calls went from %d to %d",
+			callsAfterAppend, cr.calls)
+	}
+
+	// invalidateRenderCache must cause both entries to be re-rendered.
+	c.invalidateRenderCache()
+	if cr.calls <= callsAfterAppend {
+		t.Errorf("invalidateRenderCache did not trigger re-render: calls = %d, want > %d",
+			cr.calls, callsAfterAppend)
+	}
+}

@@ -104,6 +104,15 @@ func (c *chatModel) resize(width, height int) {
 	c.refresh()
 }
 
+// invalidateRenderCache clears every entry's cached render. Call it when an
+// external change (theme switch, etc.) makes existing cached output stale.
+func (c *chatModel) invalidateRenderCache() {
+	for i := range c.entries {
+		c.entries[i].rendered = ""
+	}
+	c.refresh()
+}
+
 func (c *chatModel) appendUser(text string) {
 	c.entries = append(c.entries, chatEntry{kind: entryUser, text: text})
 	c.refresh()

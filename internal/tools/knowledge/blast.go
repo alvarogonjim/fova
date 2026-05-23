@@ -52,7 +52,7 @@ func NewBLAST() *BLAST {
 	}
 }
 
-func (*BLAST) Name() string       { return "knowledge.blast" }
+func (*BLAST) Name() string     { return "knowledge.blast" }
 func (*BLAST) Concurrent() bool { return true }
 func (*BLAST) Description() string {
 	return "Submit a protein or nucleotide sequence to NCBI BLAST, poll for " +

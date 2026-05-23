@@ -25,7 +25,7 @@ func NewCrossref(r *Results) *Crossref {
 	return &Crossref{BaseURL: crossrefEndpoint, results: r}
 }
 
-func (*Crossref) Name() string       { return "knowledge.crossref" }
+func (*Crossref) Name() string     { return "knowledge.crossref" }
 func (*Crossref) Concurrent() bool { return true }
 func (*Crossref) Description() string {
 	return "Search scholarly metadata via the free Crossref REST API."

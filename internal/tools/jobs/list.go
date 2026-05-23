@@ -36,6 +36,7 @@ type ListTool struct{ mgr *jobmgr.Manager }
 func NewListTool(mgr *jobmgr.Manager) *ListTool { return &ListTool{mgr: mgr} }
 
 func (*ListTool) Name() string                                    { return "jobs.list" }
+func (*ListTool) Concurrent() bool                                { return true }
 func (*ListTool) Description() string                             { return "List active and recent compute and lab jobs." }
 func (*ListTool) InputSchema() map[string]any                     { return emptyObjectSchema() }
 func (*ListTool) RequiresConfirmation(json.RawMessage) bool       { return false }

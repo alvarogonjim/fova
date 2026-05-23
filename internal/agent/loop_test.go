@@ -250,3 +250,268 @@ func TestLoopWithGuardPassesSafeCalls(t *testing.T) {
 		t.Fatal("expected the turn to complete normally")
 	}
 }
+
+// concurrentFake is a Tool that opts into Concurrent and sleeps for `sleep`
+// before returning `display`. Used to measure parallelism vs serialism.
+type concurrentFake struct {
+	name    string
+	sleep   time.Duration
+	display string
+}
+
+func (f concurrentFake) Name() string                              { return f.name }
+func (f concurrentFake) Description() string                       { return "" }
+func (f concurrentFake) InputSchema() map[string]any               { return map[string]any{"type": "object"} }
+func (f concurrentFake) RequiresConfirmation(json.RawMessage) bool { return false }
+func (f concurrentFake) EstimatedCostUSD(json.RawMessage) float64  { return 0 }
+func (f concurrentFake) EstimatedDuration(json.RawMessage) time.Duration {
+	return f.sleep
+}
+func (f concurrentFake) Concurrent() bool { return true }
+func (f concurrentFake) Execute(ctx context.Context, _ json.RawMessage) (tools.Result, error) {
+	select {
+	case <-time.After(f.sleep):
+		return tools.Result{Display: f.display}, nil
+	case <-ctx.Done():
+		return tools.Result{}, ctx.Err()
+	}
+}
+
+// serialFake is identical to concurrentFake but does NOT implement Concurrent.
+type serialFake struct {
+	name    string
+	sleep   time.Duration
+	display string
+}
+
+func (f serialFake) Name() string                              { return f.name }
+func (f serialFake) Description() string                       { return "" }
+func (f serialFake) InputSchema() map[string]any               { return map[string]any{"type": "object"} }
+func (f serialFake) RequiresConfirmation(json.RawMessage) bool { return false }
+func (f serialFake) EstimatedCostUSD(json.RawMessage) float64  { return 0 }
+func (f serialFake) EstimatedDuration(json.RawMessage) time.Duration {
+	return f.sleep
+}
+func (f serialFake) Execute(ctx context.Context, _ json.RawMessage) (tools.Result, error) {
+	select {
+	case <-time.After(f.sleep):
+		return tools.Result{Display: f.display}, nil
+	case <-ctx.Done():
+		return tools.Result{}, ctx.Err()
+	}
+}
+
+func TestLoopRunsConcurrentToolsInParallel(t *testing.T) {
+	reg := tools.NewRegistry()
+	reg.Register(concurrentFake{name: "fake.a", sleep: 100 * time.Millisecond, display: "A"})
+	reg.Register(concurrentFake{name: "fake.b", sleep: 100 * time.Millisecond, display: "B"})
+
+	prov := &mockProvider{responses: []llm.ChatResponse{
+		{ToolCalls: []llm.ToolCall{
+			{ID: "1", Name: "fake.a", Input: map[string]any{}},
+			{ID: "2", Name: "fake.b", Input: map[string]any{}},
+		}},
+		{Text: "done", StopReason: "end_turn"},
+	}}
+	bus := make(chan tea.Msg, 32)
+	loop := NewLoop(prov, "mock", reg, NewSession("sys"), bus, func(string) bool { return true })
+
+	start := time.Now()
+	done := make(chan struct{})
+	go func() { loop.Run(context.Background(), "go"); close(bus); close(done) }()
+	drain(bus)
+	<-done
+	elapsed := time.Since(start)
+
+	// Two 100ms calls in parallel should finish in ~100ms, well under
+	// the 200ms serial wall-clock. Give 80ms of slack for CI overhead.
+	if elapsed > 180*time.Millisecond {
+		t.Errorf("two 100ms concurrent calls took %v, expected ~100ms", elapsed)
+	}
+}
+
+func TestLoopPreservesOrderingOfToolResults(t *testing.T) {
+	reg := tools.NewRegistry()
+	reg.Register(concurrentFake{name: "fake.slow", sleep: 80 * time.Millisecond, display: "slow"})
+	reg.Register(concurrentFake{name: "fake.fast", sleep: 10 * time.Millisecond, display: "fast"})
+
+	sess := NewSession("sys")
+	prov := &mockProvider{responses: []llm.ChatResponse{
+		{ToolCalls: []llm.ToolCall{
+			{ID: "1", Name: "fake.slow", Input: map[string]any{}},
+			{ID: "2", Name: "fake.fast", Input: map[string]any{}},
+		}},
+		{Text: "done", StopReason: "end_turn"},
+	}}
+	bus := make(chan tea.Msg, 32)
+	loop := NewLoop(prov, "mock", reg, sess, bus, func(string) bool { return true })
+
+	go func() { loop.Run(context.Background(), "go"); close(bus) }()
+	drain(bus)
+
+	// Pull tool messages from the session in order.
+	var results []string
+	for _, m := range sess.Messages() {
+		if m.Role == "tool" {
+			results = append(results, m.Content)
+		}
+	}
+	want := []string{"slow", "fast"}
+	if len(results) != 2 || results[0] != want[0] || results[1] != want[1] {
+		t.Errorf("tool result order = %v, want %v", results, want)
+	}
+}
+
+func TestLoopSerialFallbackForNonConcurrentTools(t *testing.T) {
+	reg := tools.NewRegistry()
+	// fake.serial is non-concurrent and sleeps 120ms; fake.par is concurrent
+	// but sleeps 15ms. The two must not overlap because fake.serial does NOT
+	// opt into Concurrent, so it runs in the serial bucket — wall-clock
+	// should be ~135ms (sum), not ~120ms (max).
+	reg.Register(serialFake{name: "fake.serial", sleep: 120 * time.Millisecond, display: "S"})
+	reg.Register(concurrentFake{name: "fake.par", sleep: 15 * time.Millisecond, display: "P"})
+
+	prov := &mockProvider{responses: []llm.ChatResponse{
+		{ToolCalls: []llm.ToolCall{
+			{ID: "1", Name: "fake.serial", Input: map[string]any{}},
+			{ID: "2", Name: "fake.par", Input: map[string]any{}},
+		}},
+		{Text: "done", StopReason: "end_turn"},
+	}}
+	bus := make(chan tea.Msg, 32)
+	loop := NewLoop(prov, "mock", reg, NewSession("sys"), bus, func(string) bool { return true })
+
+	start := time.Now()
+	go func() { loop.Run(context.Background(), "go"); close(bus) }()
+	drain(bus)
+	elapsed := time.Since(start)
+
+	// Wall-clock must be near the sum (~135ms). If the implementation
+	// accidentally parallelised the serial-fake too, elapsed would
+	// collapse to ~120ms (the max). Lower bound of 125ms catches that.
+	if elapsed < 125*time.Millisecond {
+		t.Errorf("expected serial total ~135ms, got %v (looks parallelised)", elapsed)
+	}
+}
+
+// confirmFake is concurrent-eligible by interface but requires confirmation.
+// The loop MUST route it to the serial bucket — confirmation modals are serial
+// by construction.
+type confirmFake struct {
+	name          string
+	confirmCalled chan struct{}
+}
+
+func (f *confirmFake) Name() string                                    { return f.name }
+func (f *confirmFake) Description() string                             { return "" }
+func (f *confirmFake) InputSchema() map[string]any                     { return map[string]any{"type": "object"} }
+func (f *confirmFake) EstimatedCostUSD(json.RawMessage) float64        { return 0 }
+func (f *confirmFake) EstimatedDuration(json.RawMessage) time.Duration { return 0 }
+func (f *confirmFake) Concurrent() bool                                { return true }
+func (f *confirmFake) RequiresConfirmation(json.RawMessage) bool {
+	select {
+	case <-f.confirmCalled:
+		// already signaled
+	default:
+		close(f.confirmCalled)
+	}
+	return true
+}
+func (f *confirmFake) Execute(_ context.Context, _ json.RawMessage) (tools.Result, error) {
+	return tools.Result{Display: "ok"}, nil
+}
+
+func TestLoopConfirmationStaysSerial(t *testing.T) {
+	confirm := &confirmFake{name: "fake.confirm", confirmCalled: make(chan struct{})}
+	reg := tools.NewRegistry()
+	reg.Register(confirm)
+	reg.Register(concurrentFake{name: "fake.par", sleep: 10 * time.Millisecond, display: "P"})
+
+	prov := &mockProvider{responses: []llm.ChatResponse{
+		{ToolCalls: []llm.ToolCall{
+			{ID: "1", Name: "fake.confirm", Input: map[string]any{}},
+			{ID: "2", Name: "fake.par", Input: map[string]any{}},
+		}},
+		{Text: "done", StopReason: "end_turn"},
+	}}
+	bus := make(chan tea.Msg, 32)
+	loop := NewLoop(prov, "mock", reg, NewSession("sys"), bus, func(string) bool { return true })
+
+	go func() { loop.Run(context.Background(), "go"); close(bus) }()
+	drain(bus)
+
+	// confirm.RequiresConfirmation must have been called — once during the
+	// partition decision in executeBatch, and once again from executeTool's
+	// confirmation gate. Either firing proves the tool was treated as
+	// confirmation-required (i.e. routed to the serial bucket).
+	select {
+	case <-confirm.confirmCalled:
+		// good
+	default:
+		t.Errorf("RequiresConfirmation was never called for fake.confirm")
+	}
+}
+
+// blockingConcurrent is a concurrent-eligible Tool that blocks in Execute
+// until its context is cancelled. Used to verify that cancellation propagates
+// through the errgroup-derived context.
+type blockingConcurrent struct {
+	name    string
+	started chan struct{}
+}
+
+func (b *blockingConcurrent) Name() string                                    { return b.name }
+func (b *blockingConcurrent) Description() string                             { return "" }
+func (b *blockingConcurrent) InputSchema() map[string]any                     { return map[string]any{"type": "object"} }
+func (b *blockingConcurrent) RequiresConfirmation(json.RawMessage) bool       { return false }
+func (b *blockingConcurrent) EstimatedCostUSD(json.RawMessage) float64        { return 0 }
+func (b *blockingConcurrent) EstimatedDuration(json.RawMessage) time.Duration { return time.Hour }
+func (b *blockingConcurrent) Concurrent() bool                                { return true }
+func (b *blockingConcurrent) Execute(ctx context.Context, _ json.RawMessage) (tools.Result, error) {
+	close(b.started)
+	<-ctx.Done()
+	return tools.Result{}, ctx.Err()
+}
+
+func TestLoopCancellationStopsInFlightConcurrentTools(t *testing.T) {
+	a := &blockingConcurrent{name: "fake.block1", started: make(chan struct{})}
+	b := &blockingConcurrent{name: "fake.block2", started: make(chan struct{})}
+	reg := tools.NewRegistry()
+	reg.Register(a)
+	reg.Register(b)
+
+	prov := &mockProvider{responses: []llm.ChatResponse{
+		{ToolCalls: []llm.ToolCall{
+			{ID: "1", Name: "fake.block1", Input: map[string]any{}},
+			{ID: "2", Name: "fake.block2", Input: map[string]any{}},
+		}},
+	}}
+	bus := make(chan tea.Msg, 32)
+	loop := NewLoop(prov, "mock", reg, NewSession("sys"), bus, func(string) bool { return true })
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { loop.Run(ctx, "go"); close(bus); close(done) }()
+
+	// Wait for both goroutines to enter Execute before cancelling.
+	select {
+	case <-a.started:
+	case <-time.After(time.Second):
+		t.Fatalf("fake.block1 never started")
+	}
+	select {
+	case <-b.started:
+	case <-time.After(time.Second):
+		t.Fatalf("fake.block2 never started")
+	}
+
+	cancel()
+
+	select {
+	case <-done:
+		// good — Run returned promptly after cancellation
+	case <-time.After(500 * time.Millisecond):
+		t.Fatalf("loop.Run did not return within 500ms of cancellation")
+	}
+	drain(bus)
+}

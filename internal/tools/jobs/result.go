@@ -24,7 +24,8 @@ func NewResultTool(mgr *jobmgr.Manager, estd EstimatedDurationFn) *ResultTool {
 	return &ResultTool{mgr: mgr, estd: estd}
 }
 
-func (*ResultTool) Name() string { return "jobs.result" }
+func (*ResultTool) Name() string     { return "jobs.result" }
+func (*ResultTool) Concurrent() bool { return true }
 func (*ResultTool) Description() string {
 	return "Fetch a job's final result. If the job is still running, reports its progress instead."
 }

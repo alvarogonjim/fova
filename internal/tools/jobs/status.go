@@ -35,7 +35,8 @@ func NewStatusTool(mgr *jobmgr.Manager, estd EstimatedDurationFn) *StatusTool {
 	return &StatusTool{mgr: mgr, estd: estd}
 }
 
-func (*StatusTool) Name() string { return "jobs.status" }
+func (*StatusTool) Name() string     { return "jobs.status" }
+func (*StatusTool) Concurrent() bool { return true }
 func (*StatusTool) Description() string {
 	return "Report the status, progress, and timing of one job by ID."
 }

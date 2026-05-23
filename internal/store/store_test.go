@@ -1,7 +1,9 @@
 package store
 
 import (
+	"fmt"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -84,4 +86,83 @@ func TestOpenIsIdempotent(t *testing.T) {
 		t.Fatalf("reopen: %v", err)
 	}
 	st2.Close()
+}
+
+func TestStoreWALEnabled(t *testing.T) {
+	st := openTestStore(t)
+	var mode string
+	if err := st.db.QueryRow("PRAGMA journal_mode").Scan(&mode); err != nil {
+		t.Fatalf("PRAGMA journal_mode: %v", err)
+	}
+	if mode != "wal" {
+		t.Errorf("journal_mode = %q, want \"wal\"", mode)
+	}
+}
+
+func TestStoreBusyTimeoutSet(t *testing.T) {
+	st := openTestStore(t)
+	var ms int
+	if err := st.db.QueryRow("PRAGMA busy_timeout").Scan(&ms); err != nil {
+		t.Fatalf("PRAGMA busy_timeout: %v", err)
+	}
+	if ms != 5000 {
+		t.Errorf("busy_timeout = %d, want 5000", ms)
+	}
+}
+
+func TestStoreSynchronousNormal(t *testing.T) {
+	st := openTestStore(t)
+	var mode int
+	if err := st.db.QueryRow("PRAGMA synchronous").Scan(&mode); err != nil {
+		t.Fatalf("PRAGMA synchronous: %v", err)
+	}
+	// synchronous=NORMAL is 1 in SQLite.
+	if mode != 1 {
+		t.Errorf("synchronous = %d, want 1 (NORMAL)", mode)
+	}
+}
+
+func TestStoreConcurrentWrites(t *testing.T) {
+	st := openTestStore(t)
+
+	const goroutines = 4
+	const perGoroutine = 50
+
+	var wg sync.WaitGroup
+	errs := make(chan error, goroutines*perGoroutine)
+	for g := 0; g < goroutines; g++ {
+		g := g
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := 0; i < perGoroutine; i++ {
+				j := domain.Job{
+					ID:      domain.JobID(fmt.Sprintf("job-%d-%d", g, i)),
+					Kind:    domain.JobCompute,
+					Tool:    "concurrent-writer-test",
+					Status:  domain.JobQueued,
+					Created: time.Now().UTC(),
+				}
+				if err := st.InsertJob(j); err != nil {
+					errs <- err
+				}
+			}
+		}()
+	}
+	wg.Wait()
+	close(errs)
+
+	for err := range errs {
+		t.Errorf("concurrent InsertJob: %v", err)
+	}
+
+	var n int
+	if err := st.db.QueryRow(
+		"SELECT COUNT(*) FROM jobs WHERE tool = 'concurrent-writer-test'",
+	).Scan(&n); err != nil {
+		t.Fatalf("count jobs: %v", err)
+	}
+	if want := goroutines * perGoroutine; n != want {
+		t.Errorf("jobs count = %d, want %d", n, want)
+	}
 }

@@ -26,7 +26,8 @@ func NewAsciiStructure(workspace string) *AsciiStructure {
 	return &AsciiStructure{workspace: workspace}
 }
 
-func (*AsciiStructure) Name() string { return "viz.ascii_structure" }
+func (*AsciiStructure) Concurrent() bool { return true }
+func (*AsciiStructure) Name() string     { return "viz.ascii_structure" }
 func (*AsciiStructure) Description() string {
 	return "Emit a DSSP-lite secondary-structure string (HHHEEE---) per chain from a PDB, with the aligned sequence."
 }

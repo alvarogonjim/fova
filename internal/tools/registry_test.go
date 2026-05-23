@@ -67,3 +67,37 @@ func TestSafeJoin(t *testing.T) {
 		t.Error("absolute path escaping the workspace was allowed")
 	}
 }
+
+// concurrentTool implements both Tool and Concurrent (Concurrent()=true).
+type concurrentTool struct{}
+
+func (concurrentTool) Name() string                { return "fake.concurrent" }
+func (concurrentTool) Description() string         { return "" }
+func (concurrentTool) InputSchema() map[string]any { return map[string]any{} }
+func (concurrentTool) Execute(_ context.Context, _ json.RawMessage) (Result, error) {
+	return Result{}, nil
+}
+func (concurrentTool) RequiresConfirmation(json.RawMessage) bool       { return false }
+func (concurrentTool) EstimatedCostUSD(json.RawMessage) float64        { return 0 }
+func (concurrentTool) EstimatedDuration(json.RawMessage) time.Duration { return 0 }
+func (concurrentTool) Concurrent() bool                                { return true }
+
+// serialTool implements Tool but NOT Concurrent.
+type serialTool struct{}
+
+func (serialTool) Name() string                                                 { return "fake.serial" }
+func (serialTool) Description() string                                          { return "" }
+func (serialTool) InputSchema() map[string]any                                  { return map[string]any{} }
+func (serialTool) Execute(_ context.Context, _ json.RawMessage) (Result, error) { return Result{}, nil }
+func (serialTool) RequiresConfirmation(json.RawMessage) bool                    { return false }
+func (serialTool) EstimatedCostUSD(json.RawMessage) float64                     { return 0 }
+func (serialTool) EstimatedDuration(json.RawMessage) time.Duration              { return 0 }
+
+func TestIsConcurrent(t *testing.T) {
+	if !IsConcurrent(concurrentTool{}) {
+		t.Errorf("IsConcurrent(concurrentTool) = false, want true")
+	}
+	if IsConcurrent(serialTool{}) {
+		t.Errorf("IsConcurrent(serialTool) = true, want false")
+	}
+}

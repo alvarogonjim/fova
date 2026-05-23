@@ -7,6 +7,7 @@ import (
 	"fmt"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"golang.org/x/sync/errgroup"
 
 	"github.com/alvarogonjim/fova/internal/llm"
 	"github.com/alvarogonjim/fova/internal/safety"
@@ -31,14 +32,18 @@ type TextDeltaMsg struct{ Delta string }
 // surface it in a collapsible block.
 type ReasoningDeltaMsg struct{ Delta string }
 
-// ToolStartMsg announces a tool call is about to run.
+// ToolStartMsg announces a tool call is about to run. ID is the tool-call's
+// unique identifier (from the LLM response); chat trace matching uses it so
+// concurrently-running tools don't collide.
 type ToolStartMsg struct {
+	ID    string
 	Name  string
 	Input json.RawMessage
 }
 
-// ToolDoneMsg reports a finished tool call.
+// ToolDoneMsg reports a finished tool call. ID matches its ToolStartMsg.
 type ToolDoneMsg struct {
+	ID      string
 	Name    string
 	Display string
 	Err     error
@@ -160,33 +165,80 @@ func (l *Loop) Run(ctx context.Context, userInput string) {
 			return
 		}
 
-		for _, tc := range resp.ToolCalls {
-			display := l.executeTool(ctx, tc)
-			l.session.AddToolResult(tc.ID, display)
+		results := l.executeBatch(ctx, resp.ToolCalls)
+		for i, tc := range resp.ToolCalls {
+			l.session.AddToolResult(tc.ID, results[i])
 		}
 	}
+}
+
+// executeBatch dispatches one assistant turn's batched tool calls. Tools that
+// implement tools.Concurrent and do not require confirmation run in parallel
+// via errgroup; everything else runs serially. Results are returned in the
+// original tool-call order so the model sees a stable sequence regardless of
+// completion order.
+func (l *Loop) executeBatch(ctx context.Context, calls []llm.ToolCall) []string {
+	results := make([]string, len(calls))
+	concurrentIdx := make([]int, 0, len(calls))
+	serialIdx := make([]int, 0, len(calls))
+
+	for i, tc := range calls {
+		t, ok := l.registry.Get(tc.Name)
+		if !ok {
+			// Unknown tool: executeTool reports the error message itself.
+			serialIdx = append(serialIdx, i)
+			continue
+		}
+		// json.Marshal on map[string]any never returns an error for well-formed
+		// inputs; the error is ignored here as elsewhere in this file.
+		input, _ := json.Marshal(tc.Input)
+		if tools.IsConcurrent(t) && !t.RequiresConfirmation(input) {
+			concurrentIdx = append(concurrentIdx, i)
+		} else {
+			serialIdx = append(serialIdx, i)
+		}
+	}
+
+	if len(concurrentIdx) > 0 {
+		g, gctx := errgroup.WithContext(ctx)
+		for _, idx := range concurrentIdx {
+			idx := idx
+			tc := calls[idx]
+			g.Go(func() error {
+				results[idx] = l.executeTool(gctx, tc)
+				return nil
+			})
+		}
+		_ = g.Wait() // errors are already surfaced via ToolDoneMsg / display text
+	}
+
+	for _, idx := range serialIdx {
+		results[idx] = l.executeTool(ctx, calls[idx])
+	}
+
+	return results
 }
 
 // executeTool dispatches one tool call and returns the result text the model
 // will see. Errors are returned as text so the model can recover.
 func (l *Loop) executeTool(ctx context.Context, tc llm.ToolCall) string {
 	input, _ := json.Marshal(tc.Input)
-	l.bus <- ToolStartMsg{Name: tc.Name, Input: input}
+	l.bus <- ToolStartMsg{ID: tc.ID, Name: tc.Name, Input: input}
 
 	tool, ok := l.registry.Get(tc.Name)
 	if !ok {
 		msg := "error: unknown tool " + tc.Name
-		l.bus <- ToolDoneMsg{Name: tc.Name, Display: msg, Err: fmt.Errorf("unknown tool %q", tc.Name)}
+		l.bus <- ToolDoneMsg{ID: tc.ID, Name: tc.Name, Display: msg, Err: fmt.Errorf("unknown tool %q", tc.Name)}
 		return msg
 	}
 	if err := ctx.Err(); err != nil {
-		l.bus <- ToolDoneMsg{Name: tc.Name, Display: "cancelled", Err: err}
+		l.bus <- ToolDoneMsg{ID: tc.ID, Name: tc.Name, Display: "cancelled", Err: err}
 		return "error: cancelled by user"
 	}
 	if tool.RequiresConfirmation(input) {
 		l.bus <- ConfirmContextMsg{Tool: tc.Name, Input: input}
 		if !l.confirm("Run " + tc.Name + "? " + string(input)) {
-			l.bus <- ToolDoneMsg{Name: tc.Name, Display: "declined by user"}
+			l.bus <- ToolDoneMsg{ID: tc.ID, Name: tc.Name, Display: "declined by user"}
 			return "error: user declined to run " + tc.Name
 		}
 	}
@@ -197,7 +249,7 @@ func (l *Loop) executeTool(ctx context.Context, tc llm.ToolCall) string {
 	if l.guard != nil {
 		if r, refused := l.guard.Inspect(tc.Name, input); refused {
 			msg := "refused by biosecurity guard: " + r.Reason
-			l.bus <- ToolDoneMsg{Name: tc.Name, Display: msg, Err: ErrBiosecurity}
+			l.bus <- ToolDoneMsg{ID: tc.ID, Name: tc.Name, Display: msg, Err: ErrBiosecurity}
 			return msg
 		}
 	}
@@ -205,9 +257,9 @@ func (l *Loop) executeTool(ctx context.Context, tc llm.ToolCall) string {
 	res, err := l.registry.Execute(ctx, tc.Name, input)
 	if err != nil {
 		msg := "error: " + err.Error()
-		l.bus <- ToolDoneMsg{Name: tc.Name, Display: msg, Err: err}
+		l.bus <- ToolDoneMsg{ID: tc.ID, Name: tc.Name, Display: msg, Err: err}
 		return msg
 	}
-	l.bus <- ToolDoneMsg{Name: tc.Name, Display: res.Display}
+	l.bus <- ToolDoneMsg{ID: tc.ID, Name: tc.Name, Display: res.Display}
 	return res.Display
 }

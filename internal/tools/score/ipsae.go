@@ -73,6 +73,7 @@ func (*IPSAETool) InputSchema() map[string]any {
 		"required": []string{"scores_json", "structure_file"},
 	}
 }
+func (*IPSAETool) Concurrent() bool                                { return true }
 func (*IPSAETool) RequiresConfirmation(json.RawMessage) bool       { return false }
 func (*IPSAETool) EstimatedCostUSD(json.RawMessage) float64        { return 0 }
 func (*IPSAETool) EstimatedDuration(json.RawMessage) time.Duration { return 5 * time.Second }

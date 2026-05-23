@@ -34,7 +34,8 @@ func NewMetricPlot(workspace string, results *knowledge.Results) *MetricPlot {
 	return &MetricPlot{workspace: workspace, results: results}
 }
 
-func (*MetricPlot) Name() string { return "viz.metric_plot" }
+func (*MetricPlot) Concurrent() bool { return true }
+func (*MetricPlot) Name() string     { return "viz.metric_plot" }
 func (*MetricPlot) Description() string {
 	return "Render side-by-side histograms of one or more numeric metric distributions to a PNG."
 }

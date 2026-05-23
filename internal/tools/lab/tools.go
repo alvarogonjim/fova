@@ -93,7 +93,8 @@ func (t *targetsSearchTool) WithCache(c targetsCache) *targetsSearchTool {
 	return t
 }
 
-func (*targetsSearchTool) Name() string { return "lab.targets_search" }
+func (*targetsSearchTool) Name() string     { return "lab.targets_search" }
+func (*targetsSearchTool) Concurrent() bool { return true }
 func (*targetsSearchTool) Description() string {
 	return "Resolve a target by PDB ID or gene name. Returns chain metadata " +
 		"from RCSB PDB; falls back to UniProtKB for gene names with no " +
@@ -341,7 +342,8 @@ type costEstimateTool struct{ c *Client }
 // NewCostEstimateTool returns the lab.cost_estimate tool.
 func NewCostEstimateTool(c *Client) *costEstimateTool { return &costEstimateTool{c: c} }
 
-func (*costEstimateTool) Name() string { return "lab.cost_estimate" }
+func (*costEstimateTool) Name() string     { return "lab.cost_estimate" }
+func (*costEstimateTool) Concurrent() bool { return true }
 func (*costEstimateTool) Description() string {
 	return "Estimate the cost and turnaround of an Adaptyv assay before submitting it."
 }
@@ -401,7 +403,8 @@ func NewExperimentStatusTool(c *Client) *experimentStatusTool {
 	return &experimentStatusTool{c: c}
 }
 
-func (*experimentStatusTool) Name() string { return "lab.experiment_status" }
+func (*experimentStatusTool) Name() string     { return "lab.experiment_status" }
+func (*experimentStatusTool) Concurrent() bool { return true }
 func (*experimentStatusTool) Description() string {
 	return "Fetch the current status of an Adaptyv experiment by its experiment ID."
 }
@@ -454,7 +457,8 @@ type resultsTool struct{ c *Client }
 // NewResultsTool returns the lab.results tool.
 func NewResultsTool(c *Client) *resultsTool { return &resultsTool{c: c} }
 
-func (*resultsTool) Name() string { return "lab.results" }
+func (*resultsTool) Name() string     { return "lab.results" }
+func (*resultsTool) Concurrent() bool { return true }
 func (*resultsTool) Description() string {
 	return "Fetch the measured wet-lab results (kinetics) for a completed Adaptyv experiment."
 }

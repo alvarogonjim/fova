@@ -74,6 +74,9 @@ func (p *openAIProvider) Chat(ctx context.Context, req ChatRequest) (*ChatRespon
 	if req.MaxTokens > 0 {
 		params.MaxTokens = openai.Int(int64(req.MaxTokens))
 	}
+	if req.Temperature > 0 {
+		params.Temperature = openai.Float(float64(req.Temperature))
+	}
 	for _, ts := range req.Tools {
 		params.Tools = append(params.Tools, openai.ChatCompletionToolParam{
 			Function: shared.FunctionDefinitionParam{

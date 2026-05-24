@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -514,4 +515,214 @@ func TestLoopCancellationStopsInFlightConcurrentTools(t *testing.T) {
 		t.Fatalf("loop.Run did not return within 500ms of cancellation")
 	}
 	drain(bus)
+}
+
+// acceptAll is the canonical "user accepts every confirm" stub used across
+// the new test cases.
+func acceptAll(string, string, json.RawMessage) (bool, json.RawMessage) { return true, nil }
+
+// recordingProvider wraps mockProvider and records each ChatRequest seen.
+// Only StreamChat records — that's what Loop.Run actually calls, and
+// mockProvider.StreamChat internally invokes Chat, so recording in both
+// would double-count.
+type recordingProvider struct {
+	*mockProvider
+	requests []llm.ChatRequest
+}
+
+func (p *recordingProvider) StreamChat(ctx context.Context, req llm.ChatRequest) (<-chan llm.ChatEvent, error) {
+	p.requests = append(p.requests, req)
+	return p.mockProvider.StreamChat(ctx, req)
+}
+
+func TestLoopSetsDefaultMaxTokensAndTemperature(t *testing.T) {
+	prov := &recordingProvider{mockProvider: &mockProvider{responses: []llm.ChatResponse{
+		{Text: "done", StopReason: "end_turn"},
+	}}}
+	bus := make(chan tea.Msg, 32)
+	loop := NewLoop(prov, "mock", tools.NewRegistry(), NewSession("sys"), bus, acceptAll)
+
+	go func() { loop.Run(context.Background(), "go"); close(bus) }()
+	drain(bus)
+
+	if len(prov.requests) == 0 {
+		t.Fatal("provider received no requests")
+	}
+	got := prov.requests[0]
+	if got.MaxTokens != defaultMaxTokens {
+		t.Errorf("MaxTokens = %d, want %d", got.MaxTokens, defaultMaxTokens)
+	}
+	if got.Temperature != defaultTemperature {
+		t.Errorf("Temperature = %f, want %f", got.Temperature, defaultTemperature)
+	}
+}
+
+// payloadProbeTool is a fake that lets a test set Output and Display
+// independently, then inspect what the loop fed back to the session.
+type payloadProbeTool struct {
+	name    string
+	output  []byte
+	display string
+}
+
+func (p payloadProbeTool) Name() string                                    { return p.name }
+func (p payloadProbeTool) Description() string                             { return "" }
+func (p payloadProbeTool) InputSchema() map[string]any                     { return map[string]any{"type": "object"} }
+func (p payloadProbeTool) RequiresConfirmation(json.RawMessage) bool       { return false }
+func (p payloadProbeTool) EstimatedCostUSD(json.RawMessage) float64        { return 0 }
+func (p payloadProbeTool) EstimatedDuration(json.RawMessage) time.Duration { return 0 }
+func (p payloadProbeTool) Execute(context.Context, json.RawMessage) (tools.Result, error) {
+	return tools.Result{Output: p.output, Display: p.display}, nil
+}
+
+func TestModelPayloadPrefersOutput(t *testing.T) {
+	reg := tools.NewRegistry()
+	reg.Register(payloadProbeTool{name: "probe", output: []byte(`{"id":"X"}`), display: "summary"})
+	sess := NewSession("sys")
+	prov := &mockProvider{responses: []llm.ChatResponse{
+		{ToolCalls: []llm.ToolCall{{ID: "c1", Name: "probe", Input: map[string]any{}}}},
+		{Text: "done", StopReason: "end_turn"},
+	}}
+	bus := make(chan tea.Msg, 32)
+	loop := NewLoop(prov, "mock", reg, sess, bus, acceptAll)
+
+	go func() { loop.Run(context.Background(), "go"); close(bus) }()
+	drain(bus)
+
+	var got string
+	for _, m := range sess.Messages() {
+		if m.Role == "tool" && m.ToolCallID == "c1" {
+			got = m.Content
+			break
+		}
+	}
+	if got != `{"id":"X"}` {
+		t.Errorf("session tool content = %q, want %q", got, `{"id":"X"}`)
+	}
+}
+
+func TestModelPayloadFallsBackToDisplayOverThreshold(t *testing.T) {
+	bigOutput := make([]byte, maxModelPayloadBytes+1)
+	for i := range bigOutput {
+		bigOutput[i] = 'x'
+	}
+
+	reg := tools.NewRegistry()
+	reg.Register(payloadProbeTool{name: "probe", output: bigOutput, display: "summary"})
+	sess := NewSession("sys")
+	prov := &mockProvider{responses: []llm.ChatResponse{
+		{ToolCalls: []llm.ToolCall{{ID: "c1", Name: "probe", Input: map[string]any{}}}},
+		{Text: "done", StopReason: "end_turn"},
+	}}
+	bus := make(chan tea.Msg, 32)
+	loop := NewLoop(prov, "mock", reg, sess, bus, acceptAll)
+
+	go func() { loop.Run(context.Background(), "go"); close(bus) }()
+	drain(bus)
+
+	var got string
+	for _, m := range sess.Messages() {
+		if m.Role == "tool" && m.ToolCallID == "c1" {
+			got = m.Content
+			break
+		}
+	}
+	if got != "summary" {
+		t.Errorf("session tool content = %q, want %q (fallback to Display)", got, "summary")
+	}
+}
+
+func TestModelPayloadFallsBackToDisplayWhenOutputEmpty(t *testing.T) {
+	reg := tools.NewRegistry()
+	reg.Register(payloadProbeTool{name: "probe", output: nil, display: "just summary"})
+	sess := NewSession("sys")
+	prov := &mockProvider{responses: []llm.ChatResponse{
+		{ToolCalls: []llm.ToolCall{{ID: "c1", Name: "probe", Input: map[string]any{}}}},
+		{Text: "done", StopReason: "end_turn"},
+	}}
+	bus := make(chan tea.Msg, 32)
+	loop := NewLoop(prov, "mock", reg, sess, bus, acceptAll)
+
+	go func() { loop.Run(context.Background(), "go"); close(bus) }()
+	drain(bus)
+
+	var got string
+	for _, m := range sess.Messages() {
+		if m.Role == "tool" && m.ToolCallID == "c1" {
+			got = m.Content
+			break
+		}
+	}
+	if got != "just summary" {
+		t.Errorf("session tool content = %q, want %q", got, "just summary")
+	}
+}
+
+func TestLoopExceedingMaxIterationsErrors(t *testing.T) {
+	// A tool that always succeeds, paired with a mockProvider that always
+	// emits a fresh ToolCall — guaranteed infinite loop without the guard.
+	reg := tools.NewRegistry()
+	reg.Register(echoTool{})
+
+	resps := make([]llm.ChatResponse, 20)
+	for i := range resps {
+		resps[i] = llm.ChatResponse{
+			ToolCalls: []llm.ToolCall{{ID: fmt.Sprintf("c%d", i), Name: "echo", Input: map[string]any{}}},
+		}
+	}
+	prov := &mockProvider{responses: resps}
+	bus := make(chan tea.Msg, 64)
+	loop := NewLoop(prov, "mock", reg, NewSession("sys"), bus, acceptAll)
+	loop.SetMaxIterations(3)
+
+	go func() { loop.Run(context.Background(), "go"); close(bus) }()
+
+	var sawMaxIterErr bool
+	for m := range bus {
+		if te, ok := m.(TurnErrorMsg); ok {
+			if errors.Is(te.Err, ErrMaxIterations) {
+				sawMaxIterErr = true
+			}
+		}
+	}
+	if !sawMaxIterErr {
+		t.Errorf("expected TurnErrorMsg with ErrMaxIterations after 3 iterations")
+	}
+	// Provider was called exactly 3 times (one per iteration).
+	if prov.calls != 3 {
+		t.Errorf("provider called %d times, want 3", prov.calls)
+	}
+}
+
+func TestLoopRejectsTruncatedTurn(t *testing.T) {
+	reg := tools.NewRegistry()
+	reg.Register(echoTool{})
+	prov := &mockProvider{responses: []llm.ChatResponse{
+		{
+			ToolCalls:  []llm.ToolCall{{ID: "c1", Name: "echo", Input: map[string]any{}}},
+			StopReason: "max_tokens",
+		},
+	}}
+	bus := make(chan tea.Msg, 32)
+	loop := NewLoop(prov, "mock", reg, NewSession("sys"), bus, acceptAll)
+
+	go func() { loop.Run(context.Background(), "go"); close(bus) }()
+
+	var sawTruncErr, sawToolStart bool
+	for m := range bus {
+		switch v := m.(type) {
+		case TurnErrorMsg:
+			if errors.Is(v.Err, ErrModelTruncated) {
+				sawTruncErr = true
+			}
+		case ToolStartMsg:
+			sawToolStart = true
+		}
+	}
+	if !sawTruncErr {
+		t.Errorf("expected TurnErrorMsg with ErrModelTruncated")
+	}
+	if sawToolStart {
+		t.Errorf("tool was executed despite truncated stop_reason")
+	}
 }

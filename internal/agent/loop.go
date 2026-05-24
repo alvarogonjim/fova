@@ -19,6 +19,59 @@ import (
 // tool failure with errors.Is.
 var ErrBiosecurity = errors.New("refused by biosecurity guard")
 
+// ErrMaxIterations is returned (wrapped in TurnErrorMsg.Err) when a turn
+// exceeds Loop.maxIterations LLM round-trips.
+var ErrMaxIterations = errors.New("turn exceeded maximum tool-call iterations")
+
+// ErrModelTruncated is returned (wrapped in TurnErrorMsg.Err) when the
+// model finished mid-output (max_tokens, length, content_filter). Acting
+// on a turn that was cut short risks dispatching malformed tool calls.
+var ErrModelTruncated = errors.New("model output truncated; consider raising MaxTokens or simplifying the prompt")
+
+// defaultMaxTokens caps a single LLM response. Mirrors Anthropic's existing
+// per-provider default to OpenAI/vLLM so server-side defaults (which can be
+// 16k or unbounded) don't allow a runaway response.
+const defaultMaxTokens = 4096
+
+// defaultTemperature is fova's tool-use default — low enough to keep tool
+// invocations deterministic, high enough that planning/brainstorming turns
+// are not sterile. Callers may override via ChatRequest.Temperature.
+const defaultTemperature = 0.2
+
+// defaultMaxIterations bounds one turn at 25 LLM round-trips. A well-formed
+// turn finishes in 2-6 (plan → call tools → answer). Spinning past 25 is
+// almost always a model-confusion loop.
+const defaultMaxIterations = 25
+
+// maxModelPayloadBytes caps the size of structured tool Output sent to the
+// model. Above this threshold the model sees the human-readable Display
+// summary instead, to avoid crowding out conversation history. 8KB fits
+// every list-style result currently in fova while keeping corpus_map /
+// web_fetch dumps summarized.
+const maxModelPayloadBytes = 8 * 1024
+
+// modelPayload picks what the model sees from a tool result. Prefers the
+// structured Output when present and within the size budget; otherwise
+// falls back to the human-readable Display.
+func modelPayload(r tools.Result) string {
+	if len(r.Output) > 0 && len(r.Output) <= maxModelPayloadBytes {
+		return string(r.Output)
+	}
+	return r.Display
+}
+
+// stopMeansTruncated is true when the model finished because it ran out of
+// output tokens or was content-filtered, NOT because it voluntarily stopped.
+// Anthropic uses "max_tokens"; OpenAI uses "length"; both/either may use
+// "content_filter" / "content-filter".
+func stopMeansTruncated(stop string) bool {
+	switch stop {
+	case "max_tokens", "length", "content_filter", "content-filter":
+		return true
+	}
+	return false
+}
+
 // --- bus message types (delivered to the TUI as tea.Msg) ---
 
 // TextDeltaMsg is a chunk of assistant text destined for the chat pane.
@@ -81,13 +134,14 @@ type ConfirmFunc func(prompt, name string, input json.RawMessage) (accepted bool
 
 // Loop is the ReAct agent loop.
 type Loop struct {
-	provider llm.Provider
-	model    string
-	registry *tools.Registry
-	session  *Session
-	bus      chan<- tea.Msg
-	confirm  ConfirmFunc
-	guard    safety.Guard // optional; nil = no inspection (used in tests)
+	provider      llm.Provider
+	model         string
+	registry      *tools.Registry
+	session       *Session
+	bus           chan<- tea.Msg
+	confirm       ConfirmFunc
+	guard         safety.Guard // optional; nil = no inspection (used in tests)
+	maxIterations int
 }
 
 // NewLoop builds an agent loop. confirm is called synchronously when a tool
@@ -104,8 +158,21 @@ func NewLoop(p llm.Provider, model string, r *tools.Registry, s *Session,
 // in tests).
 func NewLoopWithGuard(p llm.Provider, model string, r *tools.Registry, s *Session,
 	bus chan<- tea.Msg, confirm ConfirmFunc, g safety.Guard) *Loop {
-	return &Loop{provider: p, model: model, registry: r, session: s, bus: bus, confirm: confirm, guard: g}
+	return &Loop{
+		provider:      p,
+		model:         model,
+		registry:      r,
+		session:       s,
+		bus:           bus,
+		confirm:       confirm,
+		guard:         g,
+		maxIterations: defaultMaxIterations,
+	}
 }
+
+// SetMaxIterations overrides the per-turn iteration cap. Test-only;
+// production callers use the default.
+func (l *Loop) SetMaxIterations(n int) { l.maxIterations = n }
 
 // Run executes one user turn: it streams model output, dispatches tool calls,
 // and loops until the model stops requesting tools.
@@ -113,18 +180,27 @@ func (l *Loop) Run(ctx context.Context, userInput string) {
 	l.session.AddUserMessage(userInput)
 
 	var turnUsage llm.Usage
+	iterations := 0
 
 	for {
+		if iterations >= l.maxIterations {
+			l.bus <- TurnErrorMsg{Err: fmt.Errorf("%w (%d)", ErrMaxIterations, l.maxIterations)}
+			return
+		}
+		iterations++
+
 		if err := ctx.Err(); err != nil {
 			l.bus <- TurnErrorMsg{Err: err}
 			return
 		}
 
 		req := llm.ChatRequest{
-			Model:    l.model,
-			System:   l.session.SystemPrompt(),
-			Messages: l.session.Messages(),
-			Tools:    l.registry.Specs(),
+			Model:       l.model,
+			System:      l.session.SystemPrompt(),
+			Messages:    l.session.Messages(),
+			Tools:       l.registry.Specs(),
+			Temperature: defaultTemperature,
+			MaxTokens:   defaultMaxTokens,
 		}
 		events, err := l.provider.StreamChat(ctx, req)
 		if err != nil {
@@ -171,6 +247,11 @@ func (l *Loop) Run(ctx context.Context, userInput string) {
 		}
 
 		l.session.AddAssistantMessage(resp)
+
+		if stopMeansTruncated(resp.StopReason) {
+			l.bus <- TurnErrorMsg{Err: fmt.Errorf("%w (stop_reason=%q)", ErrModelTruncated, resp.StopReason)}
+			return
+		}
 
 		if len(resp.ToolCalls) == 0 {
 			l.bus <- TurnDoneMsg{Usage: turnUsage}
@@ -276,6 +357,7 @@ func (l *Loop) executeTool(ctx context.Context, tc llm.ToolCall) string {
 		l.bus <- ToolDoneMsg{ID: tc.ID, Name: tc.Name, Display: msg, Err: err}
 		return msg
 	}
+	payload := modelPayload(res)
 	l.bus <- ToolDoneMsg{ID: tc.ID, Name: tc.Name, Display: res.Display}
-	return res.Display
+	return payload
 }

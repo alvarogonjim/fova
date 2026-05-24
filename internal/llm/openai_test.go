@@ -2,6 +2,8 @@ package llm
 
 import (
 	"context"
+	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -206,5 +208,44 @@ func TestExtractReasoningSurvivesInvalidJSON(t *testing.T) {
 	}
 	if got := extractReasoning(extras); got != "" {
 		t.Errorf("extractReasoning(bad json) = %q, want empty", got)
+	}
+}
+
+// TestOpenAIProviderPassesTemperature guards that ChatRequest.Temperature is
+// forwarded onto the Chat Completions request body. Google's OpenAI-compat
+// endpoint inherits this wiring through google.go.
+func TestOpenAIProviderPassesTemperature(t *testing.T) {
+	var captured map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("reading request body: %v", err)
+		}
+		if err := json.Unmarshal(body, &captured); err != nil {
+			t.Errorf("decoding request body: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(cannedChatCompletion))
+	}))
+	defer srv.Close()
+
+	p := NewOpenAIProvider("test", srv.URL, "key")
+	_, err := p.Chat(context.Background(), ChatRequest{
+		Model:       "gpt-test",
+		Messages:    []Message{{Role: "user", Content: "Hi"}},
+		Temperature: 0.3,
+		MaxTokens:   100,
+	})
+	if err != nil {
+		t.Fatalf("Chat failed: %v", err)
+	}
+	got, ok := captured["temperature"].(float64)
+	if !ok {
+		t.Fatalf("temperature missing from request body: %+v", captured)
+	}
+	// req.Temperature is float32 so widening to float64 introduces a tiny
+	// representational error (0.3 → 0.300000011...). Compare with tolerance.
+	if diff := got - 0.3; diff > 1e-6 || diff < -1e-6 {
+		t.Errorf("temperature in request = %v, want ~0.3", got)
 	}
 }

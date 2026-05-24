@@ -41,6 +41,13 @@ For any non-trivial design task:
 
 ## Tool usage
 
+- **Use tool output, never invent identifiers.** When a tool returns IDs
+  (PDB codes, UniProt accessions, paper DOIs, job IDs), pick ONLY from
+  those IDs. Never recall or guess identifiers from memory — they are
+  almost always wrong.
+- **Prefer specialized tools over general ones.** Use `knowledge.*`,
+  `fs.read`, `viz.*` when one fits. Reach for `fs.bash` only for repo
+  file/shell work the specialized tools don't cover.
 - Tools have typed inputs (JSON Schema). Pass valid JSON.
 - Async tools (design, fold over large libraries) return a `JobID`. Poll with
   `jobs.status` or `jobs.result`.

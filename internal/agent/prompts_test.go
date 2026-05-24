@@ -3,6 +3,8 @@ package agent
 import (
 	"strings"
 	"testing"
+
+	"github.com/alvarogonjim/fova/internal/assets"
 )
 
 // fakeTemplate is a minimal system.md stand-in carrying the marker plus the
@@ -71,5 +73,17 @@ func TestSystemPromptForbidsInventingSlashCommands(t *testing.T) {
 	want := "Never invent a slash command."
 	if !strings.Contains(prompt, want) {
 		t.Errorf("grounding clause missing; expected %q", want)
+	}
+}
+
+func TestSystemPromptContainsGroundingDirectives(t *testing.T) {
+	prompt := BuildSystemPrompt(nil, assets.DefaultSystemPrompt())
+	for _, want := range []string{
+		"never invent identifiers",
+		"Prefer specialized tools",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Errorf("system prompt missing %q", want)
+		}
 	}
 }

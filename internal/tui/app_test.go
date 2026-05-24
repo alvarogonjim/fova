@@ -1264,3 +1264,78 @@ func TestDetailOverlayTabAdvancesFocus(t *testing.T) {
 		t.Errorf("Tab in the detail overlay should advance focus to designs, got %v", m.focus)
 	}
 }
+
+// TestModelTextDeltaSchedulesStreamFlush verifies the first TextDeltaMsg of a
+// streaming burst kicks off the 30-FPS tick chain (perf-batch-2 §6) and that
+// subsequent deltas don't double-schedule.
+func TestModelTextDeltaSchedulesStreamFlush(t *testing.T) {
+	m := newTestApp()
+	m.running = true
+
+	_, cmd := m.Update(agent.TextDeltaMsg{Delta: "hi"})
+	if cmd == nil {
+		t.Fatal("first TextDeltaMsg did not return a cmd (expected stream-flush schedule)")
+	}
+	if !m.streamFlushScheduled {
+		t.Error("streamFlushScheduled flag not set")
+	}
+
+	// A second delta does NOT schedule again.
+	_, cmd2 := m.Update(agent.TextDeltaMsg{Delta: "there"})
+	_ = cmd2 // cmd2 is waitForBus only; we just check the scheduled flag didn't toggle.
+	if !m.streamFlushScheduled {
+		t.Error("streamFlushScheduled flag flipped off after second delta")
+	}
+}
+
+// TestModelStreamFlushChainsWhileRunning verifies a streamFlushMsg drains the
+// chat buffer and chains the next tick while a turn is still running.
+func TestModelStreamFlushChainsWhileRunning(t *testing.T) {
+	m := newTestApp()
+	m.running = true
+	m.streamFlushScheduled = true
+	m.chat.appendAgentDelta("buffered")
+
+	_, cmd := m.Update(streamFlushMsg{})
+	if cmd == nil {
+		t.Error("streamFlushMsg returned nil cmd while running")
+	}
+	if len(m.chat.entries) == 0 || m.chat.entries[len(m.chat.entries)-1].text != "buffered" {
+		t.Errorf("flushPendingDelta did not drain the buffer")
+	}
+}
+
+// TestModelStreamFlushStopsAtTurnEnd verifies the tick chain halts itself once
+// the turn is no longer running and the scheduled flag is cleared.
+func TestModelStreamFlushStopsAtTurnEnd(t *testing.T) {
+	m := newTestApp()
+	m.running = false
+	m.streamFlushScheduled = true
+
+	_, cmd := m.Update(streamFlushMsg{})
+	if cmd != nil {
+		t.Errorf("streamFlushMsg returned a cmd after turn ended; want nil")
+	}
+	if m.streamFlushScheduled {
+		t.Error("streamFlushScheduled flag not cleared at turn end")
+	}
+}
+
+// TestModelTurnDoneFlushesPendingDelta verifies TurnDoneMsg forces a final
+// flush so any tokens that arrived between the last tick and end-of-turn are
+// rendered before the turn closes (perf-batch-2 §6).
+func TestModelTurnDoneFlushesPendingDelta(t *testing.T) {
+	m := newTestApp()
+	m.running = true
+	m.streamFlushScheduled = true
+	m.chat.appendAgentDelta("tail tokens")
+
+	_, _ = m.Update(agent.TurnDoneMsg{})
+
+	if m.streamFlushScheduled {
+		t.Error("streamFlushScheduled not cleared on TurnDoneMsg")
+	}
+	if got := m.chat.entries[len(m.chat.entries)-1].text; got != "tail tokens" {
+		t.Errorf("entry text after TurnDone = %q, want %q", got, "tail tokens")
+	}
+}

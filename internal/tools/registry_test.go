@@ -101,3 +101,40 @@ func TestIsConcurrent(t *testing.T) {
 		t.Errorf("IsConcurrent(serialTool) = true, want false")
 	}
 }
+
+func TestSpecsCachedAcrossCalls(t *testing.T) {
+	r := NewRegistry()
+	r.Register(concurrentTool{})
+	r.Register(serialTool{})
+
+	a := r.Specs()
+	b := r.Specs()
+
+	if len(a) != 2 || len(b) != 2 {
+		t.Fatalf("Specs() len: a=%d b=%d, want 2 each", len(a), len(b))
+	}
+	// Same backing array — confirms the cache wasn't rebuilt.
+	if &a[0] != &b[0] {
+		t.Errorf("Specs() rebuilt the slice on the second call; want cached")
+	}
+}
+
+func TestSpecsInvalidatedOnRegister(t *testing.T) {
+	r := NewRegistry()
+	r.Register(concurrentTool{})
+
+	a := r.Specs()
+	if len(a) != 1 {
+		t.Fatalf("initial Specs len = %d, want 1", len(a))
+	}
+
+	r.Register(serialTool{})
+
+	b := r.Specs()
+	if len(b) != 2 {
+		t.Errorf("post-Register Specs len = %d, want 2", len(b))
+	}
+	if len(a) > 0 && len(b) > 0 && &a[0] == &b[0] {
+		t.Errorf("Specs() returned the stale cached slice after Register")
+	}
+}

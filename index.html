@@ -11,8 +11,10 @@
 <meta property="og:type" content="website" />
 <meta property="og:title" content="fova: design proteins in your terminal" />
 <meta property="og:description" content="A terminal agent for de novo protein design. It plans, runs, ranks, and ships the survivors to a wet lab. Free by default." />
-<meta property="og:url" content="https://github.com/alvarogonjim/fova" />
+<meta property="og:url" content="https://alvarogonjim.github.io/fova/" />
 <meta name="twitter:card" content="summary_large_image" />
+
+<link rel="canonical" href="https://alvarogonjim.github.io/fova/" />
 
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 200 240'%3E%3Crect width='200' height='240' rx='46' fill='%230d1f15'/%3E%3Cpath d='M52 42V202M52 90H150M52 142H112' stroke='%237fc14a' stroke-width='17' stroke-linecap='round'/%3E%3Ccircle cx='150' cy='90' r='16' fill='%23EF9F27'/%3E%3C/svg%3E" />
 
@@ -463,9 +465,9 @@ section{position:relative}
 }
 .dl-lead::before{content:"▸"; color:var(--saffron)}
 .platforms{
-  display:grid; grid-template-columns:repeat(5,1fr); gap:.9rem;
+  display:grid; grid-template-columns:repeat(4,1fr); gap:.9rem;
 }
-@media (max-width:900px){ .platforms{grid-template-columns:1fr 1fr 1fr} }
+@media (max-width:900px){ .platforms{grid-template-columns:1fr 1fr} }
 @media (max-width:560px){ .platforms{grid-template-columns:1fr 1fr} }
 .plat{
   display:flex; flex-direction:column; gap:.15rem;
@@ -587,7 +589,7 @@ footer{border-top:1px solid var(--line); padding-block:3.2rem; background:var(--
 <header class="hero">
   <div class="shell hero-grid">
     <div class="hero-copy">
-      <span class="pill rise d1"><i class="blip" aria-hidden="true"></i> <b>v0.5</b>&nbsp;“fova”&nbsp;·&nbsp;alpha&nbsp;·&nbsp;MIT</span>
+      <span class="pill rise d1"><i class="blip" aria-hidden="true"></i> <b>v0.5</b>&nbsp;public alpha&nbsp;·&nbsp;AGPL-3.0</span>
       <h1 class="headline rise d2">
         Design <span class="moss">proteins</span><br>
         in your <span class="ul">terminal</span>.
@@ -604,7 +606,7 @@ footer{border-top:1px solid var(--line); padding-block:3.2rem; background:var(--
         </a>
       </div>
       <p class="hero-foot rise d5">
-        <span class="dot">▸</span> macOS · Linux · Windows
+        <span class="dot">▸</span> macOS · Linux
         <span class="dot">·</span> one static binary, no runtime
       </p>
     </div>
@@ -718,7 +720,7 @@ footer{border-top:1px solid var(--line); padding-block:3.2rem; background:var(--
       <p class="eyebrow" data-reveal>Why fova</p>
       <h2 data-reveal style="--d:.08s">Principles, not features.</h2>
       <p data-reveal style="--d:.16s">
-        fova is built on eight design principles. These six are the ones you
+        fova is built on a handful of principles. These six are the ones you
         feel every time you run it.
       </p>
     </div>
@@ -778,20 +780,19 @@ footer{border-top:1px solid var(--line); padding-block:3.2rem; background:var(--
         <span class="chip">ProteinMPNN</span>
         <span class="chip">LigandMPNN</span>
         <span class="chip">RFantibody</span>
-        <span class="chip">Chai-2</span>
+        <span class="chip">BoltzGen</span>
       </div>
     </div>
 
     <div class="tool-group" data-reveal style="--d:.08s">
       <div class="glab">Structure &amp; scoring <span class="ct">· predict · ipSAE · filter</span></div>
       <div class="chips">
-        <span class="chip">AlphaFold3</span>
         <span class="chip">ESMFold</span>
         <span class="chip">Boltz-2</span>
         <span class="chip">Chai-1</span>
-        <span class="chip">ColabFold</span>
         <span class="chip">ipSAE</span>
-        <span class="chip">Rosetta ΔΔG</span>
+        <span class="chip">metrics</span>
+        <span class="chip">filter</span>
       </div>
     </div>
 
@@ -806,6 +807,11 @@ footer{border-top:1px solid var(--line); padding-block:3.2rem; background:var(--
         <span class="chip">UniProt</span>
         <span class="chip">RCSB PDB</span>
         <span class="chip">InterPro</span>
+        <span class="chip">BLAST</span>
+        <span class="chip">web search</span>
+        <span class="chip">web fetch</span>
+        <span class="chip">local PDFs</span>
+        <span class="chip">Bleve corpus</span>
       </div>
     </div>
 
@@ -813,6 +819,10 @@ footer{border-top:1px solid var(--line); padding-block:3.2rem; background:var(--
       <div class="glab">Wet lab <span class="ct">· close the loop</span></div>
       <div class="chips">
         <span class="chip">Adaptyv Foundry</span>
+        <span class="chip">targets search</span>
+        <span class="chip">cost estimate</span>
+        <span class="chip">experiment status</span>
+        <span class="chip">results webhook</span>
       </div>
     </div>
   </div>
@@ -834,17 +844,17 @@ footer{border-top:1px solid var(--line); padding-block:3.2rem; background:var(--
       <div class="codecard" data-reveal>
         <div class="cc-head"><span>▸ install.sh</span><span class="ct">macOS · Linux</span></div>
         <div class="cc-body">
-          <pre><code><span class="p">$</span> curl -fsSL https://fova.dev/install | sh</code></pre>
-          <button class="copy" data-copy="curl -fsSL https://fova.dev/install | sh" aria-label="Copy install command">
+          <pre><code><span class="p">$</span> curl -fsSL https://alvarogonjim.github.io/fova/install.sh | sh</code></pre>
+          <button class="copy" data-copy="curl -fsSL https://alvarogonjim.github.io/fova/install.sh | sh" aria-label="Copy install command">
             <span class="lc"></span>
           </button>
         </div>
       </div>
       <div class="codecard" data-reveal style="--d:.08s">
-        <div class="cc-head"><span>▸ homebrew</span><span class="ct">macOS · Linux</span></div>
+        <div class="cc-head"><span>▸ from source</span><span class="ct">Go 1.22+</span></div>
         <div class="cc-body">
-          <pre><code><span class="p">$</span> brew install alvarogonjim/tap/fova</code></pre>
-          <button class="copy" data-copy="brew install alvarogonjim/tap/fova" aria-label="Copy Homebrew command">
+          <pre><code><span class="p">$</span> git clone https://github.com/alvarogonjim/fova &amp;&amp; cd fova &amp;&amp; make build</code></pre>
+          <button class="copy" data-copy="git clone https://github.com/alvarogonjim/fova && cd fova && make build" aria-label="Copy build-from-source command">
             <span class="lc"></span>
           </button>
         </div>
@@ -876,12 +886,6 @@ footer{border-top:1px solid var(--line); padding-block:3.2rem; background:var(--
         <span class="pn">ARM64</span>
         <span class="ar">arm64</span>
         <span class="fmt">.tar.gz <span class="arr" aria-hidden="true">↗</span></span>
-      </a>
-      <a class="plat" data-reveal style="--d:.24s" href="https://github.com/alvarogonjim/fova/releases/latest" target="_blank" rel="noopener">
-        <span class="os">Windows</span>
-        <span class="pn">x86-64</span>
-        <span class="ar">amd64</span>
-        <span class="fmt">.zip <span class="arr" aria-hidden="true">↗</span></span>
       </a>
     </div>
     <p class="verify" data-reveal>
@@ -942,7 +946,7 @@ footer{border-top:1px solid var(--line); padding-block:3.2rem; background:var(--
       </div>
     </div>
     <div class="foot-base">
-      <span>fova <span class="moss">·</span> v0.5 “fova” <span class="moss">·</span> MIT licensed <span class="moss">·</span> free software</span>
+      <span>fova <span class="moss">·</span> v0.5 public alpha <span class="moss">·</span> AGPL-3.0 licensed <span class="moss">·</span> free software</span>
       <span>built for the terminal <span class="moss">·</span> <span id="year">2026</span></span>
     </div>
   </div>

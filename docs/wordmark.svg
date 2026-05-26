@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 220" width="540" height="165" role="img" aria-label="fova — design proteins in your terminal">
+  <title>fova — design proteins in your terminal</title>
+  <rect width="720" height="220" fill="#0d1f15"/>
+
+  <!-- folded-F mark -->
+  <g transform="translate(48 36)">
+    <path d="M14 4V148" stroke="#7fc14a" stroke-width="14" stroke-linecap="round" fill="none"/>
+    <path d="M14 52H110" stroke="#7fc14a" stroke-width="14" stroke-linecap="round" fill="none"/>
+    <path d="M14 96H78"  stroke="#7fc14a" stroke-width="14" stroke-linecap="round" fill="none"/>
+    <circle cx="110" cy="52" r="13" fill="#EF9F27"/>
+  </g>
+
+  <!-- wordmark "fova" -->
+  <text x="208" y="138"
+        font-family="'JetBrains Mono', ui-monospace, monospace"
+        font-size="120" font-weight="700"
+        fill="#7fc14a" letter-spacing="-6">fova</text>
+
+  <!-- tagline -->
+  <text x="212" y="180"
+        font-family="'JetBrains Mono', ui-monospace, monospace"
+        font-size="20" font-weight="500"
+        fill="#a9a899" letter-spacing="6">DESIGN PROTEINS IN YOUR TERMINAL</text>
+</svg>

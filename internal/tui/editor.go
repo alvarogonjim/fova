@@ -1,8 +1,11 @@
 package tui
 
 import (
+	"errors"
+	"io/fs"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -63,5 +66,32 @@ func openEditorCmd(initial string) tea.Cmd {
 			return editorDoneMsg{Err: readErr}
 		}
 		return editorDoneMsg{Contents: strings.TrimRight(string(body), "\n\r\t ")}
+	})
+}
+
+// editorFileDoneMsg is delivered after an asset-file edit session closes.
+// Path is the file that was edited; Err is non-nil if the editor failed.
+type editorFileDoneMsg struct {
+	Path string
+	Err  error
+}
+
+// openEditorFileCmd ensures path exists (seeding it with initial when absent),
+// then hands it to $EDITOR. Unlike openEditorCmd it edits the real file in
+// place — the caller re-validates and reloads on editorFileDoneMsg.
+func openEditorFileCmd(path, initial string) tea.Cmd {
+	if _, err := os.Stat(path); errors.Is(err, fs.ErrNotExist) {
+		if mkErr := os.MkdirAll(filepath.Dir(path), 0o755); mkErr != nil {
+			return func() tea.Msg { return editorFileDoneMsg{Path: path, Err: mkErr} }
+		}
+		if wErr := os.WriteFile(path, []byte(initial), 0o644); wErr != nil {
+			return func() tea.Msg { return editorFileDoneMsg{Path: path, Err: wErr} }
+		}
+	}
+	fields := strings.Fields(resolveEditor())
+	args := append(fields[1:], path)
+	cmd := exec.Command(fields[0], args...)
+	return tea.ExecProcess(cmd, func(execErr error) tea.Msg {
+		return editorFileDoneMsg{Path: path, Err: execErr}
 	})
 }

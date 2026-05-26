@@ -9,9 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/alvarogonjim/fova/internal/agent"
+	"github.com/alvarogonjim/fova/internal/assets"
 	"github.com/alvarogonjim/fova/internal/backends/local"
-	"github.com/alvarogonjim/fova/internal/config"
 	"github.com/alvarogonjim/fova/internal/domain"
 	jobmgr "github.com/alvarogonjim/fova/internal/jobs"
 	"github.com/alvarogonjim/fova/internal/llm"
@@ -35,8 +34,8 @@ func newSetupTestModel(t *testing.T) *Model {
 	t.Cleanup(func() { st.Close() })
 	return New(Deps{
 		Registry:     tools.NewRegistry(),
-		Models:       llm.NewModelRegistry(config.DefaultCatalog()),
-		SystemPrompt: agent.SystemPrompt,
+		Models:       llm.NewModelRegistry(assets.DefaultCatalog()),
+		SystemPrompt: assets.DefaultSystemPrompt(),
 		Store:        st,
 		Jobs:         jobmgr.NewManager(st, nil),
 		Local:        reg,

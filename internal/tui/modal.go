@@ -1,6 +1,8 @@
 package tui
 
 import (
+	"bytes"
+	"encoding/json"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
@@ -8,21 +10,85 @@ import (
 
 // --- confirmation modal ---
 
-// modalModel is a yes/no confirmation overlay.
+// modalModel is a confirmation overlay. The default surface is the simple
+// y/n prompt used historically; setting editable swaps in the four-key
+// `[y] [e] [n] [esc]` row used by the editable tool-call review gate
+// (spec §3.3 / §3.5). Today every modal opened from ConfirmRequestMsg is
+// editable — the flag exists for forward flexibility.
 type modalModel struct {
-	prompt string
+	prompt   string
+	editable bool
 }
 
 // view renders the modal box. The box uses Theme.ModalBox, whose border is
 // saffron-coloured per rebrand spec §3.7; the action row is rendered through
-// RenderKeyRow so the `[y]` / `[n]` letters pick up the saffron Accent and
-// the labels sit in sand Fg.
+// RenderKeyRow so the bracketed keys pick up the saffron Accent and the
+// labels sit in sand Fg.
+//
+// editable modals carry their full content (header, body, four-key row) in
+// m.prompt via renderJSONModal — view only wraps that in the bordered box.
+// Non-editable modals get the legacy `[y] confirm  [n] cancel` row appended.
 func (m modalModel) view(th Theme, width int) string {
+	if m.editable {
+		// renderJSONModal already embedded the four-key row inside the
+		// prompt; wrapping it in the box is all that's left.
+		return th.ModalBox.Width(min(width-4, 70)).Render(m.prompt)
+	}
 	body := m.prompt + "\n\n" + RenderKeyRow(th,
 		KeyRowEntry{Key: "y", Label: "confirm"},
 		KeyRowEntry{Key: "n", Label: "cancel"},
 	)
 	return th.ModalBox.Width(min(width-4, 70)).Render(body)
+}
+
+// renderJSONModal renders a tool-call confirmation as pretty-printed JSON
+// with the four-key editable action row. The body is capped at maxLines
+// rows; when truncated the tail reads "… [e] to edit · scroll with PgUp/PgDn".
+// edited is true when the user has saved an edited version — the header
+// shows "(edited)" so they know what they're about to submit.
+//
+// The returned string is the raw prompt content (header + body + key row),
+// not yet wrapped in a ModalBox; callers install it into
+// modalModel{prompt: ..., editable: true} which adds the saffron border.
+// Spec §3.5: every tool with RequiresConfirmation that does not opt into a
+// bespoke surface (today only lab.submit_experiment) lands here.
+func renderJSONModal(name string, input json.RawMessage, edited bool, th Theme, width, maxLines int) string {
+	_ = width // reserved for future re-flow; the wrapping ModalBox owns width today.
+	header := "Run " + name + "?"
+	if edited {
+		header += " (edited)"
+	}
+
+	var pretty bytes.Buffer
+	if len(input) > 0 {
+		if err := json.Indent(&pretty, input, "", "  "); err != nil {
+			pretty.Reset()
+			pretty.Write(input)
+		}
+	}
+	lines := strings.Split(strings.TrimRight(pretty.String(), "\n"), "\n")
+
+	const truncationTail = "… [e] to edit · scroll with PgUp/PgDn"
+	body := lines
+	if maxLines > 0 && len(lines) > maxLines {
+		body = append([]string{}, lines[:maxLines]...)
+		body = append(body, truncationTail)
+	}
+
+	keyRow := RenderKeyRow(th,
+		KeyRowEntry{Key: "y", Label: "accept"},
+		KeyRowEntry{Key: "e", Label: "edit"},
+		KeyRowEntry{Key: "n", Label: "decline"},
+		KeyRowEntry{Key: "esc", Label: "cancel turn"},
+	)
+
+	return strings.Join([]string{
+		th.StatusBar.Render(header),
+		"",
+		strings.Join(body, "\n"),
+		"",
+		keyRow,
+	}, "\n")
 }
 
 // KeyRowEntry is one `[letter] label` pair rendered in a modal key row.

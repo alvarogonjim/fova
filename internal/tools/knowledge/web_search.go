@@ -45,7 +45,8 @@ type webSearchOutput struct {
 	Results    []webSearchResult `json:"results"`
 }
 
-func (*WebSearch) Name() string { return "knowledge.web_search" }
+func (*WebSearch) Name() string     { return "knowledge.web_search" }
+func (*WebSearch) Concurrent() bool { return true }
 func (*WebSearch) Description() string {
 	return "Search the web for recent information using the Tavily API. " +
 		"Requires the TAVILY_API_KEY environment variable to be set."

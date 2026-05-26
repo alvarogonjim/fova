@@ -125,6 +125,7 @@ type DesignOrigin string
 
 const (
 	OriginBindCraft   DesignOrigin = "bindcraft"
+	OriginBoltzGen    DesignOrigin = "boltzgen"
 	OriginRFDiffMPNN  DesignOrigin = "rfdiff_mpnn"
 	OriginRFAntibody  DesignOrigin = "rfantibody"
 	OriginChai2       DesignOrigin = "chai2"
@@ -190,8 +191,120 @@ type DesignPlan struct {
 	EstimatedTime  string          `json:"estimated_time"`
 	Rationale      string          `json:"rationale"`
 	Evidence       []EvidenceEntry `json:"evidence,omitempty"`
+	MethodConfig   *MethodConfig   `json:"method_config,omitempty"`
 	Approved       bool            `json:"approved"`
 	ApprovedAt     *time.Time      `json:"approved_at,omitempty"`
+}
+
+// BoltzGenParams is the agent-facing BoltzGen run configuration. Every field
+// maps to a `boltzgen run` CLI flag; fova owns the infra flags separately.
+//
+// Pointers (*float64, *bool) distinguish "unset" (omit the flag, use
+// BoltzGen's default) from a real zero value. It lives in internal/domain so
+// DesignPlan.MethodConfig can reference it without an import cycle;
+// internal/tools/design uses it via a package alias.
+type BoltzGenParams struct {
+	Protocol                string   `json:"protocol"`    // --protocol, enum, default "protein-anything"
+	NumDesigns              int      `json:"num_designs"` // --num_designs
+	Budget                  int      `json:"budget"`      // --budget
+	DiffusionBatchSize      int      `json:"diffusion_batch_size,omitempty"`
+	Steps                   []string `json:"steps,omitempty"`         // --steps
+	Alpha                   *float64 `json:"alpha,omitempty"`         // --alpha
+	FilterBiased            *bool    `json:"filter_biased,omitempty"` // --filter_biased
+	AdditionalFilters       []string `json:"additional_filters,omitempty"`
+	RefoldingRMSDThreshold  *float64 `json:"refolding_rmsd_threshold,omitempty"`
+	InverseFoldNumSequences int      `json:"inverse_fold_num_sequences,omitempty"`
+	InverseFoldAvoid        string   `json:"inverse_fold_avoid,omitempty"`
+	StepScale               *float64 `json:"step_scale,omitempty"`
+	NoiseScale              *float64 `json:"noise_scale,omitempty"`
+	Reuse                   bool     `json:"reuse,omitempty"`
+}
+
+// RFdiffusion, ProteinMPNN, BindCraft, RFdiffusion2).
+type MethodConfig struct {
+	SpecPath     string              `json:"spec_path,omitempty"`    // workspace-relative spec YAML
+	BoltzGen     *BoltzGenParams     `json:"boltzgen,omitempty"`     // BoltzGen run params
+	LigandMPNN   *LigandMPNNParams   `json:"ligandmpnn,omitempty"`   // LigandMPNN run params
+	RFantibody   *RFantibodyParams   `json:"rfantibody,omitempty"`   // RFantibody run params
+	RFdiffusion  *RFdiffusionParams  `json:"rfdiffusion,omitempty"`  // RFdiffusion run params
+	ProteinMPNN  *ProteinMPNNParams  `json:"proteinmpnn,omitempty"`  // ProteinMPNN run params
+	BindCraft    *BindCraftParams    `json:"bindcraft,omitempty"`    // BindCraft run params
+	RFdiffusion2 *RFdiffusion2Params `json:"rfdiffusion2,omitempty"` // RFdiffusion2 run params
+}
+
+// RFantibodyParams is the agent-facing RFantibody run configuration. It drives
+// RFantibody's 3-stage pipeline (rfdiffusion → proteinmpnn → rf2); pointer
+// fields distinguish "unset" (omit the flag, use the stage's default) from a
+// real zero value. It lives in internal/domain so a DesignPlan's MethodConfig
+// can carry it without an import cycle; internal/tools/design references it
+// under a package-local alias.
+type RFantibodyParams struct {
+	Target          string   `json:"target"`
+	Hotspots        string   `json:"hotspots"`
+	Framework       string   `json:"framework,omitempty"`     // "nanobody" (default) | "scfv"
+	FrameworkPDB    string   `json:"framework_pdb,omitempty"` // workspace path; overrides Framework
+	DesignLoops     string   `json:"design_loops,omitempty"`  // e.g. "H1:7,H3:5-13,L3:9-11"
+	NumDesigns      int      `json:"num_designs,omitempty"`
+	Deterministic   *bool    `json:"deterministic,omitempty"`
+	SeqsPerStruct   int      `json:"seqs_per_struct,omitempty"`
+	Temperature     *float64 `json:"temperature,omitempty"`
+	NumRecycles     *int     `json:"num_recycles,omitempty"`
+	Seed            *int     `json:"seed,omitempty"`
+	HotspotShowProp *float64 `json:"hotspot_show_prop,omitempty"`
+}
+
+// RFdiffusion2Params is the agent-facing RFdiffusion2 run configuration. It
+// drives RFdiffusion2's Hydra-config pipeline (rf_diffusion/benchmark/pipeline.py)
+// — backbone diffusion + idealization, then (when StopStep="end") inline
+// LigandMPNN sequence fitting + inline Chai-1 fold + metrics emission. Pointer
+// fields distinguish "unset" (omit the override, use the upstream default)
+// from a real zero value. It lives in internal/domain so a DesignPlan's
+// MethodConfig can carry it without an import cycle; internal/tools/design
+// references it under a package-local alias.
+type RFdiffusion2Params struct {
+	Benchmark                string `json:"benchmark,omitempty"`
+	MotifPDB                 string `json:"motif_pdb,omitempty"`
+	Contigs                  string `json:"contigs,omitempty"`
+	NumDesigns               int    `json:"num_designs,omitempty"`
+	Seed                     *int   `json:"seed,omitempty"`
+	GuidepostXYZAsDesignBB   *bool  `json:"guidepost_xyz_as_design_bb,omitempty"`
+	IdealizeSidechainOutputs *bool  `json:"idealize_sidechain_outputs,omitempty"`
+	StopStep                 string `json:"stop_step,omitempty"`
+}
+
+// LigandMPNNParams is the agent-facing LigandMPNN run configuration. Every
+// field maps to a `run.py` flag; fova owns the infra flags separately.
+// Pointer fields distinguish "unset" (omit the flag, use run.py's default)
+// from a real zero value. It lives in internal/domain so a DesignPlan's
+// MethodConfig can carry it without an import cycle; internal/tools/design
+// references it under a package-local alias.
+type LigandMPNNParams struct {
+	ModelType                 string   `json:"model_type,omitempty"`
+	PDB                       string   `json:"pdb"`
+	NumDesigns                int      `json:"num_designs,omitempty"`
+	BatchSize                 int      `json:"batch_size,omitempty"`
+	Temperature               *float64 `json:"temperature,omitempty"`
+	Seed                      *int     `json:"seed,omitempty"`
+	RedesignedResidues        string   `json:"redesigned_residues,omitempty"`
+	FixedResidues             string   `json:"fixed_residues,omitempty"`
+	ChainsToDesign            string   `json:"chains_to_design,omitempty"`
+	BiasAA                    string   `json:"bias_AA,omitempty"`
+	OmitAA                    string   `json:"omit_AA,omitempty"`
+	BiasAAPerResidue          string   `json:"bias_AA_per_residue,omitempty"`
+	OmitAAPerResidue          string   `json:"omit_AA_per_residue,omitempty"`
+	LigandUseAtomContext      *bool    `json:"ligand_use_atom_context,omitempty"`
+	LigandUseSideChainContext *bool    `json:"ligand_use_side_chain_context,omitempty"`
+	LigandCutoff              *float64 `json:"ligand_cutoff,omitempty"`
+	SymmetryResidues          string   `json:"symmetry_residues,omitempty"`
+	SymmetryWeights           string   `json:"symmetry_weights,omitempty"`
+	HomoOligomer              *bool    `json:"homo_oligomer,omitempty"`
+	GlobalTransmembraneLabel  *int     `json:"global_transmembrane_label,omitempty"`
+	TransmembraneBuried       string   `json:"transmembrane_buried,omitempty"`
+	TransmembraneInterface    string   `json:"transmembrane_interface,omitempty"`
+	PackSideChains            *bool    `json:"pack_side_chains,omitempty"`
+	NumberOfPacksPerDesign    int      `json:"number_of_packs_per_design,omitempty"`
+	PackWithLigandContext     *bool    `json:"pack_with_ligand_context,omitempty"`
+	RepackEverything          *bool    `json:"repack_everything,omitempty"`
 }
 
 // EvidenceEntry is one literature reference attached to a DesignPlan. Every

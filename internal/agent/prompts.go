@@ -1,23 +1,9 @@
 package agent
 
 import (
-	_ "embed"
 	"fmt"
 	"strings"
 )
-
-// systemPromptTemplate is the embedded markdown source containing the
-// {{COMMAND_CATALOGUE}} marker; render through BuildSystemPrompt to get the
-// fully-templated prompt for the LLM.
-//
-//go:embed prompts/system.md
-var systemPromptTemplate string
-
-// SystemPrompt is the rendered system prompt without a live slash-command
-// catalogue (the {{COMMAND_CATALOGUE}} marker resolves to an empty block).
-// Callers that own the live tui catalogue (cmd/fova/main.go) should call
-// BuildSystemPrompt instead so the agent sees ground truth on every turn.
-var SystemPrompt = BuildSystemPrompt(nil)
 
 // SlashSubcommand mirrors tui.Subcommand for the system-prompt catalogue —
 // kept in this package so the prompt builder does not import internal/tui
@@ -41,11 +27,11 @@ type SlashCommand struct {
 // command catalogue inside prompts/system.md.
 const catalogueMarker = "{{COMMAND_CATALOGUE}}"
 
-// BuildSystemPrompt renders the embedded system prompt with cat substituted
-// for the {{COMMAND_CATALOGUE}} marker. A nil or empty cat yields an empty
-// block — callers should pass tui.Commands() so the LLM stays grounded.
-func BuildSystemPrompt(cat []SlashCommand) string {
-	return strings.Replace(systemPromptTemplate, catalogueMarker, renderCatalogue(cat), 1)
+// BuildSystemPrompt renders template with cat substituted for the
+// {{COMMAND_CATALOGUE}} marker. template is the system.md source loaded by
+// internal/assets; a nil or empty cat yields an empty catalogue block.
+func BuildSystemPrompt(cat []SlashCommand, template string) string {
+	return strings.Replace(template, catalogueMarker, renderCatalogue(cat), 1)
 }
 
 // renderCatalogue formats cat as one row per command and one per sub-command,

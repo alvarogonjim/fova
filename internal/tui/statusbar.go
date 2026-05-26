@@ -16,6 +16,8 @@ type statusBarModel struct {
 	project    string
 	ctxPercent int
 	replay     string // "replay X/Y" — set only in replay mode
+
+	chatScrolledUp bool // chat viewport is not at the bottom — show a hint
 }
 
 func newStatusBarModel(th Theme) statusBarModel {
@@ -48,6 +50,9 @@ func (s statusBarModel) footerView() string {
 	hint := footerHintText
 	if s.replay != "" {
 		hint += "  ·  " + s.replay
+	}
+	if s.chatScrolledUp {
+		hint += "  ·  ↓ End for latest"
 	}
 	if s.width > 0 {
 		hint = clipRunes(hint, s.width)

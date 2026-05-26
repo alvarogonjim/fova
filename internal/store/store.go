@@ -30,13 +30,24 @@ type Store struct {
 	db *sql.DB
 }
 
+// sqliteDSN is the connection string applied to every per-project DB. WAL +
+// busy_timeout lets background job writers proceed concurrently with the
+// foreground; synchronous=NORMAL is the standard durability trade under WAL.
+const sqliteDSN = "file:%s?" +
+	"_pragma=foreign_keys(1)&" +
+	"_pragma=journal_mode(WAL)&" +
+	"_pragma=busy_timeout(5000)&" +
+	"_pragma=synchronous(NORMAL)"
+
 // Open opens (creating if needed) the SQLite database at dbPath, applies the
 // schema idempotently, and ensures the default project row exists.
 func Open(dbPath string) (*Store, error) {
-	db, err := sql.Open("sqlite", "file:"+dbPath+"?_pragma=foreign_keys(1)")
+	db, err := sql.Open("sqlite", fmt.Sprintf(sqliteDSN, dbPath))
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite: %w", err)
 	}
+	// Bound the pool — background job goroutines plus the TUI's reads.
+	db.SetMaxOpenConns(8)
 	if _, err := db.Exec(schemaSQL); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("apply schema: %w", err)
@@ -45,10 +56,6 @@ func Open(dbPath string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("migrate schema: %w", err)
 	}
-	// One connection: SQLite serializes writers anyway, and a single-user TUI
-	// has no need for a pool. This eliminates SQLITE_BUSY when several job
-	// goroutines write concurrently.
-	db.SetMaxOpenConns(1)
 	s := &Store{db: db}
 	if err := s.ensureDefaultProject(filepath.Dir(dbPath)); err != nil {
 		db.Close()

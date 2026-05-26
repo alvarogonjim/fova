@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 240" width="160" height="192" role="img" aria-label="fova folded-F mark">
+  <title>fova</title>
+  <rect width="200" height="240" rx="46" fill="#0d1f15"/>
+  <path d="M52 38V206" stroke="#7fc14a" stroke-width="17" stroke-linecap="round" fill="none"/>
+  <path d="M52 90H150" stroke="#7fc14a" stroke-width="17" stroke-linecap="round" fill="none"/>
+  <path d="M52 142H112" stroke="#7fc14a" stroke-width="17" stroke-linecap="round" fill="none"/>
+  <circle cx="150" cy="90" r="16" fill="#EF9F27"/>
+</svg>

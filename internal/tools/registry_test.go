@@ -67,3 +67,74 @@ func TestSafeJoin(t *testing.T) {
 		t.Error("absolute path escaping the workspace was allowed")
 	}
 }
+
+// concurrentTool implements both Tool and Concurrent (Concurrent()=true).
+type concurrentTool struct{}
+
+func (concurrentTool) Name() string                { return "fake.concurrent" }
+func (concurrentTool) Description() string         { return "" }
+func (concurrentTool) InputSchema() map[string]any { return map[string]any{} }
+func (concurrentTool) Execute(_ context.Context, _ json.RawMessage) (Result, error) {
+	return Result{}, nil
+}
+func (concurrentTool) RequiresConfirmation(json.RawMessage) bool       { return false }
+func (concurrentTool) EstimatedCostUSD(json.RawMessage) float64        { return 0 }
+func (concurrentTool) EstimatedDuration(json.RawMessage) time.Duration { return 0 }
+func (concurrentTool) Concurrent() bool                                { return true }
+
+// serialTool implements Tool but NOT Concurrent.
+type serialTool struct{}
+
+func (serialTool) Name() string                                                 { return "fake.serial" }
+func (serialTool) Description() string                                          { return "" }
+func (serialTool) InputSchema() map[string]any                                  { return map[string]any{} }
+func (serialTool) Execute(_ context.Context, _ json.RawMessage) (Result, error) { return Result{}, nil }
+func (serialTool) RequiresConfirmation(json.RawMessage) bool                    { return false }
+func (serialTool) EstimatedCostUSD(json.RawMessage) float64                     { return 0 }
+func (serialTool) EstimatedDuration(json.RawMessage) time.Duration              { return 0 }
+
+func TestIsConcurrent(t *testing.T) {
+	if !IsConcurrent(concurrentTool{}) {
+		t.Errorf("IsConcurrent(concurrentTool) = false, want true")
+	}
+	if IsConcurrent(serialTool{}) {
+		t.Errorf("IsConcurrent(serialTool) = true, want false")
+	}
+}
+
+func TestSpecsCachedAcrossCalls(t *testing.T) {
+	r := NewRegistry()
+	r.Register(concurrentTool{})
+	r.Register(serialTool{})
+
+	a := r.Specs()
+	b := r.Specs()
+
+	if len(a) != 2 || len(b) != 2 {
+		t.Fatalf("Specs() len: a=%d b=%d, want 2 each", len(a), len(b))
+	}
+	// Same backing array — confirms the cache wasn't rebuilt.
+	if &a[0] != &b[0] {
+		t.Errorf("Specs() rebuilt the slice on the second call; want cached")
+	}
+}
+
+func TestSpecsInvalidatedOnRegister(t *testing.T) {
+	r := NewRegistry()
+	r.Register(concurrentTool{})
+
+	a := r.Specs()
+	if len(a) != 1 {
+		t.Fatalf("initial Specs len = %d, want 1", len(a))
+	}
+
+	r.Register(serialTool{})
+
+	b := r.Specs()
+	if len(b) != 2 {
+		t.Errorf("post-Register Specs len = %d, want 2", len(b))
+	}
+	if len(a) > 0 && len(b) > 0 && &a[0] == &b[0] {
+		t.Errorf("Specs() returned the stale cached slice after Register")
+	}
+}

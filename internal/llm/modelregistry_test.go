@@ -4,18 +4,19 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/alvarogonjim/fova/internal/config"
+	"github.com/alvarogonjim/fova/internal/assets"
+	"github.com/alvarogonjim/fova/internal/secrets"
 )
 
 func TestModelRegistryListsModels(t *testing.T) {
-	mr := NewModelRegistry(config.DefaultCatalog())
+	mr := NewModelRegistry(assets.DefaultCatalog())
 	if len(mr.Models()) == 0 {
 		t.Fatal("model registry is empty")
 	}
 }
 
 func TestModelRegistrySetModel(t *testing.T) {
-	mr := NewModelRegistry(config.DefaultCatalog())
+	mr := NewModelRegistry(assets.DefaultCatalog())
 	models := mr.Models()
 	target := models[len(models)-1]
 	if err := mr.SetModel(target.ID); err != nil {
@@ -30,9 +31,9 @@ func TestModelRegistrySetModel(t *testing.T) {
 }
 
 func TestModelRegistryReloadPreservesActive(t *testing.T) {
-	cat := config.Catalog{
-		Providers: []config.Provider{{Name: "local", Kind: "ollama"}},
-		Models: []config.Model{
+	cat := assets.Catalog{
+		Providers: []assets.Provider{{Name: "local", Kind: "ollama"}},
+		Models: []assets.Model{
 			{ID: "a", Provider: "local"},
 			{ID: "b", Provider: "local"},
 		},
@@ -41,9 +42,9 @@ func TestModelRegistryReloadPreservesActive(t *testing.T) {
 	if err := mr.SetModel("b"); err != nil {
 		t.Fatalf("SetModel: %v", err)
 	}
-	mr.Reload(config.Catalog{
-		Providers: []config.Provider{{Name: "local", Kind: "ollama"}},
-		Models:    []config.Model{{ID: "a", Provider: "local"}, {ID: "b", Provider: "local"}, {ID: "c", Provider: "local"}},
+	mr.Reload(assets.Catalog{
+		Providers: []assets.Provider{{Name: "local", Kind: "ollama"}},
+		Models:    []assets.Model{{ID: "a", Provider: "local"}, {ID: "b", Provider: "local"}, {ID: "c", Provider: "local"}},
 	})
 	if got := mr.ActiveModel(); got != "b" {
 		t.Fatalf("Reload dropped active model; got %q, want %q", got, "b")
@@ -54,17 +55,17 @@ func TestModelRegistryReloadPreservesActive(t *testing.T) {
 }
 
 func TestModelRegistryReloadFallsBackWhenActiveRemoved(t *testing.T) {
-	cat := config.Catalog{
-		Providers: []config.Provider{{Name: "local", Kind: "ollama"}},
-		Models:    []config.Model{{ID: "a", Provider: "local"}, {ID: "gone", Provider: "local"}},
+	cat := assets.Catalog{
+		Providers: []assets.Provider{{Name: "local", Kind: "ollama"}},
+		Models:    []assets.Model{{ID: "a", Provider: "local"}, {ID: "gone", Provider: "local"}},
 	}
 	mr := NewModelRegistry(cat)
 	if err := mr.SetModel("gone"); err != nil {
 		t.Fatalf("SetModel: %v", err)
 	}
-	mr.Reload(config.Catalog{
-		Providers: []config.Provider{{Name: "local", Kind: "ollama"}},
-		Models:    []config.Model{{ID: "a", Provider: "local"}},
+	mr.Reload(assets.Catalog{
+		Providers: []assets.Provider{{Name: "local", Kind: "ollama"}},
+		Models:    []assets.Model{{ID: "a", Provider: "local"}},
 	})
 	if got := mr.ActiveModel(); got != "a" {
 		t.Fatalf("Reload should fall back to default when active model removed; got %q, want %q", got, "a")
@@ -72,7 +73,7 @@ func TestModelRegistryReloadFallsBackWhenActiveRemoved(t *testing.T) {
 }
 
 func TestModelRegistryHasOllamaModel(t *testing.T) {
-	mr := NewModelRegistry(config.DefaultCatalog())
+	mr := NewModelRegistry(assets.DefaultCatalog())
 	for _, m := range mr.Models() {
 		if m.ProviderName == "ollama" {
 			return
@@ -84,7 +85,7 @@ func TestModelRegistryHasOllamaModel(t *testing.T) {
 // TestModelRegistryConcurrentAccess exercises Provider, SetModel and
 // ActiveModel from many goroutines; it must pass under `go test -race`.
 func TestModelRegistryConcurrentAccess(t *testing.T) {
-	mr := NewModelRegistry(config.DefaultCatalog())
+	mr := NewModelRegistry(assets.DefaultCatalog())
 	models := mr.Models()
 
 	var wg sync.WaitGroup
@@ -106,7 +107,7 @@ func TestModelRegistryConcurrentAccess(t *testing.T) {
 }
 
 func TestModelRegistryHasGoogleProvider(t *testing.T) {
-	mr := NewModelRegistry(config.DefaultCatalog())
+	mr := NewModelRegistry(assets.DefaultCatalog())
 	var googleID string
 	for _, m := range mr.Models() {
 		if m.ProviderName == "google" {
@@ -130,7 +131,7 @@ func TestModelRegistryHasGoogleProvider(t *testing.T) {
 }
 
 func TestModelRegistryHasVLLMProvider(t *testing.T) {
-	mr := NewModelRegistry(config.DefaultCatalog())
+	mr := NewModelRegistry(assets.DefaultCatalog())
 	var vllmID string
 	for _, m := range mr.Models() {
 		if m.ProviderName == "vllm" {
@@ -154,11 +155,11 @@ func TestModelRegistryHasVLLMProvider(t *testing.T) {
 }
 
 func TestModelRegistryBuildsAnthropicProvider(t *testing.T) {
-	cat := config.Catalog{
-		Providers: []config.Provider{
+	cat := assets.Catalog{
+		Providers: []assets.Provider{
 			{Name: "anthropic", Kind: "anthropic", APIKeyEnv: "ANTHROPIC_API_KEY"},
 		},
-		Models: []config.Model{
+		Models: []assets.Model{
 			{ID: "claude-x", Provider: "anthropic", SupportsTools: true},
 		},
 	}
@@ -174,12 +175,12 @@ func TestModelRegistryBuildsAnthropicProvider(t *testing.T) {
 
 func TestModelRegistryDefaultPicksReadyProvider(t *testing.T) {
 	// Model 0's provider needs a key (unset here); model 1's provider needs none.
-	cat := config.Catalog{
-		Providers: []config.Provider{
+	cat := assets.Catalog{
+		Providers: []assets.Provider{
 			{Name: "cloud", Kind: "openai", BaseURL: "https://x/v1", APIKeyEnv: "TEST_KEY_DEFINITELY_UNSET"},
 			{Name: "local", Kind: "openai", BaseURL: "http://localhost:1/v1"},
 		},
-		Models: []config.Model{
+		Models: []assets.Model{
 			{ID: "cloud-m", Provider: "cloud", SupportsTools: true},
 			{ID: "local-m", Provider: "local", SupportsTools: true},
 		},
@@ -191,8 +192,8 @@ func TestModelRegistryDefaultPicksReadyProvider(t *testing.T) {
 }
 
 func TestModelRegistrySelectDefaultModel(t *testing.T) {
-	mr := NewModelRegistry(config.DefaultCatalog())
-	if err := mr.SelectDefault(config.DefaultsConfig{Model: "gpt-4o"}); err != nil {
+	mr := NewModelRegistry(assets.DefaultCatalog())
+	if err := mr.SelectDefault(assets.DefaultsConfig{Model: "gpt-4o"}); err != nil {
 		t.Fatalf("SelectDefault: %v", err)
 	}
 	if mr.ActiveModel() != "gpt-4o" {
@@ -201,8 +202,8 @@ func TestModelRegistrySelectDefaultModel(t *testing.T) {
 }
 
 func TestModelRegistrySelectDefaultProvider(t *testing.T) {
-	mr := NewModelRegistry(config.DefaultCatalog())
-	if err := mr.SelectDefault(config.DefaultsConfig{Provider: "google"}); err != nil {
+	mr := NewModelRegistry(assets.DefaultCatalog())
+	if err := mr.SelectDefault(assets.DefaultsConfig{Provider: "google"}); err != nil {
 		t.Fatalf("SelectDefault: %v", err)
 	}
 	if mr.ActiveProviderName() != "google" {
@@ -211,19 +212,19 @@ func TestModelRegistrySelectDefaultProvider(t *testing.T) {
 }
 
 func TestModelRegistrySelectDefaultUnknown(t *testing.T) {
-	mr := NewModelRegistry(config.DefaultCatalog())
-	if err := mr.SelectDefault(config.DefaultsConfig{Model: "no-such-model"}); err == nil {
+	mr := NewModelRegistry(assets.DefaultCatalog())
+	if err := mr.SelectDefault(assets.DefaultsConfig{Model: "no-such-model"}); err == nil {
 		t.Error("expected an error for an unknown default model")
 	}
-	if err := mr.SelectDefault(config.DefaultsConfig{Provider: "no-such-provider"}); err == nil {
+	if err := mr.SelectDefault(assets.DefaultsConfig{Provider: "no-such-provider"}); err == nil {
 		t.Error("expected an error for an unknown default provider")
 	}
 }
 
 func TestModelRegistrySelectDefaultAutoIsNoop(t *testing.T) {
-	mr := NewModelRegistry(config.DefaultCatalog())
+	mr := NewModelRegistry(assets.DefaultCatalog())
 	before := mr.ActiveModel()
-	if err := mr.SelectDefault(config.DefaultsConfig{Provider: "auto"}); err != nil {
+	if err := mr.SelectDefault(assets.DefaultsConfig{Provider: "auto"}); err != nil {
 		t.Fatalf("SelectDefault: %v", err)
 	}
 	if mr.ActiveModel() != before {
@@ -231,10 +232,37 @@ func TestModelRegistrySelectDefaultAutoIsNoop(t *testing.T) {
 	}
 }
 
+func TestResolveKeyEnvWins(t *testing.T) {
+	defer secrets.UseInMemoryKeyring()()
+	_ = secrets.Set("anthropic-api-key", "from-keychain")
+	t.Setenv("TEST_ANTHROPIC_KEY", "from-env")
+	p := assets.Provider{Name: "anthropic", APIKeyEnv: "TEST_ANTHROPIC_KEY"}
+	if got := resolveKey(p); got != "from-env" {
+		t.Errorf("resolveKey = %q, want from-env", got)
+	}
+}
+
+func TestResolveKeyFallsBackToKeychain(t *testing.T) {
+	defer secrets.UseInMemoryKeyring()()
+	_ = secrets.Set("anthropic-api-key", "from-keychain")
+	p := assets.Provider{Name: "anthropic", APIKeyEnv: "TEST_ANTHROPIC_KEY_UNSET"}
+	if got := resolveKey(p); got != "from-keychain" {
+		t.Errorf("resolveKey = %q, want from-keychain", got)
+	}
+}
+
+func TestResolveKeyNoneAvailable(t *testing.T) {
+	defer secrets.UseInMemoryKeyring()()
+	p := assets.Provider{Name: "openai", APIKeyEnv: "TEST_OPENAI_KEY_UNSET"}
+	if got := resolveKey(p); got != "" {
+		t.Errorf("resolveKey = %q, want empty", got)
+	}
+}
+
 func TestModelRegistryCostUSD(t *testing.T) {
-	cat := config.Catalog{
-		Providers: []config.Provider{{Name: "p", Kind: "anthropic"}},
-		Models: []config.Model{
+	cat := assets.Catalog{
+		Providers: []assets.Provider{{Name: "p", Kind: "anthropic"}},
+		Models: []assets.Model{
 			{ID: "priced", Provider: "p", InputPricePer1M: 3, OutputPricePer1M: 15},
 			{ID: "free", Provider: "p", InputPricePer1M: 0, OutputPricePer1M: 0},
 		},

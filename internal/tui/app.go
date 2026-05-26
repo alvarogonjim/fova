@@ -16,16 +16,18 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/alvarogonjim/fova/internal/agent"
+	"github.com/alvarogonjim/fova/internal/assets"
 	"github.com/alvarogonjim/fova/internal/backends/local"
-	"github.com/alvarogonjim/fova/internal/config"
 	"github.com/alvarogonjim/fova/internal/domain"
 	jobmgr "github.com/alvarogonjim/fova/internal/jobs"
 	"github.com/alvarogonjim/fova/internal/llm"
 	"github.com/alvarogonjim/fova/internal/replay"
 	"github.com/alvarogonjim/fova/internal/safety"
+	"github.com/alvarogonjim/fova/internal/skills"
 	"github.com/alvarogonjim/fova/internal/store"
 	"github.com/alvarogonjim/fova/internal/tools"
 	"github.com/alvarogonjim/fova/internal/tools/lab"
+	"github.com/alvarogonjim/fova/internal/tools/plan"
 	"github.com/alvarogonjim/fova/internal/version"
 )
 
@@ -37,12 +39,13 @@ const (
 	overlayConfirm
 	overlaySubmit
 	overlayPicker
-	overlayJobLog
+	overlayDetail
 	overlayKeys
+	overlayWizard
 )
 
-// panelFocus is which pane Tab-cycling currently targets (used for the
-// narrow-terminal single-pane layout).
+// panelFocus is which pane the Tab focus ring currently targets — the chat
+// or one of the three side panels.
 type panelFocus int
 
 const (
@@ -54,6 +57,24 @@ const (
 
 // refreshMsg triggers a reload of the jobs and designs panels from the store.
 type refreshMsg struct{}
+
+// streamFlushMsg fires ~30 FPS while a turn is streaming, draining the
+// chat's pendingDelta buffer into a single refresh per tick. The cadence
+// is set to ~33ms so the user sees fluid token-by-token feedback without
+// paying the per-token viewport-copy + lipgloss + terminal-redraw cost.
+// Forced flushes on TurnDoneMsg / TurnErrorMsg make the end-of-turn state
+// exact even if the last tokens arrive between ticks (perf-batch-2 §6).
+type streamFlushMsg struct{}
+
+// streamFlushInterval is the streaming-tick cadence (~30 FPS).
+const streamFlushInterval = 33 * time.Millisecond
+
+// scheduleStreamFlush returns a command that fires a streamFlushMsg after
+// streamFlushInterval. Re-issued by the streamFlushMsg handler as long as
+// a turn is running, then halted at TurnDoneMsg / TurnErrorMsg.
+func scheduleStreamFlush() tea.Cmd {
+	return tea.Tick(streamFlushInterval, func(time.Time) tea.Msg { return streamFlushMsg{} })
+}
 
 // Model is the root Bubble Tea model.
 type Model struct {
@@ -76,8 +97,9 @@ type Model struct {
 	lab     labModel
 	focus   panelFocus
 
-	jobLog       jobLogView   // full-screen log view for the Tab-focused job
-	jobLogID     string       // ID of the job shown in jobLog ("" = none)
+	detail       detailView   // full-screen log view for the Tab-focused job
+	detailID     string       // ID of the job shown in detail ("" = none)
+	detailKind   panelFocus   // which panel the open detail view came from
 	sessionStart time.Time    // jobs created before this aren't blocked into chat
 	sessionCost  float64      // running LLM cost for this TUI session, in USD
 	budgetLimit  float64      // [budget].session_soft_limit_usd; 0 = no limit
@@ -88,9 +110,15 @@ type Model struct {
 	registry     *tools.Registry
 	models       *llm.ModelRegistry
 	systemPrompt string
-	session      *agent.Session   // one session for the whole TUI lifetime
-	store        *store.Store     // nil → persistence disabled
-	sessionID    domain.SessionID // current persisted session
+	skillLoader  *skills.Loader // backs the skills.list/read tools and /skills
+	assetReport  assets.Report  // validation Report from the last assets.Load()
+	// pendingAssetPath is the file an in-flight /skills or /config edit is
+	// editing; pendingAssetReload requests a bundle reload when it closes.
+	pendingAssetPath   string
+	pendingAssetReload bool
+	session            *agent.Session   // one session for the whole TUI lifetime
+	store              *store.Store     // nil → persistence disabled
+	sessionID          domain.SessionID // current persisted session
 
 	jobMgr    *jobmgr.Manager // async job manager (install / deploy / design jobs)
 	localReg  *local.Registry // installable-tool registry
@@ -101,11 +129,17 @@ type Model struct {
 	// real local installer; tests override it.
 	installFn func(ctx context.Context, name string, log io.Writer) error
 
-	bus       chan tea.Msg // agent → TUI
-	confirmCh chan bool    // TUI → agent (modal result)
+	bus       chan tea.Msg      // agent → TUI
+	confirmCh chan confirmReply // TUI → agent (modal result + optional edited input)
 
 	turnCancel context.CancelFunc
 	running    bool
+
+	// streamFlushScheduled is set on the first TextDeltaMsg of a streaming
+	// burst to ensure exactly one tea.Tick chain is in flight at a time. The
+	// streamFlushMsg handler clears it (and stops chaining) once a turn
+	// ends. See perf-batch-2 §6.
+	streamFlushScheduled bool
 
 	overlay overlay
 	modal   modalModel
@@ -113,10 +147,37 @@ type Model struct {
 	picker  *pickerModel
 	keys    keysOverlay // /keys overlay state (just a placeholder marker)
 
+	wizard *wizardModel // /onboarding wizard overlay; nil unless open
+
 	// pendingTool / pendingInput hold the tool context from a ConfirmContextMsg
 	// until the paired ConfirmRequestMsg arrives.
 	pendingTool  string
 	pendingInput json.RawMessage
+
+	// Editable-confirmation-gate state (spec §3.3 / §3.4). All four fields
+	// are scoped to a single overlayConfirm cycle and reset on every modal
+	// exit path (accept, decline, cancel).
+	//
+	// pendingInputPath is the workspace path of the pending JSON file the
+	// user is editing; "" means no edit is in flight. pendingEdited carries
+	// the validated edited bytes that get submitted on [y]; nil means
+	// "accept the original proposal as-is". pendingValidator is the tool's
+	// optional tools.Validator, resolved from the registry at modal-open
+	// time; nil for tools that don't opt in.
+	pendingInputPath string
+	pendingEdited    json.RawMessage
+	pendingValidator tools.Validator
+
+	// pendingInputDir resolves the workspace directory used to root the
+	// pending-input file. Defaults to workspaceFromHome(m.fovaHome);
+	// tests inject t.TempDir() to avoid touching the real workspace.
+	pendingInputDir func() string
+
+	// openEditorFile is the editor-handoff entrypoint used by the editable
+	// confirmation gate. Defaults to openEditorFileCmd; tests inject a fake
+	// that posts editorFileDoneMsg immediately so the message loop drives
+	// the edit cycle without exec-ing a real editor.
+	openEditorFile func(path, initial string) tea.Cmd
 
 	thinking      thinkingModel   // animated "thinking" indicator (SPECS §10.7.4)
 	slashMenu     *slashMenuModel // slash-command autocomplete popup (§10.7.3)
@@ -139,11 +200,13 @@ type Deps struct {
 	Registry           *tools.Registry
 	Models             *llm.ModelRegistry
 	SystemPrompt       string
+	SkillLoader        *skills.Loader
+	AssetReport        assets.Report
 	Store              *store.Store
 	Jobs               *jobmgr.Manager
 	Local              *local.Registry
 	FovaHome           string
-	ConfigDir          string       // <ConfigDir>, used by /theme writeback; "" falls back to config.ConfigDir()
+	ConfigDir          string       // <ConfigDir>, used by /theme writeback; "" falls back to assets.Dir()
 	WebhookPort        int          // Adaptyv webhook receiver port; 0 disables it
 	WebhookURL         string       // Adaptyv callback URL (config-derived)
 	BudgetLimitUSD     float64      // [budget].session_soft_limit_usd; 0 = no limit
@@ -169,6 +232,8 @@ func New(d Deps) *Model {
 		registry:     d.Registry,
 		models:       d.Models,
 		systemPrompt: d.SystemPrompt,
+		skillLoader:  d.SkillLoader,
+		assetReport:  d.AssetReport,
 		session:      agent.NewSession(d.SystemPrompt),
 		store:        d.Store,
 		jobMgr:       d.Jobs,
@@ -176,12 +241,16 @@ func New(d Deps) *Model {
 		fovaHome:     d.FovaHome,
 		configDir:    d.ConfigDir,
 		bus:          make(chan tea.Msg, 256),
-		confirmCh:    make(chan bool, 1),
+		confirmCh:    make(chan confirmReply, 1),
 	}
 	m.jobs = newJobsModel(th)
 	m.designs = newDesignsModel(th)
 	m.lab = newLabModel(th)
-	m.jobLog = newJobLogView(th)
+	// Editable-confirmation-gate hooks. Both have production defaults;
+	// tests replace them per case.
+	m.pendingInputDir = func() string { return workspaceFromHome(m.fovaHome) }
+	m.openEditorFile = openEditorFileCmd
+	m.detail = newDetailView(th)
 	m.keys = newKeysOverlay()
 	m.slashMenu = newSlashMenu()
 	m.sessionStart = time.Now().UTC()
@@ -211,6 +280,7 @@ func New(d Deps) *Model {
 			_ = lab.StartReceiver(context.Background(), d.WebhookPort, d.Store, m.bus)
 		}()
 	}
+	m.syncPanelFocus()
 	return m
 }
 
@@ -327,6 +397,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case refreshMsg:
 		m.reloadPanels()
 		m.refreshJobLogs()
+		m.refreshDetail()
 		return m, m.scheduleRefresh()
 
 	case spinnerTickMsg:
@@ -337,19 +408,42 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case streamFlushMsg:
+		// 30 FPS streaming-tick coalescer (perf-batch-2 §6): drain the
+		// chat's pendingDelta buffer into a single refresh. Chain the next
+		// tick only while a turn is actually running so the ticker stops
+		// itself naturally at end-of-turn.
+		m.chat.flushPendingDelta()
+		if m.running {
+			return m, scheduleStreamFlush()
+		}
+		m.streamFlushScheduled = false
+		return m, nil
+
+	case tea.MouseMsg:
+		m.chat.handleMouse(msg)
+		return m, nil
+
 	// --- agent bus messages ---
 	case agent.TextDeltaMsg:
+		// Buffer the token; the chain of streamFlushMsg ticks (kicked off
+		// here on the first delta of a streaming burst) drains the buffer
+		// at ~30 FPS. See perf-batch-2 §6.
 		m.chat.appendAgentDelta(msg.Delta)
+		if !m.streamFlushScheduled {
+			m.streamFlushScheduled = true
+			return m, tea.Batch(m.waitForBus(), scheduleStreamFlush())
+		}
 		return m, m.waitForBus()
 	case agent.ToolStartMsg:
 		m.thinking.verb = verbForTool(msg.Name)
-		m.chat.appendToolStart(msg.Name)
+		m.chat.appendToolStartWithID(msg.ID, msg.Name)
 		return m, m.waitForBus()
 	case agent.ToolDoneMsg:
 		if msg.Err != nil {
-			m.chat.appendToolDone(msg.Name, "error: "+msg.Err.Error())
+			m.chat.appendToolDoneWithID(msg.ID, msg.Name, "error: "+msg.Err.Error())
 		} else {
-			m.chat.appendToolDone(msg.Name, msg.Display)
+			m.chat.appendToolDoneWithID(msg.ID, msg.Name, msg.Display)
 		}
 		return m, m.waitForBus()
 	case agent.ConfirmContextMsg:
@@ -359,11 +453,32 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.pendingTool == "lab.submit_experiment" {
 			m.submit = buildSubmitModal(m.pendingInput, m.webhookURL)
 			m.overlay = overlaySubmit
+			// Bespoke surface manages its own state; keep pendingTool /
+			// pendingInput populated only for the generic path so the
+			// editable gate has them when the user presses [e].
+			m.pendingTool, m.pendingInput = "", nil
+			m.pendingEdited = nil
+			m.pendingInputPath = ""
+			m.pendingValidator = nil
 		} else {
-			m.modal = modalModel{prompt: msg.Prompt}
+			// Resolve the optional Validator at modal-open time so a [e] →
+			// edit → save cycle can revalidate without re-looking it up.
+			m.pendingValidator = nil
+			if m.registry != nil {
+				if t, ok := m.registry.Get(m.pendingTool); ok {
+					if v, ok := t.(tools.Validator); ok {
+						m.pendingValidator = v
+					}
+				}
+			}
+			m.pendingEdited = nil
+			m.pendingInputPath = ""
+			m.modal = modalModel{
+				prompt:   renderJSONModal(m.pendingTool, m.pendingInput, false, m.theme, m.width, 15),
+				editable: true,
+			}
 			m.overlay = overlayConfirm
 		}
-		m.pendingTool, m.pendingInput = "", nil
 		return m, m.waitForBus()
 	case agent.ReasoningDeltaMsg:
 		// Chain-of-thought is dropped in v0.5 — the spinning "Thinking…"
@@ -371,6 +486,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// surface this in a collapsible block.
 		return m, m.waitForBus()
 	case agent.TurnDoneMsg:
+		// Force a final flush so any tokens that arrived after the last
+		// streamFlushMsg tick are rendered before we mark the turn done
+		// (perf-batch-2 §6). Then stop the tick chain.
+		m.chat.flushPendingDelta()
+		m.streamFlushScheduled = false
 		m.running = false
 		m.turnCancel = nil
 		m.thinking.stop()
@@ -378,6 +498,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.addTurnCost(msg.Usage)
 		return m, m.waitForBus()
 	case agent.TurnErrorMsg:
+		// Same end-of-turn invariant as TurnDoneMsg — flush before we draw
+		// the error so any in-flight tokens are visible alongside it.
+		m.chat.flushPendingDelta()
+		m.streamFlushScheduled = false
 		m.running = false
 		m.turnCancel = nil
 		m.thinking.stop()
@@ -398,6 +522,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case replayDoneMsg:
 		m.updateReplayStatus()
 		return m, m.waitForBus()
+	case wizardDoneMsg:
+		return m.finishWizardOverlay(msg)
 	case editorDoneMsg:
 		if msg.Err != nil {
 			m.chat.appendError("editor: " + msg.Err.Error())
@@ -407,6 +533,26 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.cmdbar.refreshHeight() {
 				m.layout()
 			}
+		}
+		return m, nil
+	case editorFileDoneMsg:
+		// Editable confirmation gate: when an edit on the pending-input file
+		// closes, run the validate/re-render loop and keep the modal open.
+		// This branch must come first so it short-circuits before the asset
+		// editor branch picks up the same message type.
+		if m.overlay == overlayConfirm && m.pendingInputPath != "" {
+			return m.handleConfirmEditDone(msg)
+		}
+		if msg.Err != nil {
+			m.chat.appendError("editor: " + msg.Err.Error())
+			m.pendingAssetReload = false
+			m.pendingAssetPath = ""
+			return m, nil
+		}
+		if m.pendingAssetReload {
+			m.pendingAssetReload = false
+			m.pendingAssetPath = ""
+			return m.cmdReload()
 		}
 		return m, nil
 	}
@@ -427,17 +573,40 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		switch msg.String() {
 		case "y", "Y":
 			m.overlay = overlayNone
-			m.confirmCh <- true
+			edited := m.pendingEdited
+			m.resetPendingConfirm()
+			// pendingEdited is non-nil only when the user opened the editor
+			// and produced bytes that passed validation; otherwise the loop
+			// receives a zero-length slice and submits the original input.
+			m.confirmCh <- confirmReply{accepted: true, input: edited}
 		case "n", "N", "esc":
 			m.overlay = overlayNone
-			m.confirmCh <- false
+			m.resetPendingConfirm()
+			m.confirmCh <- confirmReply{accepted: false}
+		case "e", "E":
+			// Only the generic editable modal opts in; the bespoke submit
+			// overlay keeps its own [r] review flow per spec §3.5.
+			if m.overlay != overlayConfirm || !m.modal.editable || m.pendingTool == "" {
+				return m, nil
+			}
+			path := m.pendingInputPath
+			if path == "" {
+				path = pendingInputPath(m.pendingInputDir(), m.pendingTool)
+			}
+			if err := writePendingInput(path, m.pendingTool, m.pendingInput, ""); err != nil {
+				m.chat.appendError("edit: " + err.Error())
+				return m, nil
+			}
+			m.pendingInputPath = path
+			return m, m.openEditorFile(path, "")
 		case "ctrl+c":
 			m.overlay = overlayNone
 			m.chat.appendError("cancelled")
 			if m.turnCancel != nil {
 				m.turnCancel()
 			}
-			m.confirmCh <- false
+			m.resetPendingConfirm()
+			m.confirmCh <- confirmReply{accepted: false}
 		}
 		return m, nil
 	case overlayPicker:
@@ -459,12 +628,13 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 		}
 		return m, nil
-	case overlayJobLog:
+	case overlayDetail:
 		switch msg.Type {
-		case tea.KeyTab:
-			m.cycleFocus()
 		case tea.KeyEsc:
-			m.overlay, m.focus, m.jobLogID = overlayNone, focusChat, ""
+			m.overlay = overlayNone // keep the originating panel focus
+		case tea.KeyTab:
+			m.overlay = overlayNone
+			m.cycleFocus()
 		case tea.KeyCtrlD:
 			return m, tea.Quit
 		case tea.KeyCtrlC:
@@ -473,7 +643,7 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.chat.appendError("cancelled")
 			}
 		default:
-			m.jobLog = m.jobLog.update(msg)
+			m.detail = m.detail.update(msg)
 		}
 		return m, nil
 	case overlayKeys:
@@ -486,6 +656,49 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 		}
 		return m, nil
+	case overlayWizard:
+		if m.wizard == nil {
+			m.overlay = overlayNone
+			return m, nil
+		}
+		_, cmd := m.wizard.Update(msg)
+		return m, cmd
+	}
+
+	// When a side panel holds focus, it owns the keyboard: arrows move the
+	// row selection, Tab/Esc move focus, Enter opens the detail view. The
+	// message input is inactive.
+	if m.focus != focusChat {
+		switch msg.Type {
+		case tea.KeyUp:
+			m.panelSelectUp()
+			return m, nil
+		case tea.KeyDown:
+			m.panelSelectDown()
+			return m, nil
+		case tea.KeyEnter:
+			return m, m.openDetail()
+		case tea.KeyTab:
+			m.cycleFocus()
+			return m, nil
+		case tea.KeyEsc:
+			m.focus = focusChat
+			m.syncPanelFocus()
+			return m, nil
+		case tea.KeyCtrlD:
+			return m, tea.Quit
+		case tea.KeyCtrlC:
+			if m.running && m.turnCancel != nil {
+				m.turnCancel()
+				m.chat.appendError("cancelled")
+			}
+			return m, nil
+		}
+		if msg.Type == tea.KeyRunes && len(msg.Runes) == 1 && msg.Runes[0] == '?' {
+			m.overlay = overlayKeys
+			return m, nil
+		}
+		return m, nil // swallow every other key — the input is inactive
 	}
 
 	// The slash-command autocomplete popup, when open, captures navigation keys.
@@ -702,10 +915,87 @@ func (m *Model) startTurn(input string) (tea.Model, tea.Cmd) {
 	return m, spinnerTick()
 }
 
+// confirmReply is the TUI → agent reply written on confirmCh. accepted carries
+// the user's decision; input is the edited bytes when the user accepted after
+// editing, or nil when accepted-as-proposed or declined.
+type confirmReply struct {
+	accepted bool
+	input    json.RawMessage
+}
+
 // confirmFn is passed to the loop; it asks the TUI and blocks for the answer.
-func (m *Model) confirmFn(prompt string) bool {
+// The original tool name + input arrive via ConfirmContextMsg ahead of the
+// ConfirmRequestMsg, so the TUI can render a tool-specific surface without
+// re-parsing the prompt string. The returned input is non-nil only when the
+// user edited the proposal before accepting.
+func (m *Model) confirmFn(prompt, name string, input json.RawMessage) (bool, json.RawMessage) {
 	m.bus <- agent.ConfirmRequestMsg{Prompt: prompt}
-	return <-m.confirmCh
+	r := <-m.confirmCh
+	return r.accepted, r.input
+}
+
+// resetPendingConfirm clears every editable-confirmation-gate field and best-
+// effort removes the pending-input file. Called from every modal exit path —
+// accept, decline, esc, and ctrl+c cancel — so a stale pending state never
+// leaks into the next overlayConfirm cycle.
+func (m *Model) resetPendingConfirm() {
+	if m.pendingInputPath != "" {
+		removePendingInput(m.pendingInputPath)
+	}
+	m.pendingTool = ""
+	m.pendingInput = nil
+	m.pendingEdited = nil
+	m.pendingInputPath = ""
+	m.pendingValidator = nil
+}
+
+// handleConfirmEditDone runs after the user closes $EDITOR on the pending
+// JSON file. It reads the file, strips `// ...` comments, then checks that
+// the body is well-formed JSON; if a Validator was resolved at modal-open
+// time it runs that too. On any failure the pending file is rewritten with
+// a `// ERROR: ...` line at the top of the comment block and the editor is
+// reopened so the user keeps editing inside the same overlayConfirm cycle.
+// On success pendingEdited is set and the modal re-renders with the
+// "(edited)" hint so the [y] press submits the new bytes.
+func (m *Model) handleConfirmEditDone(msg editorFileDoneMsg) (tea.Model, tea.Cmd) {
+	if msg.Err != nil {
+		// Surface the failure but leave the modal open so the user can
+		// retry with [e] or bail with [n] / esc / ctrl+c.
+		m.chat.appendError("editor: " + msg.Err.Error())
+		return m, nil
+	}
+	body, err := readPendingInput(m.pendingInputPath)
+	if err != nil {
+		m.chat.appendError("read pending input: " + err.Error())
+		return m, nil
+	}
+	if !json.Valid(body) {
+		// Re-seed with the original proposal plus the parse hint so the
+		// user sees what they typed alongside the diagnosis.
+		errMsg := "invalid JSON: cannot parse the body"
+		if werr := writePendingInput(m.pendingInputPath, m.pendingTool, m.pendingInput, errMsg); werr != nil {
+			m.chat.appendError("rewrite pending input: " + werr.Error())
+			return m, nil
+		}
+		return m, m.openEditorFile(m.pendingInputPath, "")
+	}
+	if m.pendingValidator != nil {
+		if verr := m.pendingValidator.Validate(body); verr != nil {
+			if werr := writePendingInput(m.pendingInputPath, m.pendingTool, body, verr.Error()); werr != nil {
+				m.chat.appendError("rewrite pending input: " + werr.Error())
+				return m, nil
+			}
+			return m, m.openEditorFile(m.pendingInputPath, "")
+		}
+	}
+	// Success — pin the edited bytes and re-render the modal so the user
+	// sees `(edited)` and the new JSON before pressing [y].
+	m.pendingEdited = json.RawMessage(body)
+	m.modal = modalModel{
+		prompt:   renderJSONModal(m.pendingTool, body, true, m.theme, m.width, 15),
+		editable: true,
+	}
+	return m, nil
 }
 
 // runSlashCommand handles the v0.1 slash-command set.
@@ -720,6 +1010,8 @@ func (m *Model) runSlashCommand(cmd, arg string) (tea.Model, tea.Cmd) {
 		m.chat = newChatModel(m.theme, m.chatWidth(), m.chatHeight())
 		m.session = agent.NewSession(m.systemPrompt)
 		m.beginPersistedSession()
+		m.focus = focusChat // reset focus to the chat
+		m.layout()          // re-size the chat for the panel column
 		return m, nil
 	case "model":
 		if arg != "" {
@@ -751,9 +1043,15 @@ func (m *Model) runSlashCommand(cmd, arg string) (tea.Model, tea.Cmd) {
 		return m.cmdTheme(arg)
 	case "reload":
 		return m.cmdReload()
+	case "skills":
+		return m.cmdSkills(arg)
+	case "config":
+		return m.cmdConfig(arg)
 	case "keys":
 		return m.cmdKeys()
-	case "jobs", "designs", "lab", "export", "cost", "project", "skills":
+	case "onboarding":
+		return m.cmdOnboarding()
+	case "jobs", "designs", "lab", "export", "cost", "project":
 		m.chat.appendAgentDeltaBlock("/" + cmd + " arrives in a later fova milestone.")
 		return m, nil
 	default:
@@ -779,7 +1077,15 @@ func (m *Model) runPlanCommand(arg string) (tea.Model, tea.Cmd) {
 			m.chat.appendAgentDeltaBlock(renderNoPlan())
 			return m, nil
 		}
-		m.chat.appendSlashOutput(renderPlan(p))
+		// For a BoltzGen plan, re-run design.boltzgen_check so /plan shows a
+		// live validation result that reflects any edits to the spec file.
+		var check *plan.BoltzGenCheckResult
+		if p.MethodConfig != nil {
+			if res, ran := m.runBoltzGenCheck(p.MethodConfig.SpecPath); ran {
+				check = &res
+			}
+		}
+		m.chat.appendSlashOutput(renderPlanWithCheck(p, workspaceFromHome(m.fovaHome), check))
 		return m, nil
 
 	case "approve":
@@ -796,12 +1102,38 @@ func (m *Model) runPlanCommand(arg string) (tea.Model, tea.Cmd) {
 			m.chat.appendAgentDeltaBlock("No design plan to approve — ask the agent to plan from a target first.")
 			return m, nil
 		}
+		// BoltzGen re-check: the spec is a plain workspace file the user may
+		// have edited since plan.create validated it. Re-run
+		// design.boltzgen_check; an invalid spec holds the approval so a run
+		// never starts on a broken spec.
+		if p.MethodConfig != nil {
+			if res, ran := m.runBoltzGenCheck(p.MethodConfig.SpecPath); ran && !res.Valid {
+				errs := strings.Join(res.Errors, "; ")
+				if errs == "" {
+					errs = "(no detail reported)"
+				}
+				m.chat.appendError("plan not approved — the BoltzGen spec " +
+					p.MethodConfig.SpecPath + " failed design.boltzgen_check. " +
+					"Fix it and run /plan approve again. Errors: " + errs)
+				return m, nil
+			}
+		}
 		if err := m.store.SetPlanApproved(p.ID); err != nil {
 			m.chat.appendError("could not approve the design plan: " + err.Error())
 			return m, nil
 		}
-		m.chat.appendAgentDeltaBlock("plan " + string(p.ID) + " approved")
-		return m, nil
+		m.chat.appendAgentDeltaBlock("plan " + string(p.ID) + " approved — submitting the design job")
+		if m.running {
+			// A turn is already in flight; don't start a second one. The
+			// approved plan is persisted and the agent can act on it next.
+			return m, nil
+		}
+		// Hand control back to the agent: an approved plan must trigger the
+		// design job(s). Without this the approval is inert — the flag is
+		// set but nothing consumes it.
+		return m.startTurn("The design plan " + string(p.ID) + " is approved. " +
+			"Submit the design job(s) for it now — use the plan's method, " +
+			"target, chain, and parameters.")
 
 	case "cancel":
 		m.chat.appendAgentDeltaBlock("plan cancelled — ask the agent to plan from a target again")
@@ -811,6 +1143,36 @@ func (m *Model) runPlanCommand(arg string) (tea.Model, tea.Cmd) {
 		m.chat.appendError("unknown /plan argument; use /plan, /plan approve, or /plan cancel")
 		return m, nil
 	}
+}
+
+// runBoltzGenCheck invokes the design.boltzgen_check tool through the tools
+// registry on the workspace-relative spec path. ran is false when the check
+// could not run — no registry, the check tool is not registered, or it
+// returned an error/unparsable result — so callers fall back to rendering /
+// approving without a check result, mirroring plan.create's nil-registry
+// behaviour. The decoupling holds: the tool is reached only by its registered
+// name.
+func (m *Model) runBoltzGenCheck(specPath string) (plan.BoltzGenCheckResult, bool) {
+	if m.registry == nil {
+		return plan.BoltzGenCheckResult{}, false
+	}
+	tool, ok := m.registry.Get("design.boltzgen_check")
+	if !ok {
+		return plan.BoltzGenCheckResult{}, false
+	}
+	in, err := json.Marshal(map[string]string{"spec_path": specPath})
+	if err != nil {
+		return plan.BoltzGenCheckResult{}, false
+	}
+	out, err := tool.Execute(context.Background(), in)
+	if err != nil {
+		return plan.BoltzGenCheckResult{}, false
+	}
+	var res plan.BoltzGenCheckResult
+	if err := json.Unmarshal(out.Output, &res); err != nil {
+		return plan.BoltzGenCheckResult{}, false
+	}
+	return res, true
 }
 
 // cmdAuth handles /auth <provider> <token>. Only "adaptyv" is supported; the
@@ -844,6 +1206,7 @@ func (m *Model) cmdTheme(arg string) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	ApplyTheme(mode)
+	m.chat.invalidateRenderCache()
 	m.chat.appendAgentDeltaBlock("theme set to " + mode + " (persisted to config.toml)")
 	return m, nil
 }
@@ -854,7 +1217,7 @@ func (m *Model) cmdTheme(arg string) (tea.Model, tea.Cmd) {
 func (m *Model) saveThemeChoice(mode string) error {
 	dir := m.configDir
 	if dir == "" {
-		dir = config.ConfigDir()
+		dir = assets.Dir()
 	}
 	// FOVA_CONFIG_DIR is what LoadConfig/SaveConfig consult; setting it
 	// here keeps the save targeted at the Deps-supplied directory without
@@ -868,24 +1231,25 @@ func (m *Model) saveThemeChoice(mode string) error {
 			_ = os.Unsetenv("FOVA_CONFIG_DIR")
 		}
 	}()
-	c, err := config.LoadConfig()
+	c, err := assets.LoadConfig()
 	if err != nil {
 		return err
 	}
 	c.UI.Theme = mode
-	return config.SaveConfig(c)
+	return assets.SaveConfig(c)
 }
 
 // lookupEnv is a tiny wrapper so saveThemeChoice can be read top-to-bottom.
 func lookupEnv(key string) (string, bool) { return os.LookupEnv(key) }
 
-// cmdReload re-reads config.toml and models.toml without restarting the TUI.
-// The new theme is applied live; budget/webhook/etc. fields update for the
-// remainder of the session. The conversation history is untouched.
+// cmdReload re-reads every asset (config.toml, models.toml, system.md,
+// skills) without restarting the TUI. The theme is applied live, the model
+// registry and skill set are swapped, and the running agent's system prompt
+// is hot-swapped. Conversation history is untouched.
 func (m *Model) cmdReload() (tea.Model, tea.Cmd) {
 	dir := m.configDir
 	if dir == "" {
-		dir = config.ConfigDir()
+		dir = assets.Dir()
 	}
 	prev, hadPrev := lookupEnv("FOVA_CONFIG_DIR")
 	_ = os.Setenv("FOVA_CONFIG_DIR", dir)
@@ -896,31 +1260,44 @@ func (m *Model) cmdReload() (tea.Model, tea.Cmd) {
 			_ = os.Unsetenv("FOVA_CONFIG_DIR")
 		}
 	}()
-	cfg, err := config.LoadConfig()
+	bundle, err := assets.Load()
 	if err != nil {
-		m.chat.appendError("reload config.toml: " + err.Error())
-		return m, nil
-	}
-	cat, err := config.LoadModels()
-	if err != nil {
-		m.chat.appendError("reload models.toml: " + err.Error())
+		m.chat.appendError("reload: " + err.Error())
 		return m, nil
 	}
 	if m.models == nil {
-		m.models = llm.NewModelRegistry(cat)
+		m.models = llm.NewModelRegistry(bundle.Models)
 	} else {
-		m.models.Reload(cat)
+		m.models.Reload(bundle.Models)
 	}
-	if err := m.models.SelectDefault(cfg.Defaults); err != nil {
+	if err := m.models.SelectDefault(bundle.Config.Defaults); err != nil {
 		m.chat.appendError("apply [defaults] from config.toml: " + err.Error())
 	}
-	ApplyTheme(cfg.UI.Theme)
-	m.budgetLimit = cfg.Budget.SessionSoftLimitUSD
-	m.status.costLimit = cfg.Budget.SessionSoftLimitUSD
-	m.webhookURL = cfg.Webhook.EffectiveURL()
+	ApplyTheme(bundle.Config.UI.Theme)
+	m.budgetLimit = bundle.Config.Budget.SessionSoftLimitUSD
+	m.status.costLimit = bundle.Config.Budget.SessionSoftLimitUSD
+	m.webhookURL = bundle.Config.Webhook.EffectiveURL()
 	m.status.model = m.models.ActiveModel()
 	m.status.provider = m.models.ActiveProviderName()
-	m.chat.appendAgentDeltaBlock("config.toml and models.toml reloaded")
+
+	// Swap the skill set and re-register the skills.list/read tools.
+	m.skillLoader = skills.NewLoader(bundle.Skills)
+	if m.registry != nil {
+		m.registry.Register(m.skillLoader.ListTool())
+		m.registry.Register(m.skillLoader.ReadTool())
+	}
+	// Hot-swap the system prompt for the next agent turn.
+	m.systemPrompt = agent.BuildSystemPrompt(Commands(), bundle.SystemPrompt)
+	if m.session != nil {
+		m.session.SetSystemPrompt(m.systemPrompt)
+	}
+	m.assetReport = bundle.Report
+
+	msg := "reloaded config.toml, models.toml, system.md and skills"
+	if s := bundle.Report.Summary(); s != "" {
+		msg += " — " + s
+	}
+	m.chat.appendAgentDeltaBlock(msg)
 	return m, nil
 }
 
@@ -928,6 +1305,39 @@ func (m *Model) cmdReload() (tea.Model, tea.Cmd) {
 // keybindings() table.
 func (m *Model) cmdKeys() (tea.Model, tea.Cmd) {
 	m.overlay = overlayKeys
+	return m, nil
+}
+
+// cmdOnboarding opens the onboarding wizard as an overlay.
+func (m *Model) cmdOnboarding() (tea.Model, tea.Cmd) {
+	cat := assets.DefaultCatalog()
+	if c, err := assets.LoadModels(); err == nil {
+		cat = c
+	}
+	m.wizard = newWizardModel(m.theme, cat, probeOllama("http://localhost:11434"))
+	m.wizard.width, m.wizard.height = m.width, m.height
+	m.overlay = overlayWizard
+	return m, m.wizard.Init()
+}
+
+// finishWizardOverlay applies a completed wizard result, reloads config so the
+// live-applicable settings take effect, and closes the overlay.
+func (m *Model) finishWizardOverlay(msg wizardDoneMsg) (tea.Model, tea.Cmd) {
+	m.overlay = overlayNone
+	m.wizard = nil
+	if msg.Skipped {
+		return m, nil
+	}
+	if err := ApplyWizardResult(msg.Result); err != nil {
+		m.chat.appendError("onboarding: " + err.Error())
+		return m, nil
+	}
+	m.cmdReload() // re-read config.toml / models.toml; applies theme, provider, budget
+	m.chat.appendAgentDeltaBlock("Setup saved.")
+	if msg.Result.DataDir != "" {
+		m.chat.appendAgentDeltaBlock(
+			"The data folder change takes effect the next time you start fova.")
+	}
 	return m, nil
 }
 
@@ -979,17 +1389,6 @@ func (m *Model) applyModel(id string) {
 	m.chat.appendAgentDeltaBlock("Switched to " + m.status.model + " (" + m.status.provider + ").")
 }
 
-// runningJobIDs returns the IDs of currently-running jobs, in panel order.
-func (m *Model) runningJobIDs() []string {
-	var ids []string
-	for _, j := range m.jobs.jobs {
-		if j.Status == domain.JobRunning {
-			ids = append(ids, string(j.ID))
-		}
-	}
-	return ids
-}
-
 // refreshJobLogs upserts an in-chat log block for every job submitted during
 // this session, and refreshes the full-screen view when one is open.
 func (m *Model) refreshJobLogs() {
@@ -999,65 +1398,130 @@ func (m *Model) refreshJobLogs() {
 		}
 		m.chat.upsertJobLog(string(j.ID), j.Tool, j.Status, j.Started, tailLines(j.LogFile, 6))
 	}
-	if m.overlay == overlayJobLog && m.jobLogID != "" {
-		m.openJobLog(m.jobLogID)
-	}
 }
 
-// openJobLog loads job id's complete log into the full-screen view.
-func (m *Model) openJobLog(id string) {
-	var job domain.Job
-	for _, j := range m.jobs.jobs {
-		if string(j.ID) == id {
-			job = j
-			break
+// openDetail builds the full-screen detail view for the focused panel's
+// selected row and shows it. It is a no-op when the focused panel is empty or
+// the chat is focused. Returns a tea.Cmd (always nil today) so it slots into
+// the handleKey return contract.
+func (m *Model) openDetail() tea.Cmd {
+	var header, body string
+	switch m.focus {
+	case focusJobs:
+		j, ok := m.jobs.selectedJob()
+		if !ok {
+			return nil
 		}
+		header, body = renderJobDetail(m.theme, j)
+		m.detailID = string(j.ID)
+	case focusDesigns:
+		d, ok := m.designs.selectedDesign()
+		if !ok {
+			return nil
+		}
+		header, body = renderDesignDetail(m.theme, d)
+		m.detailID = string(d.ID)
+	case focusLab:
+		e, ok := m.lab.selectedExperiment()
+		if !ok {
+			return nil
+		}
+		header, body = renderExperimentDetail(m.theme, e)
+		m.detailID = string(e.ID)
+	default:
+		return nil
 	}
-	body := readLog(job.LogFile)
-	if strings.TrimSpace(body) == "" {
-		body = "(no output yet)"
-	}
-	m.jobLog.setSize(m.width, m.height)
-	m.jobLog.setContent(glyph(job.Status)+" "+job.Tool+" · "+id, body)
+	m.detailKind = m.focus
+	m.detail.setSize(m.width, m.height)
+	m.detail.setContent(header, body)
+	m.overlay = overlayDetail
+	return nil
 }
 
-// cycleFocus advances the unified Tab focus ring: chat → each running job's
-// full-screen log → the jobs / designs / lab panels → back to chat.
-func (m *Model) cycleFocus() {
-	jobs := m.runningJobIDs()
-	total := 1 + len(jobs) + 3 // chat + running jobs + 3 panels
-	cur := 0
-	switch {
-	case m.overlay == overlayJobLog:
-		for i, id := range jobs {
-			if id == m.jobLogID {
-				cur = 1 + i
+// refreshDetail rebuilds the open detail overlay from current panel data so a
+// running job's progress and log update live. It closes the overlay if the
+// open item has disappeared.
+func (m *Model) refreshDetail() {
+	if m.overlay != overlayDetail {
+		return
+	}
+	var header, body string
+	found := false
+	switch m.detailKind {
+	case focusJobs:
+		for _, j := range m.jobs.jobs {
+			if string(j.ID) == m.detailID {
+				header, body = renderJobDetail(m.theme, j)
+				found = true
 			}
 		}
-	case m.focus == focusJobs:
-		cur = 1 + len(jobs)
-	case m.focus == focusDesigns:
-		cur = 2 + len(jobs)
-	case m.focus == focusLab:
-		cur = 3 + len(jobs)
-	}
-	switch next := (cur + 1) % total; {
-	case next == 0:
-		m.overlay, m.focus, m.jobLogID = overlayNone, focusChat, ""
-	case next <= len(jobs):
-		m.jobLogID = jobs[next-1]
-		m.overlay = overlayJobLog
-		m.openJobLog(m.jobLogID)
-	default:
-		m.overlay, m.jobLogID = overlayNone, ""
-		switch next - 1 - len(jobs) {
-		case 0:
-			m.focus = focusJobs
-		case 1:
-			m.focus = focusDesigns
-		default:
-			m.focus = focusLab
+	case focusDesigns:
+		for _, d := range m.designs.designs {
+			if string(d.ID) == m.detailID {
+				header, body = renderDesignDetail(m.theme, d)
+				found = true
+			}
 		}
+	case focusLab:
+		for _, e := range m.lab.experiments {
+			if string(e.ID) == m.detailID {
+				header, body = renderExperimentDetail(m.theme, e)
+				found = true
+			}
+		}
+	}
+	if !found {
+		m.overlay = overlayNone
+		return
+	}
+	m.detail.setContent(header, body)
+}
+
+// cycleFocus advances the Tab focus ring: chat → jobs → designs → lab → chat.
+func (m *Model) cycleFocus() {
+	switch m.focus {
+	case focusChat:
+		m.focus = focusJobs
+	case focusJobs:
+		m.focus = focusDesigns
+	case focusDesigns:
+		m.focus = focusLab
+	default:
+		m.focus = focusChat
+	}
+	m.syncPanelFocus()
+}
+
+// syncPanelFocus pushes m.focus into the panels and the input bar so their
+// rendering matches: the focused panel highlights; the input dims whenever a
+// panel (not the chat) holds focus.
+func (m *Model) syncPanelFocus() {
+	m.jobs.setFocused(m.focus == focusJobs)
+	m.designs.setFocused(m.focus == focusDesigns)
+	m.lab.setFocused(m.focus == focusLab)
+	m.cmdbar.setActive(m.focus == focusChat)
+}
+
+// panelSelectUp / panelSelectDown move the selection in the focused panel.
+func (m *Model) panelSelectUp() {
+	switch m.focus {
+	case focusJobs:
+		m.jobs.selectUp()
+	case focusDesigns:
+		m.designs.selectUp()
+	case focusLab:
+		m.lab.selectUp()
+	}
+}
+
+func (m *Model) panelSelectDown() {
+	switch m.focus {
+	case focusJobs:
+		m.jobs.selectDown()
+	case focusDesigns:
+		m.designs.selectDown()
+	case focusLab:
+		m.lab.selectDown()
 	}
 }
 
@@ -1068,6 +1532,7 @@ func (m *Model) View() string {
 	if m.width == 0 {
 		return "starting fova…"
 	}
+	m.status.chatScrolledUp = !m.chat.atBottom()
 	var body string
 	if m.width >= 100 {
 		right := lipgloss.JoinVertical(lipgloss.Left,
@@ -1101,10 +1566,14 @@ func (m *Model) View() string {
 		return base + "\n" + m.submit.view(m.theme, m.width)
 	case overlayPicker:
 		return base + "\n" + m.picker.view(m.theme, m.width)
-	case overlayJobLog:
-		return m.jobLog.View()
+	case overlayDetail:
+		return m.detail.View()
 	case overlayKeys:
 		return base + "\n" + m.keys.view(m.theme, m.width)
+	case overlayWizard:
+		if m.wizard != nil {
+			return m.wizard.View()
+		}
 	}
 	return base
 }
@@ -1120,7 +1589,7 @@ func (m *Model) layout() {
 	m.jobs.setWidth(panelW)
 	m.designs.setWidth(panelW)
 	m.lab.setWidth(panelW)
-	m.jobLog.setSize(m.width, m.height)
+	m.detail.setSize(m.width, m.height)
 	chatW := m.width
 	if panelW > 0 {
 		chatW = m.width - panelW - 2 // 2 spaces of gap
@@ -1160,10 +1629,10 @@ func helpText() string {
 	return b.String()
 }
 
-// loadConfigForTest is a re-export of config.LoadConfig used by tests in this
-// package that do not import internal/config directly. Not part of the public
+// loadConfigForTest is a re-export of assets.LoadConfig used by tests in this
+// package that do not import internal/assets directly. Not part of the public
 // API; safe to remove if no test refers to it.
-func loadConfigForTest() (any, error) { return config.LoadConfig() }
+func loadConfigForTest() (any, error) { return assets.LoadConfig() }
 
 // workspaceFromHome mirrors cmd/fova.defaultWorkspace: the active project's
 // workspace lives at $FOVA_HOME/projects/default. An empty home (tests that

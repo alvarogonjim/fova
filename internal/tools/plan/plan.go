@@ -29,11 +29,38 @@ type InstallChecker interface {
 	Status(name string) local.ToolStatus
 }
 
+// ToolRegistry reports whether an agent tool is registered, and lets
+// plan.create reach a registered tool to invoke it. plan.create uses it to
+// reject a method whose design.* tool has no executable implementation — a
+// method blessed in compat.go and installed locally but never wired into the
+// registry (the design.boltzgen gap, 2026-05-21) — and to run
+// design.boltzgen_check on a BoltzGen plan's spec. *tools.Registry satisfies
+// this; tests can inject a fake.
+type ToolRegistry interface {
+	Get(name string) (tools.Tool, bool)
+}
+
+// boltzGenCheckToolName is the registered name of the spec-validation tool.
+// plan.create and /plan approve invoke it by name through the registry so
+// this package stays decoupled from the check tool's own package — only the
+// JSON contract below is shared.
+const boltzGenCheckToolName = "design.boltzgen_check"
+
+// BoltzGenCheckResult is the pinned JSON contract returned in the
+// design.boltzgen_check tool's Result.Output. plan.create rejects a BoltzGen
+// plan whose spec is not Valid; /plan renders the result for review.
+type BoltzGenCheckResult struct {
+	Valid             bool     `json:"valid"`
+	Errors            []string `json:"errors,omitempty"`
+	VisualizationPath string   `json:"visualization_path,omitempty"`
+}
+
 // CreateTool implements plan.create: build a DesignPlan from a target and
 // persist it for the user to review and approve.
 type CreateTool struct {
 	store     *store.Store
 	installer InstallChecker
+	registry  ToolRegistry
 }
 
 // NewPlanCreateTool builds the plan.create tool.
@@ -42,9 +69,18 @@ type CreateTool struct {
 // (Bug 11). Passing nil disables that check — only the in-memory schema
 // validation runs — which is useful for tests that don't care about the
 // install path, but production wiring always supplies a real installer.
-func NewPlanCreateTool(st *store.Store, installer InstallChecker) tools.Tool {
+//
+// The returned *CreateTool satisfies tools.Tool. Production wiring should
+// also call SetRegistry so plan.create can reject methods with no registered
+// design.* tool.
+func NewPlanCreateTool(st *store.Store, installer InstallChecker) *CreateTool {
 	return &CreateTool{store: st, installer: installer}
 }
+
+// SetRegistry wires the tools registry so plan.create can verify a method's
+// design.* tool is actually registered. A nil registry (the default) skips
+// that check.
+func (t *CreateTool) SetRegistry(r ToolRegistry) { t.registry = r }
 
 func (*CreateTool) Name() string { return "plan.create" }
 func (*CreateTool) Description() string {
@@ -72,8 +108,8 @@ func (*CreateTool) InputSchema() map[string]any {
 			"method": map[string]any{
 				"type": "string",
 				"description": "The primary design method/tool to run. Accepted: " +
-					"BindCraft, RFdiffusion, RFdiffusion2, ProteinMPNN, " +
-					"LigandMPNN, RFantibody, Chai2 (the design.* registered " +
+					"BindCraft, BoltzGen, RFdiffusion, RFdiffusion2, ProteinMPNN, " +
+					"LigandMPNN, RFantibody (the design.* registered " +
 					"name and lowercase tool name are also accepted). The " +
 					"method must be compatible with the chosen application " +
 					"and the underlying tool must be installed locally " +
@@ -104,6 +140,57 @@ func (*CreateTool) InputSchema() map[string]any {
 			"compute_backend": map[string]any{
 				"type":        "string",
 				"description": "The compute backend the plan should run on.",
+			},
+			"method_spec_path": map[string]any{
+				"type": "string",
+				"description": "Workspace-relative path to the design specification " +
+					"YAML. REQUIRED when method resolves to BoltzGen — author the " +
+					"spec first (see the boltzgen-spec skill) and validate it with " +
+					"design.boltzgen_check. plan.create re-runs the check and " +
+					"rejects the plan if the spec is invalid. Ignored for other " +
+					"methods.",
+			},
+			"method_params": map[string]any{
+				"type": "object",
+				"description": "Method-specific run configuration. For BoltzGen " +
+					"these are the BoltzGenParams run flags folded into the plan " +
+					"for /plan review and /plan approve. For LigandMPNN these are " +
+					"the LigandMPNNParams run flags (at minimum a pdb backbone " +
+					"path); method_params is REQUIRED for a LigandMPNN method. " +
+					"Ignored for other methods.",
+				"properties": map[string]any{
+					"protocol": map[string]any{
+						"type": "string",
+						"enum": []any{
+							"protein-anything", "peptide-anything",
+							"protein-small_molecule", "antibody-anything",
+							"nanobody-anything", "protein-redesign",
+						},
+						"description": "BoltzGen protocol; default protein-anything.",
+					},
+					"num_designs":          map[string]any{"type": "integer"},
+					"budget":               map[string]any{"type": "integer"},
+					"diffusion_batch_size": map[string]any{"type": "integer"},
+					"steps": map[string]any{
+						"type": "array",
+						"items": map[string]any{
+							"type": "string",
+							"enum": []any{
+								"design", "inverse_folding", "design_folding",
+								"folding", "affinity", "analysis", "filtering",
+							},
+						},
+					},
+					"alpha":                      map[string]any{"type": "number"},
+					"filter_biased":              map[string]any{"type": "boolean"},
+					"additional_filters":         map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+					"refolding_rmsd_threshold":   map[string]any{"type": "number"},
+					"inverse_fold_num_sequences": map[string]any{"type": "integer"},
+					"inverse_fold_avoid":         map[string]any{"type": "string"},
+					"step_scale":                 map[string]any{"type": "number"},
+					"noise_scale":                map[string]any{"type": "number"},
+					"reuse":                      map[string]any{"type": "boolean"},
+				},
 			},
 			"estimated_cost_usd": map[string]any{
 				"type":        "number",
@@ -149,7 +236,7 @@ func (*CreateTool) RequiresConfirmation(json.RawMessage) bool       { return fal
 func (*CreateTool) EstimatedCostUSD(json.RawMessage) float64        { return 0 }
 func (*CreateTool) EstimatedDuration(json.RawMessage) time.Duration { return 100 * time.Millisecond }
 
-func (t *CreateTool) Execute(_ context.Context, input json.RawMessage) (tools.Result, error) {
+func (t *CreateTool) Execute(ctx context.Context, input json.RawMessage) (tools.Result, error) {
 	var p domain.DesignPlan
 	if err := json.Unmarshal(input, &p); err != nil {
 		return tools.Result{}, fmt.Errorf("plan.create: invalid input: %w", err)
@@ -173,8 +260,8 @@ func (t *CreateTool) Execute(_ context.Context, input json.RawMessage) (tools.Re
 	if !ok {
 		return tools.Result{}, fmt.Errorf(
 			"plan.create: method %q is not a known design method — accepted "+
-				"names: BindCraft, RFdiffusion, RFdiffusion2, ProteinMPNN, "+
-				"LigandMPNN, RFantibody, Chai2 (lower-case and design.* "+
+				"names: BindCraft, BoltzGen, RFdiffusion, RFdiffusion2, ProteinMPNN, "+
+				"LigandMPNN, RFantibody (lower-case and design.* "+
 				"forms also accepted)", p.Method)
 	}
 	if !methodAllowed(p.Application, method) {
@@ -188,11 +275,72 @@ func (t *CreateTool) Execute(_ context.Context, input json.RawMessage) (tools.Re
 	if err := t.checkInstalled(method); err != nil {
 		return tools.Result{}, err
 	}
+	if err := t.checkRegistered(method); err != nil {
+		return tools.Result{}, err
+	}
 	if err := validateFilters(input, p.Filters); err != nil {
 		return tools.Result{}, err
 	}
 	if err := validateShortlist(p.ShortlistSize); err != nil {
 		return tools.Result{}, err
+	}
+
+	// BoltzGen folds a design specification YAML + run params into the plan.
+	// For a BoltzGen method, method_spec_path is required; the spec is then
+	// validated via design.boltzgen_check (consistent with the install +
+	// registration guards above — an invalid spec rejects the plan).
+	if method == MethodBoltzGen {
+		if err := t.applyBoltzGenMethodConfig(ctx, input, &p); err != nil {
+			return tools.Result{}, err
+		}
+	}
+
+	// LigandMPNN folds its run configuration (the LigandMPNNParams) into the
+	// plan so /plan can render it and /plan approve can run it. Unlike
+	// BoltzGen there is no spec file or external check — method_params alone
+	// carries the configuration.
+	if method == MethodLigandMPNN {
+		if err := t.applyLigandMPNNMethodConfig(input, &p); err != nil {
+			return tools.Result{}, err
+		}
+	}
+
+	// RFantibody folds its run configuration (the RFantibodyParams) into the
+	// plan so /plan can render it and /plan approve can run it. Like LigandMPNN
+	// there is no spec file or external check — method_params alone carries the
+	// 3-stage pipeline configuration.
+	if method == MethodRFantibody {
+		if err := t.applyRFantibodyMethodConfig(input, &p); err != nil {
+			return tools.Result{}, err
+		}
+	}
+
+	// RFdiffusion / ProteinMPNN / BindCraft — same pattern: method_params
+	// carries the typed run configuration. No spec file or external check.
+	if method == MethodRFdiffusion {
+		if err := t.applyRFdiffusionMethodConfig(input, &p); err != nil {
+			return tools.Result{}, err
+		}
+	}
+	if method == MethodProteinMPNN {
+		if err := t.applyProteinMPNNMethodConfig(input, &p); err != nil {
+			return tools.Result{}, err
+		}
+	}
+	if method == MethodBindCraft {
+		if err := t.applyBindCraftMethodConfig(input, &p); err != nil {
+			return tools.Result{}, err
+		}
+	}
+
+	// RFdiffusion2 folds its pipeline-run configuration (the RFdiffusion2Params)
+	// into the plan so /plan can render it and /plan approve can run it. Like
+	// LigandMPNN and RFantibody there is no spec file or external check —
+	// method_params alone carries the configuration.
+	if method == MethodRFdiffusion2 {
+		if err := t.applyRFdiffusion2MethodConfig(input, &p); err != nil {
+			return tools.Result{}, err
+		}
 	}
 
 	// Ground every evidence entry in the corpus. The Citation field is
@@ -384,6 +532,243 @@ func (t *CreateTool) checkInstalled(m Method) error {
 			"— run /install %s or pick a different method (see /doctor "+
 			"for the full tool status)",
 		m, tool, tool)
+}
+
+// checkRegistered returns an error if the agent-facing design.* tool for
+// method m is not in the tools registry. This catches a method that is
+// blessed in compat.go and installed locally but never wired up as an
+// executable tool — the design.boltzgen gap found on 2026-05-21, where an
+// approved BoltzGen plan could not run because no design.boltzgen tool
+// existed. A nil registry (legacy/test paths) skips the check.
+func (t *CreateTool) checkRegistered(m Method) error {
+	if t.registry == nil {
+		return nil
+	}
+	name := designToolForMethod(m)
+	if name == "" {
+		return fmt.Errorf(
+			"plan.create: method %q has no design.* tool mapping — extend "+
+				"designToolForMethod in compat.go", m)
+	}
+	if _, ok := t.registry.Get(name); !ok {
+		return fmt.Errorf(
+			"plan.create: method %q resolves to tool %q, which is not registered "+
+				"— the method is listed in compat.go but no executable tool is "+
+				"wired into the registry. Pick a different method, or register %s.",
+			m, name, name)
+	}
+	return nil
+}
+
+// applyBoltzGenMethodConfig parses the optional method_spec_path +
+// method_params inputs into DesignPlan.MethodConfig and gates the plan on a
+// design.boltzgen_check of the spec. method_spec_path is required for a
+// BoltzGen plan; the spec must pass the check or the plan is rejected.
+func (t *CreateTool) applyBoltzGenMethodConfig(ctx context.Context, input json.RawMessage, p *domain.DesignPlan) error {
+	var envelope struct {
+		SpecPath string                 `json:"method_spec_path"`
+		Params   *domain.BoltzGenParams `json:"method_params"`
+	}
+	if err := json.Unmarshal(input, &envelope); err != nil {
+		return fmt.Errorf("plan.create: invalid method_params: %w", err)
+	}
+	specPath := strings.TrimSpace(envelope.SpecPath)
+	if specPath == "" {
+		return fmt.Errorf(
+			"plan.create: method BoltzGen requires method_spec_path — author " +
+				"the design specification YAML first (see the boltzgen-spec " +
+				"skill), validate it with design.boltzgen_check, then pass its " +
+				"workspace-relative path as method_spec_path")
+	}
+
+	mc := &domain.MethodConfig{SpecPath: specPath, BoltzGen: envelope.Params}
+
+	// Check gate: validate the spec via the design.boltzgen_check tool. A nil
+	// registry or an unregistered check tool skips the gate (the nil-registry
+	// path used by the install + registration guards above).
+	res, ran, err := t.runBoltzGenCheck(ctx, specPath)
+	if err != nil {
+		return err
+	}
+	if ran && !res.Valid {
+		errs := strings.Join(res.Errors, "; ")
+		if errs == "" {
+			errs = "(no detail reported)"
+		}
+		return fmt.Errorf(
+			"plan.create: BoltzGen spec %q failed design.boltzgen_check — fix "+
+				"the spec and retry. Errors: %s", specPath, errs)
+	}
+
+	p.MethodConfig = mc
+	return nil
+}
+
+// applyLigandMPNNMethodConfig parses the method_params input into a
+// LigandMPNNParams and folds it into DesignPlan.MethodConfig. method_params is
+// required for a LigandMPNN plan — it carries the run configuration (at
+// minimum a pdb backbone path). The params are value-shape validated via
+// domain.LigandMPNNParams.Validate; there is no external check tool.
+func (t *CreateTool) applyLigandMPNNMethodConfig(input json.RawMessage, p *domain.DesignPlan) error {
+	var envelope struct {
+		Params *domain.LigandMPNNParams `json:"method_params"`
+	}
+	if err := json.Unmarshal(input, &envelope); err != nil {
+		return fmt.Errorf("plan.create: invalid method_params: %w", err)
+	}
+	if envelope.Params == nil {
+		return fmt.Errorf(
+			"plan.create: method LigandMPNN requires method_params — the " +
+				"LigandMPNN run configuration (at minimum a pdb backbone path)")
+	}
+	if err := envelope.Params.Validate(); err != nil {
+		return err
+	}
+	p.MethodConfig = &domain.MethodConfig{LigandMPNN: envelope.Params}
+	return nil
+}
+
+// applyRFantibodyMethodConfig parses the method_params input into an
+// RFantibodyParams and folds it into DesignPlan.MethodConfig. method_params is
+// required for an RFantibody plan — it carries the run configuration (at
+// minimum the target antigen PDB and the epitope hotspots). The params are
+// value-shape validated via domain.RFantibodyParams.Validate; there is no
+// external check tool.
+func (t *CreateTool) applyRFantibodyMethodConfig(input json.RawMessage, p *domain.DesignPlan) error {
+	var envelope struct {
+		Params *domain.RFantibodyParams `json:"method_params"`
+	}
+	if err := json.Unmarshal(input, &envelope); err != nil {
+		return fmt.Errorf("plan.create: invalid method_params: %w", err)
+	}
+	if envelope.Params == nil {
+		return fmt.Errorf(
+			"plan.create: method RFantibody requires method_params — the " +
+				"RFantibody run configuration (at minimum target and hotspots)")
+	}
+	if err := envelope.Params.Validate(); err != nil {
+		return err
+	}
+	p.MethodConfig = &domain.MethodConfig{RFantibody: envelope.Params}
+	return nil
+}
+
+// applyRFdiffusionMethodConfig parses the optional method_params input into
+// an RFdiffusionParams and folds it onto the plan's MethodConfig. When
+// method_params is absent the plan is accepted without an RFdiffusion section
+// (legacy back-compat — RFdiffusion's pre-bespoke schema took no required
+// configuration); when present the typed params are validated. LigandMPNN and
+// RFantibody by contrast strictly require method_params — they are bespoke
+// from inception and have no legacy callers to preserve.
+func (t *CreateTool) applyRFdiffusionMethodConfig(input json.RawMessage, p *domain.DesignPlan) error {
+	var envelope struct {
+		Params *domain.RFdiffusionParams `json:"method_params"`
+	}
+	if err := json.Unmarshal(input, &envelope); err != nil {
+		return fmt.Errorf("plan.create: invalid method_params: %w", err)
+	}
+	if envelope.Params == nil {
+		return nil
+	}
+	if err := envelope.Params.Validate(); err != nil {
+		return err
+	}
+	p.MethodConfig = &domain.MethodConfig{RFdiffusion: envelope.Params}
+	return nil
+}
+
+// applyProteinMPNNMethodConfig is the ProteinMPNN sibling of
+// applyRFdiffusionMethodConfig — see its doc comment for the legacy-compat
+// rationale. method_params is optional; present-and-malformed is rejected.
+func (t *CreateTool) applyProteinMPNNMethodConfig(input json.RawMessage, p *domain.DesignPlan) error {
+	var envelope struct {
+		Params *domain.ProteinMPNNParams `json:"method_params"`
+	}
+	if err := json.Unmarshal(input, &envelope); err != nil {
+		return fmt.Errorf("plan.create: invalid method_params: %w", err)
+	}
+	if envelope.Params == nil {
+		return nil
+	}
+	if err := envelope.Params.Validate(); err != nil {
+		return err
+	}
+	p.MethodConfig = &domain.MethodConfig{ProteinMPNN: envelope.Params}
+	return nil
+}
+
+// applyBindCraftMethodConfig is the BindCraft sibling — same legacy-compat
+// rule. BindCraft is x86-only (PyRosetta); method_params is optional; when
+// present the typed params are validated.
+func (t *CreateTool) applyBindCraftMethodConfig(input json.RawMessage, p *domain.DesignPlan) error {
+	var envelope struct {
+		Params *domain.BindCraftParams `json:"method_params"`
+	}
+	if err := json.Unmarshal(input, &envelope); err != nil {
+		return fmt.Errorf("plan.create: invalid method_params: %w", err)
+	}
+	if envelope.Params == nil {
+		return nil
+	}
+	if err := envelope.Params.Validate(); err != nil {
+		return err
+	}
+	p.MethodConfig = &domain.MethodConfig{BindCraft: envelope.Params}
+	return nil
+}
+
+// applyRFdiffusion2MethodConfig parses the method_params input into an
+// RFdiffusion2Params and folds it into DesignPlan.MethodConfig. method_params
+// is required for an RFdiffusion2 plan — it carries the pipeline-run
+// configuration (at minimum the benchmark choice; motif_pdb + contigs
+// optional). The params are value-shape validated via
+// domain.RFdiffusion2Params.Validate; there is no external check tool.
+func (t *CreateTool) applyRFdiffusion2MethodConfig(input json.RawMessage, p *domain.DesignPlan) error {
+	var envelope struct {
+		Params *domain.RFdiffusion2Params `json:"method_params"`
+	}
+	if err := json.Unmarshal(input, &envelope); err != nil {
+		return fmt.Errorf("plan.create: invalid method_params: %w", err)
+	}
+	if envelope.Params == nil {
+		return fmt.Errorf(
+			"plan.create: method RFdiffusion2 requires method_params — the " +
+				"RFdiffusion2 run configuration (at minimum a benchmark choice)")
+	}
+	if err := envelope.Params.Validate(); err != nil {
+		return err
+	}
+	p.MethodConfig = &domain.MethodConfig{RFdiffusion2: envelope.Params}
+	return nil
+}
+
+// runBoltzGenCheck invokes the design.boltzgen_check tool through the registry
+// and decodes its pinned JSON result. ran is false (with a nil error) when the
+// check could not run — a nil registry or no registered check tool — so the
+// caller skips the gate, matching the install/registration guards' behaviour.
+func (t *CreateTool) runBoltzGenCheck(ctx context.Context, specPath string) (res BoltzGenCheckResult, ran bool, err error) {
+	if t.registry == nil {
+		return BoltzGenCheckResult{}, false, nil
+	}
+	tool, ok := t.registry.Get(boltzGenCheckToolName)
+	if !ok {
+		return BoltzGenCheckResult{}, false, nil
+	}
+	in, merr := json.Marshal(map[string]string{"spec_path": specPath})
+	if merr != nil {
+		return BoltzGenCheckResult{}, false, fmt.Errorf("plan.create: marshal boltzgen check input: %w", merr)
+	}
+	out, eerr := tool.Execute(ctx, in)
+	if eerr != nil {
+		return BoltzGenCheckResult{}, false, fmt.Errorf(
+			"plan.create: design.boltzgen_check failed for spec %q: %w", specPath, eerr)
+	}
+	if uerr := json.Unmarshal(out.Output, &res); uerr != nil {
+		return BoltzGenCheckResult{}, false, fmt.Errorf(
+			"plan.create: design.boltzgen_check returned an unparsable result for spec %q: %w",
+			specPath, uerr)
+	}
+	return res, true, nil
 }
 
 // validateFilters bounds-checks every populated field in FilterConfig and

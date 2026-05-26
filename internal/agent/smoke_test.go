@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -47,8 +48,8 @@ func TestSmoke_FoldAndScore(t *testing.T) {
 	}}
 
 	bus := make(chan tea.Msg, 64)
-	loop := NewLoop(prov, "mock", reg, NewSession(SystemPrompt), bus,
-		func(string) bool { return true })
+	loop := NewLoop(prov, "mock", reg, NewSession(BuildSystemPrompt(nil, fakeTemplate)), bus,
+		func(string, string, json.RawMessage) (bool, json.RawMessage) { return true, nil })
 
 	go func() {
 		loop.Run(context.Background(), "fold MGS")

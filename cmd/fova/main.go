@@ -6,15 +6,16 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/spf13/cobra"
 
 	"github.com/alvarogonjim/fova/internal/agent"
+	"github.com/alvarogonjim/fova/internal/assets"
 	"github.com/alvarogonjim/fova/internal/backends"
 	"github.com/alvarogonjim/fova/internal/backends/local"
-	"github.com/alvarogonjim/fova/internal/config"
 	jobmgr "github.com/alvarogonjim/fova/internal/jobs"
 	"github.com/alvarogonjim/fova/internal/llm"
 	"github.com/alvarogonjim/fova/internal/safety"
@@ -96,6 +97,18 @@ func newRootCmd() *cobra.Command {
 
 // runTUI builds the registry, model registry, store, and starts the app.
 func runTUI() error {
+	// MUST run before assets.Load: Load materializes config.toml, which would
+	// flip isFirstRun to false and defeat first-run detection.
+	if err := maybeRunOnboarding(); err != nil {
+		return err
+	}
+	bundle, err := assets.Load()
+	if err != nil {
+		return err
+	}
+	cfg := bundle.Config
+	resolvedHome = resolveFovaHome(cfg)
+
 	workspace, err := defaultWorkspace()
 	if err != nil {
 		return err
@@ -112,19 +125,12 @@ func runTUI() error {
 
 	mgr := jobmgr.NewManager(st, nil)
 	mgr.SetLogDir(filepath.Join(fovaHome(), "logs"))
-	cat, err := config.LoadModels()
-	if err != nil {
-		return err
-	}
-	models := llm.NewModelRegistry(cat)
-	cfg, err := config.LoadConfig()
-	if err != nil {
-		return err
-	}
+	models := llm.NewModelRegistry(bundle.Models)
 	tui.ApplyTheme(cfg.UI.Theme)
 	if err := models.SelectDefault(cfg.Defaults); err != nil {
 		return err
 	}
+	skillLoader := skills.NewLoader(bundle.Skills)
 
 	home := fovaHome()
 	localReg, err := local.LoadRegistry(home)
@@ -136,7 +142,7 @@ func runTUI() error {
 	// rather than inside buildRegistry so the same Installer instance backs
 	// both paths.
 	installer := local.NewInstaller(localReg)
-	registry := buildRegistry(workspace, st, mgr, models, cfg, installer)
+	registry := buildRegistry(workspace, st, mgr, models, cfg, installer, skillLoader)
 
 	webhookPort := 0
 	if cfg.Webhook.Enabled {
@@ -150,34 +156,35 @@ func runTUI() error {
 	app := tui.New(tui.Deps{
 		Registry:           registry,
 		Models:             models,
-		SystemPrompt:       agent.BuildSystemPrompt(tui.Commands()),
+		SystemPrompt:       agent.BuildSystemPrompt(tui.Commands(), bundle.SystemPrompt),
 		Store:              st,
 		Jobs:               mgr,
 		Local:              localReg,
 		FovaHome:           home,
-		ConfigDir:          config.ConfigDir(),
+		ConfigDir:          assets.Dir(),
 		WebhookPort:        webhookPort,
 		WebhookURL:         cfg.Webhook.EffectiveURL(),
 		BudgetLimitUSD:     cfg.Budget.SessionSoftLimitUSD,
 		InlineGraphicsMode: cfg.UI.InlineGraphics,
 		Guard:              guard,
+		SkillLoader:        skillLoader,
+		AssetReport:        bundle.Report,
 	})
 
-	p := tea.NewProgram(app, tea.WithAltScreen())
+	p := tea.NewProgram(app, tea.WithAltScreen(), tea.WithMouseCellMotion())
 	_, err = p.Run()
 	return err
 }
 
 // buildRegistry assembles the tool registry for a TUI session.
-func buildRegistry(workspace string, st *store.Store, mgr *jobmgr.Manager, models *llm.ModelRegistry, cfg config.Config, installer *local.Installer) *tools.Registry {
+func buildRegistry(workspace string, st *store.Store, mgr *jobmgr.Manager, models *llm.ModelRegistry, cfg assets.Config, installer *local.Installer, skillLoader *skills.Loader) *tools.Registry {
 	registry := tools.NewRegistry()
 	for _, t := range tools.NewFSTools(workspace) {
 		registry.Register(t)
 	}
 	registry.Register(fold.NewESMFold(workspace))
-	loader := skills.NewLoader()
-	registry.Register(loader.ListTool())
-	registry.Register(loader.ReadTool())
+	registry.Register(skillLoader.ListTool())
+	registry.Register(skillLoader.ReadTool())
 
 	// estd lets jobs.status / jobs.result surface each tool's advertised
 	// EstimatedDuration without taking a hard dependency on the full
@@ -206,14 +213,15 @@ func buildRegistry(workspace string, st *store.Store, mgr *jobmgr.Manager, model
 		backend, _ = backends.Select("local", fovaHome())
 	}
 	registry.Register(designtools.NewBindCraftTool(workspace, mgr, backend, st))
+	registry.Register(designtools.NewBoltzGenTool(workspace, mgr, backend, st))
+	registry.Register(designtools.NewBoltzGenCheckTool(workspace, backend))
 	registry.Register(designtools.NewRFdiffusionTool(workspace, mgr, backend, st))
 	registry.Register(designtools.NewProteinMPNNTool(workspace, mgr, backend, st))
 	registry.Register(designtools.NewRFAntibodyTool(workspace, mgr, backend, st))
-	registry.Register(designtools.NewChai2Tool(workspace, mgr, backend, st))
 	registry.Register(designtools.NewRFdiffusion2Tool(workspace, mgr, backend, st))
 	registry.Register(designtools.NewLigandMPNNTool(workspace, mgr, backend, st))
-	registry.Register(fold.NewBoltz2(mgr, backend))
-	registry.Register(fold.NewChai1(mgr, backend))
+	registry.Register(fold.NewBoltz2(workspace, mgr, backend))
+	registry.Register(fold.NewChai1(workspace, mgr, backend))
 	registry.Register(scoretools.NewFilterTool(st))
 	registry.Register(scoretools.NewMetricsTool())
 	registry.Register(scoretools.NewIPSAETool())
@@ -241,6 +249,7 @@ func buildRegistry(workspace string, st *store.Store, mgr *jobmgr.Manager, model
 	registry.Register(knowledge.NewCrossref(results))
 	registry.Register(knowledge.NewUniProt())
 	registry.Register(knowledge.NewPDB())
+	registry.Register(knowledge.NewPDBSearch())
 	registry.Register(knowledge.NewInterPro())
 	registry.Register(knowledge.NewWebFetch())
 	registry.Register(knowledge.NewWebSearch())
@@ -260,7 +269,9 @@ func buildRegistry(workspace string, st *store.Store, mgr *jobmgr.Manager, model
 	if token := os.Getenv("PAPERCLIP_TOKEN"); token != "" {
 		registry.Register(knowledge.NewPaperclip(token, cfg.Knowledge.PaperclipBaseURL))
 	}
-	registry.Register(plantool.NewPlanCreateTool(st, installer))
+	planCreate := plantool.NewPlanCreateTool(st, installer)
+	planCreate.SetRegistry(registry)
+	registry.Register(planCreate)
 
 	registry.Register(viztools.NewMetricPlot(workspace, results))
 	registry.Register(viztools.NewContactMap(workspace))
@@ -270,8 +281,20 @@ func buildRegistry(workspace string, st *store.Store, mgr *jobmgr.Manager, model
 	return registry
 }
 
-// fovaHome returns the fova home directory ($FOVA_HOME or ~/fova).
+// resolvedHome holds the fova data directory for this process. runTUI sets it
+// once from config; fovaHome() returns it.
+var resolvedHome string
+
+// fovaHome returns the fova data directory for this process.
 func fovaHome() string {
+	if resolvedHome != "" {
+		return resolvedHome
+	}
+	return defaultFovaHome()
+}
+
+// defaultFovaHome is the data dir absent any config: $FOVA_HOME or ~/fova.
+func defaultFovaHome() string {
 	if h := os.Getenv("FOVA_HOME"); h != "" {
 		return h
 	}
@@ -280,6 +303,28 @@ func fovaHome() string {
 		return "fova"
 	}
 	return filepath.Join(uh, "fova")
+}
+
+// resolveFovaHome resolves the data dir: an explicit $FOVA_HOME wins, then
+// config.toml's [defaults].data_dir, then the ~/fova default.
+func resolveFovaHome(cfg assets.Config) string {
+	if h := os.Getenv("FOVA_HOME"); h != "" {
+		return h
+	}
+	if d := strings.TrimSpace(cfg.Defaults.DataDir); d != "" {
+		return expandTilde(d)
+	}
+	return defaultFovaHome()
+}
+
+// expandTilde expands a leading ~ to the user's home directory.
+func expandTilde(p string) string {
+	if p == "~" || strings.HasPrefix(p, "~/") {
+		if uh, err := os.UserHomeDir(); err == nil {
+			return filepath.Join(uh, strings.TrimPrefix(strings.TrimPrefix(p, "~"), "/"))
+		}
+	}
+	return p
 }
 
 // defaultWorkspace returns $FOVA_HOME/projects/default, creating it.

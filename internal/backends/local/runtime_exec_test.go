@@ -204,3 +204,18 @@ func TestRuntimePullPropagatesError(t *testing.T) {
 		t.Error("expected error from failed pull")
 	}
 }
+
+func TestRunContainerEntrypointOverride(t *testing.T) {
+	calls := stubContainerRuntime(t, nil)
+	rt := Detect()
+	_, _ = rt.RunContainer(context.Background(), ContainerRunArgs{
+		Image: "fova/x:1", Entrypoint: "bash", Cmd: []string{"/work/run.sh"},
+	})
+	joined := strings.Join((*calls)[0], " ")
+	if !strings.Contains(joined, "--entrypoint bash") {
+		t.Errorf("argv missing --entrypoint bash: %s", joined)
+	}
+	if strings.Index(joined, "--entrypoint") > strings.Index(joined, "fova/x:1") {
+		t.Error("--entrypoint must precede the image")
+	}
+}

@@ -132,6 +132,58 @@ func TestIsShortlistedThreshold(t *testing.T) {
 	}
 }
 
+func TestDesignsSelectionMovesAndClamps(t *testing.T) {
+	m := newDesignsModel(NewTheme())
+	m.setDesigns([]domain.Design{{ID: "d1"}, {ID: "d2"}, {ID: "d3"}})
+	m.selectUp()
+	if m.selected != 0 {
+		t.Errorf("selectUp at top: selected = %d, want 0", m.selected)
+	}
+	m.selectDown()
+	m.selectDown()
+	m.selectDown()
+	if m.selected != 2 {
+		t.Errorf("selectDown past end: selected = %d, want 2", m.selected)
+	}
+}
+
+func TestDesignsSelectedDesign(t *testing.T) {
+	m := newDesignsModel(NewTheme())
+	if _, ok := m.selectedDesign(); ok {
+		t.Error("an empty panel has no selected design")
+	}
+	m.setDesigns([]domain.Design{{ID: "d1"}, {ID: "d2"}})
+	m.selectDown()
+	d, ok := m.selectedDesign()
+	if !ok || d.ID != "d2" {
+		t.Errorf("selectedDesign = %v, %v; want d2, true", d.ID, ok)
+	}
+}
+
+func TestDesignsSetDesignsReclampsSelection(t *testing.T) {
+	m := newDesignsModel(NewTheme())
+	m.setDesigns([]domain.Design{{ID: "d1"}, {ID: "d2"}, {ID: "d3"}})
+	m.selectDown()
+	m.selectDown()
+	m.setDesigns([]domain.Design{{ID: "d1"}})
+	if m.selected != 0 {
+		t.Errorf("after the list shrank, selected = %d, want 0", m.selected)
+	}
+}
+
+func TestDesignsFocusedRowHighlight(t *testing.T) {
+	m := newDesignsModel(NewTheme())
+	m.setWidth(38)
+	m.setDesigns([]domain.Design{{ID: "d1"}})
+	if strings.Contains(m.View(), "▸") {
+		t.Error("an unfocused panel must not show the selection marker")
+	}
+	m.setFocused(true)
+	if !strings.Contains(m.View(), "▸") {
+		t.Error("a focused panel should mark the selected row")
+	}
+}
+
 // TestRenderSectionRuleAttentionPrefix checks the saffron ▸ prefix shows up
 // when attention is set, and is absent otherwise. Forces TrueColor so the
 // coloured-glyph substring survives in test mode.

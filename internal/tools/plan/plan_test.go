@@ -478,22 +478,485 @@ func TestPlanCreateRejectsIncompatibleApplicationMethod(t *testing.T) {
 }
 
 // TestPlanCreateAcceptsCompatibleApplicationMethod is the positive control:
-// every (application, method) pair listed in compat must round-trip.
+// every (application, method) pair listed in compat must round-trip. BoltzGen
+// also needs a method_spec_path — the spec gate is exercised separately in
+// TestPlanCreateBoltzGen* below — so this control passes it the minimum
+// required field.
 func TestPlanCreateAcceptsCompatibleApplicationMethod(t *testing.T) {
 	for app, methods := range compat {
 		for _, m := range methods {
 			t.Run(string(app)+"/"+string(m), func(t *testing.T) {
 				st := newTestStore(t)
 				tool := NewPlanCreateTool(st, newFakeInstaller(toolForMethod(m)))
+				extra := ""
+				if m == MethodBoltzGen {
+					// BoltzGen requires a spec path; with no registry wired the
+					// design.boltzgen_check gate is skipped (nil-registry path).
+					extra = `, "method_spec_path": "specs/binder.yaml"`
+				}
+				if m == MethodLigandMPNN {
+					// LigandMPNN requires method_params carrying its run
+					// configuration — at minimum a pdb backbone path.
+					extra = `, "method_params": {"pdb": "bb.pdb"}`
+				}
+				if m == MethodRFantibody {
+					// RFantibody requires method_params carrying its run
+					// configuration — at minimum a target antigen PDB and
+					// the epitope hotspots.
+					extra = `, "method_params": {"target": "ag.pdb", "hotspots": "T10"}`
+				}
+				if m == MethodRFdiffusion {
+					// RFdiffusion requires method_params carrying its run
+					// configuration — at minimum a contig string.
+					extra = `, "method_params": {"contigs": "50-100"}`
+				}
+				if m == MethodProteinMPNN {
+					// ProteinMPNN requires method_params carrying its run
+					// configuration — at minimum a pdb backbone path.
+					extra = `, "method_params": {"pdb": "bb.pdb"}`
+				}
+				if m == MethodBindCraft {
+					// BindCraft requires method_params carrying its run
+					// configuration — at minimum starting_pdb, chains,
+					// hotspots, and a length range.
+					extra = `, "method_params": {"starting_pdb": "t.pdb", "chains": "A", "target_hotspot_residues": "A30", "length_min": 80, "length_max": 120}`
+				}
+				if m == MethodRFdiffusion2 {
+					// RFdiffusion2 requires method_params carrying its
+					// pipeline-run configuration — at minimum the benchmark
+					// choice.
+					extra = `, "method_params": {"benchmark": "active_site_demo"}`
+				}
 				input := json.RawMessage(`{
 					"target": {"pdb_id": "1ABC"},
 					"application": "` + string(app) + `",
-					"method": "` + string(m) + `"
+					"method": "` + string(m) + `"` + extra + `
 				}`)
 				if _, err := tool.Execute(context.Background(), input); err != nil {
 					t.Fatalf("Execute: %v", err)
 				}
 			})
 		}
+	}
+}
+
+// fakeRegistry is a ToolRegistry stub reporting a fixed set of tool names as
+// registered.
+type fakeRegistry map[string]bool
+
+func (f fakeRegistry) Get(name string) (tools.Tool, bool) { return nil, f[name] }
+
+// TestCheckRegisteredRejectsUnwiredMethod guards the design.boltzgen-class
+// gap: a method blessed in compat.go whose design.* tool was never wired
+// into the registry must be rejected at plan.create time.
+func TestCheckRegisteredRejectsUnwiredMethod(t *testing.T) {
+	ct := &CreateTool{registry: fakeRegistry{"design.bindcraft": true}}
+
+	if err := ct.checkRegistered(MethodBindCraft); err != nil {
+		t.Errorf("a registered method must pass checkRegistered: %v", err)
+	}
+
+	err := ct.checkRegistered(MethodBoltzGen)
+	if err == nil {
+		t.Fatal("a method whose design.* tool is not registered must be rejected")
+	}
+	if !strings.Contains(err.Error(), "design.boltzgen") {
+		t.Errorf("error should name the missing tool; got: %v", err)
+	}
+
+	// A nil registry (legacy/test wiring) skips the check.
+	ct.registry = nil
+	if err := ct.checkRegistered(MethodBoltzGen); err != nil {
+		t.Errorf("nil registry must skip the check: %v", err)
+	}
+}
+
+// TestDesignToolForMethodIsTotal ensures every compat.go Method maps to a
+// non-empty design.* tool name — so checkRegistered never trips on its own
+// "no mapping" branch for a known method.
+func TestDesignToolForMethodIsTotal(t *testing.T) {
+	for _, m := range []Method{
+		MethodBindCraft, MethodBoltzGen, MethodRFdiffusion, MethodRFdiffusion2,
+		MethodProteinMPNN, MethodLigandMPNN, MethodRFantibody,
+	} {
+		if got := designToolForMethod(m); got == "" {
+			t.Errorf("designToolForMethod(%q) is empty — add it to compat.go", m)
+		}
+	}
+}
+
+// --- Task 7: BoltzGen spec + params folded into the plan ---
+
+// fakeTool is a minimal tools.Tool whose Execute returns a canned Result. The
+// BoltzGen plan tests inject it as the design.boltzgen_check tool so the
+// check gate runs against a fixed {valid,...} contract — no container needed.
+type fakeTool struct {
+	name      string
+	output    json.RawMessage
+	execErr   error
+	gotInputs []json.RawMessage
+}
+
+func (f *fakeTool) Name() string                            { return f.name }
+func (f *fakeTool) Description() string                     { return "fake " + f.name }
+func (f *fakeTool) InputSchema() map[string]any             { return map[string]any{"type": "object"} }
+func (*fakeTool) RequiresConfirmation(json.RawMessage) bool { return false }
+func (*fakeTool) EstimatedCostUSD(json.RawMessage) float64  { return 0 }
+func (*fakeTool) EstimatedDuration(json.RawMessage) time.Duration {
+	return 0
+}
+func (f *fakeTool) Execute(_ context.Context, in json.RawMessage) (tools.Result, error) {
+	f.gotInputs = append(f.gotInputs, in)
+	if f.execErr != nil {
+		return tools.Result{}, f.execErr
+	}
+	return tools.Result{Output: f.output}, nil
+}
+
+// toolRegistry is a ToolRegistry stub that returns real tools.Tool values —
+// unlike fakeRegistry, which only reports presence. plan.create needs a tool
+// it can actually Execute for the design.boltzgen_check gate.
+type toolRegistry map[string]tools.Tool
+
+func (r toolRegistry) Get(name string) (tools.Tool, bool) {
+	t, ok := r[name]
+	return t, ok
+}
+
+// boltzGenPlanInput builds a BoltzGen plan.create input with the given spec
+// path. The design.boltzgen tool must be registered for checkRegistered to
+// pass, so callers that want the spec gate to fire register both tools.
+func boltzGenPlanInput(specPath string) json.RawMessage {
+	return json.RawMessage(`{
+		"target": {"pdb_id": "1ABC", "chain": "A"},
+		"application": "binder",
+		"method": "BoltzGen",
+		"method_spec_path": "` + specPath + `",
+		"method_params": {"protocol": "protein-anything", "num_designs": 100, "budget": 10}
+	}`)
+}
+
+// applyLigandMPNNParamsErr runs applyLigandMPNNMethodConfig against a fresh
+// LigandMPNN plan and returns the resulting MethodConfig (nil on error) plus
+// the error — mirroring how the BoltzGen tests exercise the method-config
+// helper. A *CreateTool with no store/installer/registry is enough: the
+// LigandMPNN config helper touches none of them.
+func applyLigandMPNNParamsErr(input string) (*domain.MethodConfig, error) {
+	ct := NewPlanCreateTool(nil, nil)
+	p := domain.DesignPlan{Method: string(MethodLigandMPNN)}
+	if err := ct.applyLigandMPNNMethodConfig(json.RawMessage(input), &p); err != nil {
+		return nil, err
+	}
+	return p.MethodConfig, nil
+}
+
+// applyLigandMPNNParams is applyLigandMPNNParamsErr for the happy path: it
+// fails the test on any error and returns the populated MethodConfig.
+func applyLigandMPNNParams(t *testing.T, input string) *domain.MethodConfig {
+	t.Helper()
+	cfg, err := applyLigandMPNNParamsErr(input)
+	if err != nil {
+		t.Fatalf("applyLigandMPNNMethodConfig: %v", err)
+	}
+	return cfg
+}
+
+// TestPlanCreateLigandMPNNMethodConfig: a LigandMPNN plan with method_params
+// must land MethodConfig.LigandMPNN, and an invalid params object is rejected.
+func TestPlanCreateLigandMPNNMethodConfig(t *testing.T) {
+	// A LigandMPNN plan with method_params must land MethodConfig.LigandMPNN.
+	cfg := applyLigandMPNNParams(t, `{"method_params":{"pdb":"bb.pdb","model_type":"ligand_mpnn"}}`)
+	if cfg == nil || cfg.LigandMPNN == nil {
+		t.Fatal("MethodConfig.LigandMPNN must be populated")
+	}
+	if cfg.LigandMPNN.PDB != "bb.pdb" {
+		t.Errorf("pdb = %q", cfg.LigandMPNN.PDB)
+	}
+	// An invalid params object (no pdb) must be rejected.
+	if _, err := applyLigandMPNNParamsErr(`{"method_params":{"model_type":"ligand_mpnn"}}`); err == nil {
+		t.Error("a LigandMPNN plan with no pdb must be rejected")
+	}
+}
+
+// applyRFantibodyParamsErr runs applyRFantibodyMethodConfig against a fresh
+// RFantibody plan and returns the resulting MethodConfig (nil on error) plus
+// the error — mirroring how the LigandMPNN tests exercise the method-config
+// helper. A *CreateTool with no store/installer/registry is enough: the
+// RFantibody config helper touches none of them.
+func applyRFantibodyParamsErr(input string) (*domain.MethodConfig, error) {
+	ct := NewPlanCreateTool(nil, nil)
+	p := domain.DesignPlan{Method: string(MethodRFantibody)}
+	if err := ct.applyRFantibodyMethodConfig(json.RawMessage(input), &p); err != nil {
+		return nil, err
+	}
+	return p.MethodConfig, nil
+}
+
+// applyRFantibodyParams is applyRFantibodyParamsErr for the happy path: it
+// fails the test on any error and returns the populated MethodConfig.
+func applyRFantibodyParams(t *testing.T, input string) *domain.MethodConfig {
+	t.Helper()
+	cfg, err := applyRFantibodyParamsErr(input)
+	if err != nil {
+		t.Fatalf("applyRFantibodyMethodConfig: %v", err)
+	}
+	return cfg
+}
+
+// TestPlanCreateRFantibodyMethodConfig: an RFantibody plan with method_params
+// must land MethodConfig.RFantibody, and an invalid params object is rejected.
+func TestPlanCreateRFantibodyMethodConfig(t *testing.T) {
+	cfg := applyRFantibodyParams(t, `{"method_params":{"target":"ag.pdb","hotspots":"T10"}}`)
+	if cfg == nil || cfg.RFantibody == nil {
+		t.Fatal("MethodConfig.RFantibody must be populated")
+	}
+	if cfg.RFantibody.Target != "ag.pdb" {
+		t.Errorf("target = %q", cfg.RFantibody.Target)
+	}
+	if _, err := applyRFantibodyParamsErr(`{"method_params":{"hotspots":"T10"}}`); err == nil {
+		t.Error("an RFantibody plan with no target must be rejected")
+	}
+}
+
+// applyRFdiffusionParamsErr / applyProteinMPNNParamsErr / applyBindCraftParamsErr /
+// applyRFdiffusion2ParamsErr run the corresponding *MethodConfig helpers
+// against a fresh plan and return the resulting MethodConfig (nil on error)
+// plus the error — mirroring the LigandMPNN / RFantibody helpers. A *CreateTool
+// with no store/installer/registry is sufficient: none of these helpers touch
+// them.
+func applyRFdiffusionParamsErr(input string) (*domain.MethodConfig, error) {
+	ct := NewPlanCreateTool(nil, nil)
+	p := domain.DesignPlan{Method: string(MethodRFdiffusion)}
+	if err := ct.applyRFdiffusionMethodConfig(json.RawMessage(input), &p); err != nil {
+		return nil, err
+	}
+	return p.MethodConfig, nil
+}
+
+func applyProteinMPNNParamsErr(input string) (*domain.MethodConfig, error) {
+	ct := NewPlanCreateTool(nil, nil)
+	p := domain.DesignPlan{Method: string(MethodProteinMPNN)}
+	if err := ct.applyProteinMPNNMethodConfig(json.RawMessage(input), &p); err != nil {
+		return nil, err
+	}
+	return p.MethodConfig, nil
+}
+
+func applyBindCraftParamsErr(input string) (*domain.MethodConfig, error) {
+	ct := NewPlanCreateTool(nil, nil)
+	p := domain.DesignPlan{Method: string(MethodBindCraft)}
+	if err := ct.applyBindCraftMethodConfig(json.RawMessage(input), &p); err != nil {
+		return nil, err
+	}
+	return p.MethodConfig, nil
+}
+
+// TestPlanCreateRFdiffusionMethodConfig: an RFdiffusion plan with method_params
+// must land MethodConfig.RFdiffusion, and an invalid params object is rejected.
+func TestPlanCreateRFdiffusionMethodConfig(t *testing.T) {
+	cfg, err := applyRFdiffusionParamsErr(`{"method_params":{"contigs":"50-100","num_designs":5}}`)
+	if err != nil {
+		t.Fatalf("applyRFdiffusionMethodConfig: %v", err)
+	}
+	if cfg == nil || cfg.RFdiffusion == nil {
+		t.Fatal("MethodConfig.RFdiffusion must be populated")
+	}
+	if cfg.RFdiffusion.Contigs != "50-100" {
+		t.Errorf("contigs = %q", cfg.RFdiffusion.Contigs)
+	}
+	// An invalid params object (no contigs) must be rejected.
+	if _, err := applyRFdiffusionParamsErr(`{"method_params":{"num_designs":5}}`); err == nil {
+		t.Error("an RFdiffusion plan with no contigs must be rejected")
+	}
+}
+
+// TestPlanCreateProteinMPNNMethodConfig: a ProteinMPNN plan with method_params
+// must land MethodConfig.ProteinMPNN, and an invalid params object is rejected.
+func TestPlanCreateProteinMPNNMethodConfig(t *testing.T) {
+	cfg, err := applyProteinMPNNParamsErr(`{"method_params":{"pdb":"bb.pdb","num_designs":4}}`)
+	if err != nil {
+		t.Fatalf("applyProteinMPNNMethodConfig: %v", err)
+	}
+	if cfg == nil || cfg.ProteinMPNN == nil {
+		t.Fatal("MethodConfig.ProteinMPNN must be populated")
+	}
+	if cfg.ProteinMPNN.PDB != "bb.pdb" {
+		t.Errorf("pdb = %q", cfg.ProteinMPNN.PDB)
+	}
+	if _, err := applyProteinMPNNParamsErr(`{"method_params":{"num_designs":4}}`); err == nil {
+		t.Error("a ProteinMPNN plan with no pdb must be rejected")
+	}
+}
+
+// TestPlanCreateBindCraftMethodConfig: a BindCraft plan with method_params
+// must land MethodConfig.BindCraft, and an invalid params object is rejected.
+func TestPlanCreateBindCraftMethodConfig(t *testing.T) {
+	cfg, err := applyBindCraftParamsErr(`{"method_params":{"starting_pdb":"t.pdb","chains":"A","target_hotspot_residues":"A30","length_min":80,"length_max":120}}`)
+	if err != nil {
+		t.Fatalf("applyBindCraftMethodConfig: %v", err)
+	}
+	if cfg == nil || cfg.BindCraft == nil {
+		t.Fatal("MethodConfig.BindCraft must be populated")
+	}
+	if cfg.BindCraft.StartingPDB != "t.pdb" {
+		t.Errorf("starting_pdb = %q", cfg.BindCraft.StartingPDB)
+	}
+	if _, err := applyBindCraftParamsErr(`{"method_params":{"chains":"A","target_hotspot_residues":"A30","length_min":80,"length_max":120}}`); err == nil {
+		t.Error("a BindCraft plan with no starting_pdb must be rejected")
+	}
+}
+
+// applyRFdiffusion2ParamsErr runs applyRFdiffusion2MethodConfig against a fresh
+// RFdiffusion2 plan and returns the resulting MethodConfig (nil on error) plus
+// the error.
+func applyRFdiffusion2ParamsErr(input string) (*domain.MethodConfig, error) {
+	ct := NewPlanCreateTool(nil, nil)
+	p := domain.DesignPlan{Method: string(MethodRFdiffusion2)}
+	if err := ct.applyRFdiffusion2MethodConfig(json.RawMessage(input), &p); err != nil {
+		return nil, err
+	}
+	return p.MethodConfig, nil
+}
+
+// applyRFdiffusion2Params is applyRFdiffusion2ParamsErr for the happy path: it
+// fails the test on any error and returns the resulting MethodConfig.
+func applyRFdiffusion2Params(t *testing.T, input string) *domain.MethodConfig {
+	t.Helper()
+	cfg, err := applyRFdiffusion2ParamsErr(input)
+	if err != nil {
+		t.Fatalf("applyRFdiffusion2MethodConfig: %v", err)
+	}
+	return cfg
+}
+
+// TestPlanCreateRFdiffusion2MethodConfig: an RFdiffusion2 plan with
+// method_params must land MethodConfig.RFdiffusion2, and an invalid params
+// object is rejected.
+func TestPlanCreateRFdiffusion2MethodConfig(t *testing.T) {
+	cfg := applyRFdiffusion2Params(t, `{"method_params":{"benchmark":"active_site_demo"}}`)
+	if cfg == nil || cfg.RFdiffusion2 == nil {
+		t.Fatal("MethodConfig.RFdiffusion2 must be populated")
+	}
+	if cfg.RFdiffusion2.Benchmark != "active_site_demo" {
+		t.Errorf("benchmark = %q", cfg.RFdiffusion2.Benchmark)
+	}
+	if _, err := applyRFdiffusion2ParamsErr(
+		`{"method_params":{"motif_pdb":"triad.pdb"}}`); err == nil {
+		t.Error("an RFdiffusion2 plan with motif_pdb and no contigs must be rejected")
+	}
+}
+
+// TestPlanCreateBoltzGenRequiresSpecPath: a BoltzGen plan with no
+// method_spec_path is rejected before anything is persisted.
+func TestPlanCreateBoltzGenRequiresSpecPath(t *testing.T) {
+	st := newTestStore(t)
+	tool := NewPlanCreateTool(st, newFakeInstaller("boltzgen"))
+	input := json.RawMessage(`{
+		"target": {"pdb_id": "1ABC"},
+		"application": "binder",
+		"method": "BoltzGen"
+	}`)
+	_, err := tool.Execute(context.Background(), input)
+	if err == nil {
+		t.Fatal("expected an error for a BoltzGen plan with no method_spec_path")
+	}
+	if !strings.Contains(err.Error(), "method_spec_path") {
+		t.Errorf("error %q should name method_spec_path", err.Error())
+	}
+}
+
+// TestPlanCreateBoltzGenValidSpecPopulatesMethodConfig: a BoltzGen plan with a
+// spec the check tool reports as valid persists with a populated MethodConfig.
+func TestPlanCreateBoltzGenValidSpecPopulatesMethodConfig(t *testing.T) {
+	st := newTestStore(t)
+	tool := NewPlanCreateTool(st, newFakeInstaller("boltzgen"))
+	check := &fakeTool{
+		name:   "design.boltzgen_check",
+		output: json.RawMessage(`{"valid": true, "visualization_path": "out/spec_viz.cif"}`),
+	}
+	tool.SetRegistry(toolRegistry{
+		"design.boltzgen":       &fakeTool{name: "design.boltzgen"},
+		"design.boltzgen_check": check,
+	})
+
+	res, err := tool.Execute(context.Background(), boltzGenPlanInput("specs/binder.yaml"))
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if len(check.gotInputs) != 1 {
+		t.Fatalf("design.boltzgen_check should have been invoked once, got %d", len(check.gotInputs))
+	}
+	if !strings.Contains(string(check.gotInputs[0]), "specs/binder.yaml") {
+		t.Errorf("check input %q should carry the spec path", check.gotInputs[0])
+	}
+
+	var got domain.DesignPlan
+	if err := json.Unmarshal(res.Output, &got); err != nil {
+		t.Fatalf("unmarshal output: %v", err)
+	}
+	if got.MethodConfig == nil {
+		t.Fatal("MethodConfig must be populated for a BoltzGen plan")
+	}
+	if got.MethodConfig.SpecPath != "specs/binder.yaml" {
+		t.Errorf("SpecPath = %q, want specs/binder.yaml", got.MethodConfig.SpecPath)
+	}
+	if got.MethodConfig.BoltzGen == nil {
+		t.Fatal("MethodConfig.BoltzGen must carry the run params")
+	}
+	if got.MethodConfig.BoltzGen.NumDesigns != 100 || got.MethodConfig.BoltzGen.Budget != 10 {
+		t.Errorf("BoltzGen params not round-tripped: %+v", got.MethodConfig.BoltzGen)
+	}
+}
+
+// TestPlanCreateBoltzGenInvalidSpecRejected: when the check tool reports the
+// spec as invalid, plan.create rejects the plan with the check errors and
+// persists nothing.
+func TestPlanCreateBoltzGenInvalidSpecRejected(t *testing.T) {
+	st := newTestStore(t)
+	tool := NewPlanCreateTool(st, newFakeInstaller("boltzgen"))
+	tool.SetRegistry(toolRegistry{
+		"design.boltzgen": &fakeTool{name: "design.boltzgen"},
+		"design.boltzgen_check": &fakeTool{
+			name:   "design.boltzgen_check",
+			output: json.RawMessage(`{"valid": false, "errors": ["chain B not found", "bad residue index"]}`),
+		},
+	})
+
+	_, err := tool.Execute(context.Background(), boltzGenPlanInput("specs/bad.yaml"))
+	if err == nil {
+		t.Fatal("expected an error for a BoltzGen plan with an invalid spec")
+	}
+	msg := err.Error()
+	for _, want := range []string{"chain B not found", "bad residue index", "design.boltzgen_check"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("error %q should contain %q", msg, want)
+		}
+	}
+	if _, ok, _ := st.LatestPlan(store.DefaultProjectID); ok {
+		t.Error("an invalid-spec plan must not be persisted")
+	}
+}
+
+// TestPlanCreateBoltzGenSkipsGateWhenCheckToolAbsent: when the check tool is
+// not registered, the spec gate is skipped (the nil-registry path the install
+// and registration guards already take) — the plan still persists with its
+// MethodConfig.
+func TestPlanCreateBoltzGenSkipsGateWhenCheckToolAbsent(t *testing.T) {
+	st := newTestStore(t)
+	tool := NewPlanCreateTool(st, newFakeInstaller("boltzgen"))
+	// design.boltzgen is registered (so checkRegistered passes) but
+	// design.boltzgen_check is not — the gate has nothing to call.
+	tool.SetRegistry(toolRegistry{"design.boltzgen": &fakeTool{name: "design.boltzgen"}})
+
+	res, err := tool.Execute(context.Background(), boltzGenPlanInput("specs/binder.yaml"))
+	if err != nil {
+		t.Fatalf("Execute: a missing check tool must skip the gate, not fail: %v", err)
+	}
+	var got domain.DesignPlan
+	if err := json.Unmarshal(res.Output, &got); err != nil {
+		t.Fatalf("unmarshal output: %v", err)
+	}
+	if got.MethodConfig == nil || got.MethodConfig.SpecPath != "specs/binder.yaml" {
+		t.Errorf("MethodConfig should still be populated when the gate is skipped: %+v", got.MethodConfig)
 	}
 }

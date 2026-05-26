@@ -70,6 +70,9 @@ func (p *anthropicProvider) Chat(ctx context.Context, req ChatRequest) (*ChatRes
 	if req.System != "" {
 		params.System = []anthropic.TextBlockParam{{Text: req.System}}
 	}
+	if req.Temperature > 0 {
+		params.Temperature = anthropic.Float(float64(req.Temperature))
+	}
 	for _, ts := range req.Tools {
 		params.Tools = append(params.Tools, anthropic.ToolUnionParam{
 			OfTool: &anthropic.ToolParam{

@@ -1,18 +1,74 @@
 package tui
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
 
+	tea "github.com/charmbracelet/bubbletea"
+
 	"github.com/alvarogonjim/fova/internal/domain"
 )
+
+func TestChatMouseWheelScrollsUp(t *testing.T) {
+	c := newChatModel(NewTheme(), 40, 4)
+	for i := 0; i < 30; i++ {
+		c.appendAgentDeltaBlock(fmt.Sprintf("line %d", i))
+	}
+	c.viewport.GotoBottom()
+	if !c.viewport.AtBottom() {
+		t.Fatal("setup: chat should start at the bottom")
+	}
+	c.handleMouse(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonWheelUp})
+	if c.viewport.AtBottom() {
+		t.Error("wheel-up should scroll the chat off the bottom")
+	}
+}
+
+func TestChatRefreshKeepsScrollPositionWhenScrolledUp(t *testing.T) {
+	c := newChatModel(NewTheme(), 40, 4)
+	for i := 0; i < 30; i++ {
+		c.appendAgentDeltaBlock(fmt.Sprintf("line %d", i))
+	}
+	c.viewport.GotoTop()
+	c.appendAgentDeltaBlock("new content while scrolled up")
+	if c.viewport.AtBottom() {
+		t.Error("refresh must not snap a scrolled-up reader to the bottom")
+	}
+}
+
+func TestChatRefreshFollowsWhenAtBottom(t *testing.T) {
+	c := newChatModel(NewTheme(), 40, 4)
+	for i := 0; i < 30; i++ {
+		c.appendAgentDeltaBlock(fmt.Sprintf("line %d", i))
+	}
+	if !c.viewport.AtBottom() {
+		t.Error("a reader at the bottom should keep following new content")
+	}
+}
+
+func TestChatAppendUserJumpsToBottom(t *testing.T) {
+	c := newChatModel(NewTheme(), 40, 4)
+	for i := 0; i < 30; i++ {
+		c.appendAgentDeltaBlock(fmt.Sprintf("line %d", i))
+	}
+	c.viewport.GotoTop()
+	c.appendUser("my message")
+	if !c.viewport.AtBottom() {
+		t.Error("sending a message should jump the chat to the bottom")
+	}
+}
 
 func TestChatAppendAndRender(t *testing.T) {
 	c := newChatModel(NewTheme(), 80, 20)
 	c.appendUser("fold MAQ")
 	c.appendAgentDelta("Folding ")
 	c.appendAgentDelta("now.")
+	// appendAgentDelta now coalesces tokens into pendingDelta; the canonical
+	// chat entries are only updated by flushPendingDelta. Force a flush so
+	// renderEntries sees the streamed text.
+	c.flushPendingDelta()
 	out := c.renderEntries()
 	if !strings.Contains(out, "fold MAQ") {
 		t.Errorf("user message missing: %q", out)
@@ -151,5 +207,228 @@ func TestChatJobLogRender(t *testing.T) {
 	}
 	if !strings.Contains(out, "⎿") {
 		t.Errorf("job-log tail connector ⎿ missing: %q", out)
+	}
+}
+
+// countingRenderer wraps a real glamour renderer and counts how many times
+// Render is called so cache tests can assert reuse.
+type countingRenderer struct {
+	inner mdRenderer
+	calls int
+}
+
+func (r *countingRenderer) Render(s string) (string, error) {
+	r.calls++
+	return r.inner.Render(s)
+}
+
+func TestChatCacheReusesRenderForUnchangedEntries(t *testing.T) {
+	c := newChatModel(NewTheme(), 80, 20)
+	cr := &countingRenderer{inner: c.renderer}
+	c.renderer = cr
+
+	c.appendAgentDeltaBlock("first answer")
+	first := cr.calls
+	if first == 0 {
+		t.Fatalf("expected at least one render call for the first entry, got 0")
+	}
+
+	c.appendAgentDeltaBlock("second answer")
+	// Only the new entry should have been rendered; the first one is cached.
+	if cr.calls != first+1 {
+		t.Errorf("render calls = %d, want %d (one new entry only)", cr.calls, first+1)
+	}
+}
+
+func TestChatInvalidateRenderCacheClearsAllEntries(t *testing.T) {
+	c := newChatModel(NewTheme(), 80, 20)
+	cr := &countingRenderer{inner: c.renderer}
+	c.renderer = cr
+
+	c.appendUser("hi")
+	c.appendAgentDeltaBlock("hello")
+	// Both entries are now rendered (refresh was called during append).
+	callsAfterAppend := cr.calls
+
+	// A second call to renderEntries must not re-render (cache is warm).
+	_ = c.renderEntries()
+	if cr.calls != callsAfterAppend {
+		t.Fatalf("unexpected re-render before invalidate: calls went from %d to %d",
+			callsAfterAppend, cr.calls)
+	}
+
+	// invalidateRenderCache must cause both entries to be re-rendered.
+	c.invalidateRenderCache()
+	if cr.calls <= callsAfterAppend {
+		t.Errorf("invalidateRenderCache did not trigger re-render: calls = %d, want > %d",
+			cr.calls, callsAfterAppend)
+	}
+}
+
+func TestChatCacheInvalidatedOnResize(t *testing.T) {
+	c := newChatModel(NewTheme(), 80, 20)
+	c.appendAgentDeltaBlock("hello world")
+	before := c.entries[0].rendered
+	if before == "" {
+		t.Fatalf("entry cache not warmed before resize")
+	}
+
+	c.resize(60, 20)
+	after := c.entries[0].rendered
+	if after == before {
+		t.Errorf("entry cache should have been re-rendered after resize")
+	}
+	if after == "" {
+		t.Errorf("entry cache should be re-populated by refresh, got empty")
+	}
+}
+
+func TestChatCacheInvalidatedOnToolDone(t *testing.T) {
+	c := newChatModel(NewTheme(), 80, 20)
+	c.appendToolStart("fs.read")
+	_ = c.renderEntries() // warm
+	before := c.entries[0].rendered
+	if before == "" {
+		t.Fatalf("tool entry not cached")
+	}
+
+	c.appendToolDone("fs.read", "ok")
+	after := c.entries[0].rendered
+	if after == before {
+		t.Errorf("tool entry cache should change on toolDone (running → done)")
+	}
+}
+
+func TestChatCacheInvalidatedOnUpsertJobLog(t *testing.T) {
+	c := newChatModel(NewTheme(), 80, 20)
+	started := time.Now()
+	c.upsertJobLog("job-1", "fold.esmfold", domain.JobRunning, &started, []string{"line one"})
+	_ = c.renderEntries() // warm
+	before := c.entries[0].rendered
+	if before == "" {
+		t.Fatalf("job-log entry not cached")
+	}
+
+	c.upsertJobLog("job-1", "fold.esmfold", domain.JobRunning, &started, []string{"line one", "line two"})
+	after := c.entries[0].rendered
+	if after == before {
+		t.Errorf("job-log entry cache should change on tail update")
+	}
+}
+
+func TestChatAppendToolDoneMatchesByID(t *testing.T) {
+	c := newChatModel(NewTheme(), 80, 20)
+	c.appendToolStartWithID("call-a", "fs.read")
+	c.appendToolStartWithID("call-b", "knowledge.uniprot")
+
+	// Complete the second one first.
+	c.appendToolDoneWithID("call-b", "knowledge.uniprot", "ok B")
+
+	if !c.entries[1].done {
+		t.Errorf("entry for call-b should be done")
+	}
+	if c.entries[0].done {
+		t.Errorf("entry for call-a should still be running")
+	}
+}
+
+func TestChatAppendToolDoneMatchesByIDSameName(t *testing.T) {
+	c := newChatModel(NewTheme(), 80, 20)
+	c.appendToolStartWithID("call-1", "fs.read")
+	c.appendToolStartWithID("call-2", "fs.read")
+
+	// Complete the first call (the older entry) — without ID matching this
+	// would route to the newer entry because the back-to-front scan stops at
+	// the first unfinished entry with a matching name.
+	c.appendToolDoneWithID("call-1", "fs.read", "result 1")
+
+	if !c.entries[0].done {
+		t.Errorf("first fs.read (call-1) should be done")
+	}
+	if c.entries[1].done {
+		t.Errorf("second fs.read (call-2) should still be running")
+	}
+	if c.entries[0].result != "result 1" {
+		t.Errorf("entries[0].result = %q, want \"result 1\"", c.entries[0].result)
+	}
+}
+
+func TestChatCacheStreamingHotPathIsOPerEntry(t *testing.T) {
+	// Batch 2 §6: appendAgentDelta coalesces tokens into pendingDelta; the
+	// chat's render cache (and the renderer itself) only runs on
+	// flushPendingDelta. The cache-O(1)-per-flush property is what we now
+	// assert: 50 tokens stream into the buffer with zero Renders, and a
+	// single flush produces exactly one Render for the streaming entry.
+	c := newChatModel(NewTheme(), 80, 20)
+	cr := &countingRenderer{inner: c.renderer}
+	c.renderer = cr
+
+	// Stream 50 tokens — none of them should hit the renderer.
+	for i := 0; i < 50; i++ {
+		c.appendAgentDelta("tok-" + fmt.Sprint(i) + " ")
+	}
+	if cr.calls != 0 {
+		t.Errorf("streaming renders = %d, want 0 (all buffered until flush)",
+			cr.calls)
+	}
+
+	// A single flush drains the buffer; exactly one Render for the one
+	// streaming agent entry.
+	c.flushPendingDelta()
+	if cr.calls != 1 {
+		t.Errorf("renders after flush = %d, want 1", cr.calls)
+	}
+
+	// Now append a second, separate entry. That should cost exactly one
+	// additional render (the new entry); the first entry stays cached.
+	c.appendAgentDeltaBlock("a separate block")
+	if cr.calls != 2 {
+		t.Errorf("new entry rendered = %d, want 2 (one streamed + one new)",
+			cr.calls)
+	}
+}
+
+// TestChatAppendAgentDeltaIsCoalesced verifies the per-token streaming path
+// no longer touches the renderer; only flushPendingDelta does. Batch 2 §6:
+// a 30 FPS tick drains the buffer instead of refreshing per token.
+func TestChatAppendAgentDeltaIsCoalesced(t *testing.T) {
+	c := newChatModel(NewTheme(), 80, 20)
+	cr := &countingRenderer{inner: c.renderer}
+	c.renderer = cr
+
+	// 50 deltas — none should render the agent text yet because we buffer
+	// until flushPendingDelta is called.
+	for i := 0; i < 50; i++ {
+		c.appendAgentDelta("tok ")
+	}
+	if cr.calls != 0 {
+		t.Errorf("Render called %d times during streaming; want 0 (all buffered)", cr.calls)
+	}
+
+	c.flushPendingDelta()
+	if cr.calls != 1 {
+		t.Errorf("Render called %d times after first flush; want 1", cr.calls)
+	}
+
+	// A second flush with nothing pending is a no-op.
+	c.flushPendingDelta()
+	if cr.calls != 1 {
+		t.Errorf("Render called %d times after idle flush; want 1", cr.calls)
+	}
+}
+
+// TestChatFlushPendingDeltaAppendsAccumulatedText verifies the buffered tokens
+// are concatenated and applied to a single agent entry on flush.
+func TestChatFlushPendingDeltaAppendsAccumulatedText(t *testing.T) {
+	c := newChatModel(NewTheme(), 80, 20)
+	c.appendAgentDelta("Hello ")
+	c.appendAgentDelta("world")
+	c.flushPendingDelta()
+
+	if n := len(c.entries); n != 1 {
+		t.Fatalf("entries: %d, want 1", n)
+	}
+	if got := c.entries[0].text; got != "Hello world" {
+		t.Errorf("entry text = %q, want %q", got, "Hello world")
 	}
 }

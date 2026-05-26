@@ -67,6 +67,18 @@ func TestStatusSettersAreNoopsForFooter(t *testing.T) {
 	}
 }
 
+func TestFooterShowsScrolledUpHint(t *testing.T) {
+	s := newStatusBarModel(NewTheme())
+	s.width = 200
+	if strings.Contains(s.footerView(), "End for latest") {
+		t.Error("footer must not show the hint when the chat is at the bottom")
+	}
+	s.chatScrolledUp = true
+	if !strings.Contains(s.footerView(), "End for latest") {
+		t.Error("footer should show the scrolled-up hint")
+	}
+}
+
 // visibleWidth counts runes outside ANSI escape sequences. Retained from the
 // v0.4 statusbar test because header_test.go and footer-clip tests both need
 // to assert visible widths against rendered (styled) output.

@@ -42,7 +42,8 @@ func NewLocalPDFs(results *Results, mapper Mapper, indexDir, defaultDir string) 
 	}
 }
 
-func (*LocalPDFs) Name() string { return "knowledge.local_pdfs" }
+func (*LocalPDFs) Name() string     { return "knowledge.local_pdfs" }
+func (*LocalPDFs) Concurrent() bool { return true }
 func (*LocalPDFs) Description() string {
 	return "Index a folder of local PDFs into a bleve full-text index, then " +
 		"search or ask questions over them."

@@ -6,19 +6,51 @@ import (
 	"time"
 
 	"github.com/alvarogonjim/fova/internal/domain"
+	"github.com/charmbracelet/lipgloss"
 )
 
 // jobsModel renders the JOBS panel (SPECS §10.2).
 type jobsModel struct {
-	theme Theme
-	jobs  []domain.Job
-	width int
+	theme    Theme
+	jobs     []domain.Job
+	width    int
+	focused  bool // this panel currently holds keyboard focus
+	selected int  // highlighted row index, clamped to [0, len-1]
 }
 
 func newJobsModel(th Theme) jobsModel { return jobsModel{theme: th, width: 36} }
 
-// setJobs replaces the panel's jobs.
-func (m *jobsModel) setJobs(jobs []domain.Job) { m.jobs = jobs }
+// setJobs replaces the panel's jobs, re-clamping the selection cursor.
+func (m *jobsModel) setJobs(jobs []domain.Job) {
+	m.jobs = jobs
+	m.clampSelection()
+}
+
+// setFocused records whether this panel currently holds keyboard focus.
+func (m *jobsModel) setFocused(f bool) { m.focused = f }
+
+// clampSelection keeps selected within [0, len-1] (0 when the panel is empty).
+func (m *jobsModel) clampSelection() {
+	if m.selected >= len(m.jobs) {
+		m.selected = len(m.jobs) - 1
+	}
+	if m.selected < 0 {
+		m.selected = 0
+	}
+}
+
+// selectUp / selectDown move the selection cursor and clamp it.
+func (m *jobsModel) selectUp()   { m.selected--; m.clampSelection() }
+func (m *jobsModel) selectDown() { m.selected++; m.clampSelection() }
+
+// selectedJob returns the highlighted job, or false when the panel is empty.
+func (m *jobsModel) selectedJob() (domain.Job, bool) {
+	if len(m.jobs) == 0 {
+		return domain.Job{}, false
+	}
+	m.clampSelection()
+	return m.jobs[m.selected], true
+}
 
 // setWidth sets the panel's render width.
 func (m *jobsModel) setWidth(w int) { m.width = w }
@@ -33,6 +65,21 @@ func sectionRule(label string, width int, th Theme) string {
 		line += strings.Repeat("─", pad)
 	}
 	return th.SectionRule.Render(clipLine(line, width))
+}
+
+// panelHeader renders a panel's section-rule header. A focused panel's header
+// is recoloured to the theme accent so the focus is visible at a glance.
+func panelHeader(label string, width int, th Theme, focused bool) string {
+	label = strings.ToLower(label)
+	line := label + " "
+	if pad := width - len([]rune(line)); pad > 0 {
+		line += strings.Repeat("─", pad)
+	}
+	style := th.SectionRule
+	if focused {
+		style = lipgloss.NewStyle().Foreground(th.Palette.Accent)
+	}
+	return style.Render(clipLine(line, width))
 }
 
 // progressBar renders a width-wide unicode bar (SPECS §10.7.8): "▓" cells for
@@ -115,25 +162,30 @@ func jobETA(j domain.Job) (elapsed, eta time.Duration, ok bool) {
 	return elapsed, time.Duration(float64(elapsed) / p), true
 }
 
-// View renders the jobs panel.
+// View renders the jobs panel. When focused, the header is accent-coloured
+// and the selected row is marked with a saffron "▸".
 func (m jobsModel) View() string {
 	var b strings.Builder
-	b.WriteString(sectionRule("jobs", m.width, m.theme))
+	b.WriteString(panelHeader("jobs", m.width, m.theme, m.focused))
 	b.WriteString("\n")
 	if len(m.jobs) == 0 {
 		b.WriteString(m.theme.Subtle.Render(wrapText(
 			"no jobs yet · /install a tool or ask the agent to design", m.width)))
 		return b.String()
 	}
-	for _, j := range m.jobs {
-		g := m.theme.statusMarker(j.Status)
-		line := fmt.Sprintf("%-16s %s %s",
-			j.Tool, shortID(string(j.ID)), jobTimeInfo(j))
-		b.WriteString(g + " " + m.theme.ToolTrace.Render(clipLine(line, m.width-2)))
+	accent := lipgloss.NewStyle().Foreground(m.theme.Palette.Accent)
+	for i, j := range m.jobs {
+		line := fmt.Sprintf("%-16s %s %s", j.Tool, shortID(string(j.ID)), jobTimeInfo(j))
+		prefix := m.theme.statusMarker(j.Status) + " "
+		rowStyle := m.theme.ToolTrace
+		if m.focused && i == m.selected {
+			prefix = accent.Render("▸") + " "
+			rowStyle = accent
+		}
+		b.WriteString(prefix + rowStyle.Render(clipLine(line, m.width-2)))
 		b.WriteString("\n")
 		if elapsed, eta, ok := jobETA(j); ok {
-			bar := progressBar(elapsed, eta, m.width-2)
-			if bar != "" {
+			if bar := progressBar(elapsed, eta, m.width-2); bar != "" {
 				b.WriteString("  " + m.theme.SectionRule.Render(bar))
 				b.WriteString("\n")
 			}

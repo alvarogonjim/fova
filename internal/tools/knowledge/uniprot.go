@@ -22,7 +22,8 @@ type UniProt struct {
 // NewUniProt returns the knowledge.uniprot tool.
 func NewUniProt() *UniProt { return &UniProt{BaseURL: uniprotBaseURL} }
 
-func (*UniProt) Name() string { return "knowledge.uniprot" }
+func (*UniProt) Name() string     { return "knowledge.uniprot" }
+func (*UniProt) Concurrent() bool { return true }
 func (*UniProt) Description() string {
 	return "Look up a UniProtKB entry by accession and return its name, organism, and sequence."
 }

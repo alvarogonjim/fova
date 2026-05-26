@@ -1,0 +1,25 @@
+[ui]
+theme = "auto"               # auto | light | dark
+inline_graphics = "auto"     # auto | kitty | sixel | iterm2 | off
+
+[defaults]
+provider = "auto"            # auto | a provider name from models.toml
+model = ""                   # empty → the registry's automatic pick
+compute_backend = "local"    # local | modal
+data_dir        = ""             # fova data folder; empty = ~/fova
+
+[knowledge]
+mailto = ""                  # your email for the OpenAlex polite pool
+biorxiv_recent_days = 30
+corpus_default_max_papers = 30
+local_pdfs_dir = ""          # default folder for knowledge.local_pdfs (empty = supply per call)
+paperclip_base_url = "https://api.paperclip.dev"   # base URL for the optional knowledge.paperclip MCP forwarder
+
+[webhook]
+enabled = true
+port = 9876
+public_url = ""              # optional ngrok/Tailscale URL
+
+[budget]
+session_soft_limit_usd = 5.0
+wetlab_requires_confirmation = true   # never disable

@@ -78,22 +78,11 @@ One static binary. No runtime. No dependencies.
 **▸ install.sh** · macOS · Linux
 
 ```sh
-curl -fsSL https://fova.dev/install | sh
+curl -fsSL https://alvarogonjim.github.io/fova/install.sh | sh
 ```
 
 </td>
 <td>
-
-**▸ homebrew** · macOS · Linux
-
-```sh
-brew install alvarogonjim/tap/fova
-```
-
-</td>
-</tr>
-<tr>
-<td colspan="2">
 
 **▸ from source** · requires Go 1.22+
 

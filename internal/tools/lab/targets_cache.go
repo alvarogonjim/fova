@@ -98,7 +98,7 @@ func (c *TargetsCache) Get(key string) ([]byte, bool, error) {
 	if err != nil {
 		return nil, false, err
 	}
-	if raw == nil || len(raw) < 8 {
+	if len(raw) < 8 {
 		return nil, false, nil
 	}
 	ts := time.Unix(int64(binary.BigEndian.Uint64(raw[:8])), 0)

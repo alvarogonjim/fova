@@ -165,10 +165,7 @@ func (b *cancellingBody) Close() error {
 // isRetryable reports whether a transport error is worth retrying. Context
 // cancellation is not — that's a deliberate caller signal.
 func isRetryable(err error) bool {
-	if errors.Is(err, context.Canceled) {
-		return false
-	}
-	return true
+	return !errors.Is(err, context.Canceled)
 }
 
 type httpStatusError struct{ Status int }
